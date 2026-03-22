@@ -72,13 +72,6 @@ chrome.webRequest.onHeadersReceived.addListener(
   ['blocking', 'responseHeaders']
 );
 
-// ── Popup file picker blob store ──────────────────────────────────────────────
-// The popup reads the file into an ArrayBuffer and sends it here for safe-
-// keeping. The viewer tab retrieves it by token, then we discard it.
-// Tokens are random so they can't be guessed by other pages.
-
-var blobStore = {};  // token -> { buffer: ArrayBuffer, name: string }
-
 // ── Native messaging ──────────────────────────────────────────────────────────
 
 var nativePort = null;
@@ -160,25 +153,6 @@ function handleNativeOpen(msg) {
 // ── Message handler ───────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
-
-  // Popup stores a file buffer here before opening the viewer tab
-  if (request.type === 'storeBlob') {
-    blobStore[request.token] = { buffer: request.buffer, name: request.name };
-    sendResponse({ ok: true });
-    return false;
-  }
-
-  // Viewer tab claims the buffer by token (cbz-blob:// src)
-  if (request.type === 'claimBlob') {
-    var entry = blobStore[request.token];
-    if (entry) {
-      delete blobStore[request.token];
-      sendResponse({ ok: true, buffer: entry.buffer, name: entry.name });
-    } else {
-      sendResponse({ ok: false, error: 'Blob token not found (already claimed or expired)' });
-    }
-    return false;
-  }
 
   // Viewer requests a stat or read from the native host
   if (request.type === 'nativeStat') {

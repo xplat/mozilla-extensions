@@ -39,7 +39,7 @@ import select
 
 QUEUE_DIR = pathlib.Path.home() / '.cbz-viewer' / 'queue'
 POLL_INTERVAL = 0.5   # seconds between queue checks
-CHUNK_MAX = 768 * 1024  # 768 KB raw → ~1 MB base64
+CHUNK_MAX = 512 * 1024  # 512 KB raw → ~683 KB base64, safely under 1 MB JSON message limit
 
 # ── Wire protocol ─────────────────────────────────────────────────────────────
 

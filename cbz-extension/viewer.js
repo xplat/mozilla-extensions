@@ -118,7 +118,9 @@ class NativeAccessor {
   }
 
   async read(offset, length) {
-    const CHUNK = 768 * 1024;
+    // 512 KB raw → ~683 KB base64 → safely under the 1 MB native message limit
+    // even accounting for JSON framing overhead.
+    const CHUNK = 512 * 1024;
     if (length <= CHUNK) return this._chunk(offset, length);
     const out = new Uint8Array(length);
     let pos = 0;
@@ -392,11 +394,11 @@ function showViewer() {
 }
 
 function updatePageUI() {
-  $('page-indicator').textContent = `${state.currentPage} / ${state.totalPages}`;
-  $('prev-btn').disabled = state.currentPage <= 1;
-  $('next-btn').disabled = state.currentPage >= state.totalPages;
-  $('page-input').value  = state.currentPage;
-  $('page-input').max    = state.totalPages;
+  $('page-total').textContent    = state.totalPages;
+  $('prev-btn').disabled         = state.currentPage <= 1;
+  $('next-btn').disabled         = state.currentPage >= state.totalPages;
+  $('page-input').value          = state.currentPage;
+  $('page-input').max            = state.totalPages;
 }
 
 function setTitle(name) {
@@ -434,8 +436,12 @@ async function displayPage(pageNum) {
 
     updatePageUI();
 
+    // Track current page in the query string so it survives reload and can be
+    // bookmarked. We deliberately avoid putting it in the fragment because
+    // Firefox appends visible fragments to the tab title.
     const u = new URL(window.location.href);
-    u.hash = `cbz&page=${pageNum}`;
+    u.searchParams.set('page', pageNum);
+    u.hash = '';
     history.replaceState(null, '', u.toString());
 
     prefetchPage(pageNum + 1);
@@ -443,7 +449,16 @@ async function displayPage(pageNum) {
 
   } catch (err) {
     console.error('Page display error:', err);
-    setStatus(`Error on page ${pageNum}: ${err.message}`);
+    // Show the error visibly — setStatus alone is too subtle when the viewer
+    // is already displayed and the image just fails silently.
+    img.classList.remove('loading');
+    spinner.classList.add('hidden');
+    img.removeAttribute('src');
+    // Revert page counter to last known good page so UI isn't misleading
+    state.currentPage = pageNum;
+    updatePageUI();
+    showError(`Failed to load page ${pageNum}: ${err.message}`);
+    return;
   } finally {
     img.classList.remove('loading');
     spinner.classList.add('hidden');
@@ -470,19 +485,7 @@ async function createAccessor(url) {
     return NativeAccessor.create(path);
   }
 
-  if (url.startsWith('cbz-blob://')) {
-    // File was read by the popup and handed to the background for safekeeping.
-    // Claim the ArrayBuffer by token, then wrap it in a BlobAccessor.
-    const token = url.slice('cbz-blob://'.length);
-    const resp = await bgMessage({ type: 'claimBlob', token });
-    if (!resp.ok) throw new Error(resp.error || 'Could not retrieve file data');
-    const blob = new Blob([resp.buffer]);
-    return new BlobAccessor(blob);
-  }
-
   if (url.startsWith('blob:')) {
-    // Shouldn't normally be reached now that popup uses cbz-blob://, but
-    // keep as a fallback for any direct blob: URL that somehow arrives.
     const resp = await fetch(url);
     if (!resp.ok) throw new Error('Could not read blob URL');
     return new BlobAccessor(await resp.blob());
@@ -500,18 +503,36 @@ async function createAccessor(url) {
 
 // ─── MAIN LOAD ───────────────────────────────────────────────────────────────
 
-async function loadCbz(url, startPage) {
+// Core loader — works directly from an accessor (used by in-tab file picker)
+async function loadWithAccessor(accessor, startPage) {
   showLoading('Opening…');
   try {
-    state.accessor = await createAccessor(url);
+    state.accessor   = accessor;
+    state.blobUrls   = {};   // clear any previous page cache
 
-    const allEntries   = await parseCentralDirectory(state.accessor);
-    state.entries      = filterAndSortImages(allEntries);
-    state.totalPages   = state.entries.length;
+    const allEntries = await parseCentralDirectory(state.accessor);
+    state.entries    = filterAndSortImages(allEntries);
+    state.totalPages = state.entries.length;
 
     if (state.totalPages === 0) throw new Error('No image files found in this CBZ archive.');
 
-    // Set title from URL path if not already set by init() from a name param
+    showViewer();
+    updatePageUI();
+    await displayPage(Math.max(1, Math.min(startPage, state.totalPages)));
+
+  } catch (err) {
+    console.error('Load error:', err);
+    showError(err.message || 'Failed to load the CBZ file.');
+  }
+}
+
+// URL-based loader — creates an accessor from a URL then calls loadWithAccessor
+async function loadCbz(url, startPage) {
+  showLoading('Opening…');
+  try {
+    const accessor = await createAccessor(url);
+
+    // Set title from URL path if not already set from a name param
     if ($('comic-title').textContent === 'Comic') {
       try {
         const name = decodeURIComponent(new URL(url).pathname.split('/').pop());
@@ -519,9 +540,7 @@ async function loadCbz(url, startPage) {
       } catch (_) {}
     }
 
-    showViewer();
-    updatePageUI();
-    await displayPage(Math.max(1, Math.min(startPage, state.totalPages)));
+    await loadWithAccessor(accessor, startPage);
 
   } catch (err) {
     console.error('Load error:', err);
@@ -571,14 +590,40 @@ $('comic-image').addEventListener('click', e => {
     : state.currentPage + 1);
 });
 
+// ─── FILE PICKER (in-tab) ────────────────────────────────────────────────────
+// When no src is provided, show the pick screen. The file input lives in the
+// viewer tab itself, so the File object and its Blob are in the same context —
+// no cross-context transfer needed at all.
+
+function openFileFromPicker(file) {
+  if (!file) return;
+  // Wrap the File (which is a Blob) directly in BlobAccessor.
+  // File.arrayBuffer() / File.slice() work identically to Blob — no copy made.
+  state.srcUrl = 'local:' + file.name;
+  setTitle(file.name);
+  const accessor = new BlobAccessor(file);
+  loadWithAccessor(accessor, 1);
+}
+
+function wireFilePicker(btnId, inputId) {
+  $(btnId).addEventListener('click', () => $(inputId).click());
+  $(inputId).addEventListener('change', e => openFileFromPicker(e.target.files[0]));
+}
+
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 
 (function init() {
+  // Wire up the in-tab file pickers (pick screen + error screen retry button)
+  wireFilePicker('pick-btn',        'pick-file-input');
+  wireFilePicker('error-open-btn',  'error-file-input');
+
   const params = new URLSearchParams(window.location.search);
   const src    = params.get('src');
 
   if (!src) {
-    showError('No CBZ source URL provided. Open a .cbz file using the toolbar button, or navigate to a .cbz URL.');
+    // No source URL — show the pick screen instead of an error
+    $('loading-screen').classList.add('hidden');
+    $('pick-screen').classList.remove('hidden');
     return;
   }
 
