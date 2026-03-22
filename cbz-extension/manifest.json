@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CBZ Comic Viewer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "View CBZ comic archives directly in your browser. Supports stored and deflate-compressed pages.",
 
   "permissions": [
@@ -33,7 +33,15 @@
   ],
 
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "cbz-viewer@extension",
+      "strict_min_version": "109.0"
+    }
   },
 
   "icons": {
