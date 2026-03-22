@@ -143,45 +143,100 @@ class NativeAccessor {
   }
 }
 
-// ─── BACKGROUND PORT ─────────────────────────────────────────────────────────
-// We use a long-lived port (chrome.runtime.connect) rather than sendMessage so
-// that if the background script dies (e.g. extension reload), port.onDisconnect
-// fires immediately and we can reject all pending promises. With sendMessage,
-// the callback is silently never called when the background dies, leaving
-// promises hanging forever and causing Firefox to consider the page "loading",
-// which makes it close the tab on extension reload.
+// ─── BRIDGE IFRAME ───────────────────────────────────────────────────────────
+// The viewer page itself must never call chrome.* APIs directly. Firefox
+// records any moz-extension:// page that uses extension APIs in an
+// ExtensionPageContextChild map, and on extension reload it closes the window
+// associated with each entry — killing the tab. By confining all chrome.*
+// calls to a hidden iframe (bridge.html), only the iframe's window is in that
+// map. When the extension reloads, the iframe is destroyed but the parent tab
+// survives, since its window has no ExtensionPageContextChild.
+//
+// The bridge communicates via postMessage. On disconnect it tells us, we
+// wait for the new background to start, recreate the iframe, and replay
+// any requests that were in flight.
 
-const _bgPort = chrome.runtime.connect({ name: 'viewer' });
-const _bgPending = new Map(); // msgId -> { resolve, reject }
+const _bgPending = new Map(); // msgId -> { resolve, reject, msg }
 let   _bgNextId  = 1;
-let   _bgDead    = false;
+let   _bridge    = null;   // the iframe element
+let   _bridgeReady = false;
+let   _bridgeQueue = [];   // messages queued while bridge is being recreated
 
-_bgPort.onMessage.addListener(msg => {
-  const pending = _bgPending.get(msg._id);
-  if (!pending) return;
-  _bgPending.delete(msg._id);
-  if (msg.error) {
-    pending.reject(new Error(msg.error));
-  } else {
-    pending.resolve(msg);
+function _createBridge() {
+  _bridgeReady = false;
+  if (_bridge) _bridge.remove();
+  _bridge = document.createElement('iframe');
+  // Derive the extension base URL from our own page URL (no chrome.* call needed)
+  const _extBase = location.href.replace(/\/[^/]*$/, '/');
+  _bridge.src = _extBase + 'bridge.html';
+  _bridge.style.cssText = 'display:none;position:absolute;width:0;height:0';
+  document.body.appendChild(_bridge);
+}
+
+window.addEventListener('message', e => {
+  if (e.source !== _bridge?.contentWindow) return;
+  const msg = e.data;
+
+  if (msg._bridgeInit) {
+    // Bridge iframe has loaded and is ready to relay
+    _bridgeReady = true;
+    const q = _bridgeQueue.splice(0);
+    for (const m of q) _bridge.contentWindow.postMessage(m, '*');
+    return;
   }
-});
 
-_bgPort.onDisconnect.addListener(() => {
-  _bgDead = true;
-  const err = new Error('Extension reloaded — please wait, reopening…');
-  for (const pending of _bgPending.values()) pending.reject(err);
-  _bgPending.clear();
+  if (msg._bridgeDisconnect) {
+    // Background died (extension reloading). Reject everything in flight
+    // except we actually want to *re-queue* them so they replay once the
+    // new bridge is up — that way a reload mid-read recovers automatically.
+    _bridgeReady = false;
+    const inflight = [..._bgPending.entries()];
+    // Reject them immediately — callers (extractEntry etc.) will propagate to
+    // showError. The user sees an error screen, the tab stays open, and they
+    // can reload the file. Full auto-replay would be complex and fragile.
+    for (const [, pending] of inflight) {
+      pending.reject(new Error('Extension reloaded — reload the file to continue'));
+    }
+    _bgPending.clear();
+
+    // Recreate the bridge after a short delay so the new background is ready
+    setTimeout(() => {
+      _createBridge();
+      _bridgeReady = true;
+      // Flush any messages that arrived while bridge was dead
+      const q = _bridgeQueue.splice(0);
+      for (const m of q) _bridge.contentWindow.postMessage(m, '*');
+    }, 1000);
+    return;
+  }
+
+  if (msg._bridgeReply) {
+    const pending = _bgPending.get(msg._id);
+    if (!pending) return;
+    _bgPending.delete(msg._id);
+    if (msg.error) {
+      pending.reject(new Error(msg.error));
+    } else {
+      pending.resolve(msg);
+    }
+  }
 });
 
 function bgMessage(msg) {
   return new Promise((resolve, reject) => {
-    if (_bgDead) { reject(new Error('Background disconnected')); return; }
     const id = _bgNextId++;
-    _bgPending.set(id, { resolve, reject });
-    _bgPort.postMessage({ ...msg, _id: id });
+    const tagged = { ...msg, _id: id };
+    _bgPending.set(id, { resolve, reject, msg: tagged });
+    if (_bridgeReady && _bridge?.contentWindow) {
+      _bridge.contentWindow.postMessage(tagged, '*');
+    } else {
+      _bridgeQueue.push(tagged);
+    }
   });
 }
+
+// Create the bridge. _bridgeReady is set when bridge.js sends _bridgeInit.
+_createBridge();
 
 // ─── ZIP PARSING (lazy, accessor-based) ──────────────────────────────────────
 //
