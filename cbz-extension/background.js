@@ -63,10 +63,19 @@ function isAlreadyViewer(url) {
 
 chrome.webRequest.onBeforeRequest.addListener(
   function(details) {
-    if (!serverPort || !serverToken) {
-      // Native host not connected yet — let the request fail naturally
-      return {};
+    // Only redirect requests originating from our own extension pages.
+    // This prevents other local web pages from using the proxy to read
+    // arbitrary files via the native host's HTTP server.
+    var origin = details.originUrl || details.documentUrl || '';
+    if (!origin.startsWith(chrome.runtime.getURL(''))) {
+      return { cancel: true };
     }
+
+    if (!serverPort || !serverToken) {
+      // Native host not connected yet — cancel so the error is immediate
+      return { cancel: true };
+    }
+
     // Rewrite: strip PROXY_PREFIX, prepend real server base
     var encodedPath = details.url.slice(PROXY_PREFIX.length);
     var realUrl = 'http://' + LOOPBACK + ':' + serverPort +

@@ -135,7 +135,7 @@ class CBZHandler(BaseHTTPRequestHandler):
         self.send_response(206 if partial else 200)
         self.send_cors()
         self.send_header('Content-Type',   'application/zip')
-        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Content-Length', str(length))
         self.send_header('Accept-Ranges',  'bytes')
         if partial:
             self.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
