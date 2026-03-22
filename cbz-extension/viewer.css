@@ -324,6 +324,12 @@ html, body {
   font-size: 12px;
 }
 
+.page-second {
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  color: var(--amber);
+}
+
 .page-total {
   font-family: 'DM Mono', monospace;
   font-size: 12px;

@@ -216,7 +216,7 @@ function loadStoredState(srcUrl) {
 }
 
 function saveStoredState(srcUrl, page, rtl, twoPage) {
-  if (!srcUrl || srcUrl.startsWith('local:')) return; // don't persist local file-picker files
+  if (!srcUrl || srcUrl.startsWith('local:')) return;
   try {
     const all = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
     all[srcUrl] = { page, rtl: rtl?1:0, two: twoPage?1:0 };
@@ -232,7 +232,7 @@ function saveStoredState(srcUrl, page, rtl, twoPage) {
 let state = {
   accessor:    null,
   entries:     [],
-  currentPage: 1,
+  currentPage: 1,   // first page of current spread; 0 = blank+page1 in two-page mode
   totalPages:  0,
   srcUrl:      '',
   blobUrls:    {},
@@ -273,15 +273,26 @@ function setTitle(name) {
 }
 
 function updatePageUI() {
-  // In two-page mode show both page numbers in the input (e.g. "3–4")
-  const p = state.currentPage;
+  const p    = state.currentPage;
   const isTwo = state.twoPage && state.totalPages > 1;
-  const showSecond = isTwo && p < state.totalPages && !(p === 1);
+  const [leftP, rightP] = pagesForDisplay(p);
+  // Show "X–Y of Z" in two-page mode when both pages are present
+  const secondVisible = isTwo && rightP !== null;
+  // Display the page range in the input label area
+  // We put the second page number in the page-second span
+  $('page-input').value = p;
+  $('page-input').min   = state.twoPage ? '0' : '1';
+  $('page-input').max   = state.totalPages;
   $('page-total').textContent = state.totalPages;
-  $('prev-btn').disabled = p <= 1;
-  $('next-btn').disabled = isTwo ? p >= state.totalPages - 1 : p >= state.totalPages;
-  $('page-input').value  = p;
-  $('page-input').max    = state.totalPages;
+  const secondSpan = $('page-second');
+  if (secondSpan) {
+    secondSpan.textContent = secondVisible ? '–' + rightP : '';
+    secondSpan.style.display = secondVisible ? '' : 'none';
+  }
+  $('prev-btn').disabled = p <= (state.twoPage ? 0 : 1);
+  $('next-btn').disabled = isTwo
+    ? (rightP === null && p >= state.totalPages) || p >= state.totalPages
+    : p >= state.totalPages;
   $('btn-two').classList.toggle('active', state.twoPage);
   $('btn-rtl').classList.toggle('active', state.rtl);
 }
@@ -313,27 +324,24 @@ async function getPageBlobUrl(pageNum, updateStatus) {
 }
 
 // ─── DISPLAY ─────────────────────────────────────────────────────────────────
-// Two-page convention: page 1 shows alone (cover), then pairs 2-3, 4-5, etc.
-// In RTL mode: earlier page on right (slot-b), later on left (slot-a).
+// currentPage is the first page of the current spread.
+// In two-page mode p=0 means [blank, page1] (or [page1, blank] in RTL).
+// p=1 means [page1, page2], p=2 means [page2, page3], etc.
+// There is no separate offset — the page number itself encodes the pairing.
 
 function pagesForDisplay(p) {
-  // Returns [leftPage, rightPage] or [soloPage, null]
+  // Returns [leftSlot, rightSlot] where null means blank
   if (!state.twoPage || state.totalPages <= 1) return [p, null];
-  if (p === 1) return [p, null];  // cover alone
-  // Align to pairs: page 2+3, 4+5, ...
-  const first = (p % 2 === 0) ? p : p - 1;
-  const second = first + 1;
-  if (state.rtl) {
-    // RTL: earlier page on right, later on left
-    return [second <= state.totalPages ? second : null,
-            first];
-  } else {
-    return [first, second <= state.totalPages ? second : null];
-  }
+  const a = (p >= 1 && p <= state.totalPages) ? p     : null;
+  const b = (p+1 >= 1 && p+1 <= state.totalPages) ? p+1 : null;
+  // RTL: earlier page on right, later on left
+  return state.rtl ? [b, a] : [a, b];
 }
 
 async function displayPage(pageNum) {
-  if (pageNum < 1 || pageNum > state.totalPages) return;
+  // In two-page mode pageNum can be 0 (blank + page1 spread)
+  if (!state.twoPage && pageNum < 1) return;
+  if (pageNum < 0 || pageNum > state.totalPages) return;
   state.currentPage = pageNum;
   setZoom('fit');
 
@@ -351,22 +359,35 @@ async function displayPage(pageNum) {
   // Update spread layout class
   spread.classList.toggle('two-page', rightPage !== null);
 
-  try {
-    // Load left/solo page
-    const urlA = await getPageBlobUrl(leftPage, true);
-    await new Promise((res, rej) => { slotA.onload=res; slotA.onerror=rej; slotA.src=urlA; });
-    slotA.style.display = '';
-    slotA.classList.remove('loading');
+  // Helper: load an image slot, or blank it if page is null
+  async function loadSlot(slot, page, primary) {
+    if (page === null) {
+      slot.removeAttribute('src');
+      slot.style.display = '';   // visible blank
+      slot.classList.remove('loading');
+      return;
+    }
+    const url = await getPageBlobUrl(page, primary);
+    await new Promise((res, rej) => { slot.onload=res; slot.onerror=rej; slot.src=url; });
+    slot.style.display = '';
+    slot.classList.remove('loading');
+  }
 
-    // Load right page if two-page
-    if (rightPage !== null) {
-      const urlB = await getPageBlobUrl(rightPage, false);
-      await new Promise((res, rej) => { slotB.onload=res; slotB.onerror=rej; slotB.src=urlB; });
+  try {
+    const twoVisible = state.twoPage && state.totalPages > 1;
+    spread.classList.toggle('two-page', twoVisible && (leftPage !== null || rightPage !== null));
+
+    if (twoVisible) {
+      // Show both slots (possibly one blank)
       slotB.style.display = '';
-      slotB.classList.remove('loading');
+      await Promise.all([
+        loadSlot(slotA, leftPage,  true),
+        loadSlot(slotB, rightPage, false),
+      ]);
     } else {
       slotB.style.display = 'none';
       slotB.removeAttribute('src');
+      await loadSlot(slotA, leftPage, true);
     }
 
     updatePageUI();
@@ -376,7 +397,7 @@ async function displayPage(pageNum) {
     // Prefetch neighbours
     const step = state.twoPage ? 2 : 1;
     prefetchPage(pageNum + step);
-    prefetchPage(pageNum - step);
+    if (pageNum - step >= 1) prefetchPage(pageNum - step);
 
   } catch (err) {
     console.error('Page display error:', err);
@@ -410,46 +431,38 @@ function setZoom(mode) {
 
 // ─── NAVIGATION ───────────────────────────────────────────────────────────────
 
-function pageStep(shift) {
-  // shift=true → always move 1 page; shift=false → move 2 in two-page mode
-  if (state.twoPage && !shift) {
-    if (state.currentPage === 1) return 2;   // skip past cover
-    return 2;
-  }
-  return 1;
-}
-
 function goNext(shift) {
-  const step = pageStep(shift);
-  // In two-page, navigate to the next logical pair start
-  let next = state.currentPage + step;
-  if (state.twoPage && !shift && state.currentPage !== 1 && next > 2) {
-    // Ensure we stay on even boundary (2,4,6,...) after the cover
-    if (next % 2 !== 0) next++;
-  }
-  goToPage(next);
+  goToPage(state.currentPage + (state.twoPage && !shift ? 2 : 1));
 }
 
 function goPrev(shift) {
-  const step = pageStep(shift);
-  let prev = state.currentPage - step;
-  if (state.twoPage && !shift && prev > 1 && prev % 2 !== 0) prev--;
-  goToPage(Math.max(1, prev));
+  goToPage(state.currentPage - (state.twoPage && !shift ? 2 : 1));
 }
 
 function goToPage(n) {
-  const page = Math.max(1, Math.min(n, state.totalPages));
+  const min  = state.twoPage ? 0 : 1;
+  const page = Math.max(min, Math.min(n, state.totalPages));
   if (page !== state.currentPage) displayPage(page);
 }
 
 // ─── MODE TOGGLES ─────────────────────────────────────────────────────────────
 
 function setModes(rtl, twoPage) {
+  const wasTwo = state.twoPage;
   state.rtl     = rtl;
   state.twoPage = twoPage;
-  updatePageUI();
-  updateUrl();
-  // Re-display current page with new layout
+
+  if (!wasTwo && twoPage) {
+    // Entering two-page: decrement so current page becomes second of spread.
+    // e.g. on page 5 → now on page 4, showing (4, 5). Minimum is 0.
+    state.currentPage = Math.max(0, state.currentPage - 1);
+  } else if (wasTwo && !twoPage) {
+    // Leaving two-page: increment so we land on the second page (the one
+    // the reader was looking at as the "main" page in the spread).
+    // e.g. was showing (4, 5) → now on page 5. Minimum is 1.
+    state.currentPage = Math.max(1, state.currentPage + 1);
+  }
+
   if (state.totalPages > 0) displayPage(state.currentPage);
 }
 
