@@ -578,6 +578,7 @@ function setZoom(mode) {
   zoomMode = mode;
   const img = $('comic-image');
   const container = $('page-container');
+  $('zone-zoom').style.cursor = (mode === 'full') ? 'zoom-out' : 'zoom-in';
   if (mode === 'full') {
     img.style.maxWidth  = 'none';
     img.style.maxHeight = 'none';
@@ -603,37 +604,9 @@ function setZoom(mode) {
 
 }
 
-function getContainerZone(clientX) {
-  const rect = $('page-container').getBoundingClientRect();
-  const x = clientX - rect.left;
-  if (x < rect.width * 0.4) return 'prev';
-  if (x > rect.width * 0.6) return 'next';
-  return 'zoom';
-}
-
-$('page-container').addEventListener('mousemove', e => {
-  const zone = getContainerZone(e.clientX);
-  const cursors = {
-    prev: 'w-resize',
-    next: 'e-resize',
-    zoom: zoomMode === 'fit' ? 'zoom-in' : 'zoom-out',
-  };
-  $('page-container').style.cursor = cursors[zone];
-});
-
-$('page-container').addEventListener('click', e => {
-  // Ignore clicks on the topbar or spinner
-  if (e.target.closest('#topbar') || e.target.closest('.page-spinner')) return;
-
-  const zone = getContainerZone(e.clientX);
-  if (zone === 'prev') {
-    goToPage(state.currentPage - 1);
-  } else if (zone === 'next') {
-    goToPage(state.currentPage + 1);
-  } else {
-    setZoom(zoomMode === 'fit' ? 'full' : 'fit');
-  }
-});
+$('zone-prev').addEventListener('click', () => goToPage(state.currentPage - 1));
+$('zone-next').addEventListener('click', () => goToPage(state.currentPage + 1));
+$('zone-zoom').addEventListener('click', () => setZoom(zoomMode === 'fit' ? 'full' : 'fit'));
 
 // ─── FILE PICKER (in-tab) ────────────────────────────────────────────────────
 // When no src is provided, show the pick screen. The file input lives in the
