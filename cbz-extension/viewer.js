@@ -1,152 +1,265 @@
 // viewer.js — CBZ parser and comic reader
-
 'use strict';
 
-// ─── ZIP PARSING ─────────────────────────────────────────────────────────────
-
-const IMAGE_EXTENSIONS = new Set([
-  'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'tiff', 'tif'
-]);
+// ─── BINARY HELPERS ──────────────────────────────────────────────────────────
 
 function readUint16LE(buf, offset) {
   return buf[offset] | (buf[offset + 1] << 8);
 }
 
 function readUint32LE(buf, offset) {
-  return (buf[offset] | (buf[offset + 1] << 8) | (buf[offset + 2] << 16) | (buf[offset + 3] << 24)) >>> 0;
+  return (buf[offset] | (buf[offset + 1] << 8) |
+          (buf[offset + 2] << 16) | (buf[offset + 3] << 24)) >>> 0;
 }
 
 function readUint64LE(buf, offset) {
-  // JS numbers are IEEE-754 doubles with 53 bits of mantissa, giving
-  // Number.MAX_SAFE_INTEGER = 2^53 - 1 = 9007199254740991 (~8 PB).
-  // ZIP64 offsets/sizes are at most a few TB in practice, well within range.
-  // We compute hi * 2^32 + lo entirely in floating-point. As long as hi < 2^21
-  // the result is exact; above that we lose sub-4GB precision, but no real
-  // archive can have meaningful sub-4GB structure at that scale anyway.
+  // IEEE-754 double has 53-bit mantissa → exact integers up to 2^53-1 (~8 PB).
+  // hi * 2^32 + lo is exact while hi < 2^21, covering all realistic archive sizes.
   const lo = readUint32LE(buf, offset);
   const hi = readUint32LE(buf, offset + 4);
   return hi * 0x100000000 + lo;
 }
 
-/**
- * Find the End of Central Directory record.
- * Scans backwards from end of file.
- */
-function findEOCD(buf) {
-  // Signature: PK\x05\x06
-  const sig = 0x06054b50;
-  // Minimum EOCD size is 22 bytes; comment can be up to 65535 bytes
-  const maxSearch = Math.min(buf.length, 22 + 65535);
-  for (let i = buf.length - 22; i >= buf.length - maxSearch; i--) {
-    if (buf[i] === 0x50 && buf[i+1] === 0x4B && buf[i+2] === 0x05 && buf[i+3] === 0x06) {
-      return i;
+// ─── FILE ACCESSOR ABSTRACTION ───────────────────────────────────────────────
+//
+// All three source types expose the same interface:
+//   accessor.size              → number (total file size in bytes)
+//   accessor.read(offset, len) → Promise<Uint8Array>
+//
+// This lets the ZIP parser fetch only the tail to find the EOCD, then only the
+// central directory bytes, then only each entry's compressed data on demand.
+// No full-file buffer is ever held in the JS heap.
+
+// ── BlobAccessor ─────────────────────────────────────────────────────────────
+// Used for blob: URLs from the popup file picker.
+// The Blob lives in browser-managed storage; slice() is zero-copy.
+
+class BlobAccessor {
+  constructor(blob) {
+    this._blob = blob;
+    this.size = blob.size;
+  }
+  async read(offset, length) {
+    const ab = await this._blob.slice(offset, offset + length).arrayBuffer();
+    return new Uint8Array(ab);
+  }
+}
+
+// ── HttpAccessor ─────────────────────────────────────────────────────────────
+// Used for http:// and https:// sources.
+// Uses Range requests when the server supports them (Accept-Ranges: bytes).
+// Falls back to a full download stored as a Blob if Range is unsupported.
+
+class HttpAccessor {
+  constructor(url, size, blob) {
+    this._url  = url;
+    this._blob = blob; // non-null in fallback mode
+    this.size  = size;
+  }
+
+  static async create(url) {
+    // Probe for Range support
+    let size = null;
+    let rangeOk = false;
+    try {
+      const head = await fetch(url, { method: 'HEAD' });
+      if (head.ok) {
+        const cl = head.headers.get('content-length');
+        if (cl) size = parseInt(cl, 10);
+        const ar = head.headers.get('accept-ranges');
+        rangeOk = !!(ar && ar.toLowerCase() !== 'none');
+      }
+    } catch (_) { /* HEAD not supported */ }
+
+    if (rangeOk && size !== null) {
+      return new HttpAccessor(url, size, null);
+    }
+
+    // Fallback: stream entire file into a Blob (avoids double-buffering)
+    setStatus('Downloading…');
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+    const cl = resp.headers.get('content-length');
+    if (cl) setStatus(`Downloading… (${(parseInt(cl)/1024/1024).toFixed(1)} MB)`);
+    const blob = await resp.blob();
+    return new HttpAccessor(url, blob.size, blob);
+  }
+
+  async read(offset, length) {
+    if (this._blob) {
+      const ab = await this._blob.slice(offset, offset + length).arrayBuffer();
+      return new Uint8Array(ab);
+    }
+    const resp = await fetch(this._url, {
+      headers: { 'Range': `bytes=${offset}-${offset + length - 1}` }
+    });
+    if (resp.status !== 206 && !resp.ok) {
+      throw new Error(`Range request failed: HTTP ${resp.status}`);
+    }
+    return new Uint8Array(await resp.arrayBuffer());
+  }
+}
+
+// ── NativeAccessor ───────────────────────────────────────────────────────────
+// Used for files opened via cbz-open (native messaging).
+// Reads are relayed through the background script to the native host.
+// The host caps individual reads at 768 KB; larger reads are split here.
+
+class NativeAccessor {
+  constructor(path, size) {
+    this._path = path;
+    this.size  = size;
+  }
+
+  static async create(path) {
+    const resp = await bgMessage({ type: 'nativeStat', path });
+    if (!resp.ok) throw new Error(resp.error || 'Could not stat file');
+    return new NativeAccessor(path, resp.size);
+  }
+
+  async read(offset, length) {
+    const CHUNK = 768 * 1024;
+    if (length <= CHUNK) return this._chunk(offset, length);
+    const out = new Uint8Array(length);
+    let pos = 0;
+    while (pos < length) {
+      const n = Math.min(CHUNK, length - pos);
+      const part = await this._chunk(offset + pos, n);
+      out.set(part, pos);
+      pos += part.length;
+    }
+    return out;
+  }
+
+  async _chunk(offset, length) {
+    const resp = await bgMessage({ type: 'nativeRead', path: this._path, offset, length });
+    if (!resp.ok) throw new Error(resp.error || 'Chunk read failed');
+    const binary = atob(resp.data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+}
+
+function bgMessage(msg) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(msg, response => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else {
+        resolve(response);
+      }
+    });
+  });
+}
+
+// ─── ZIP PARSING (lazy, accessor-based) ──────────────────────────────────────
+//
+// We never read the whole file. Steps:
+//   1. Read the last min(fileSize, 65557) bytes to locate the EOCD record.
+//   2. Read the ZIP64 EOCD + locator if present (56 + 20 bytes).
+//   3. Read the central directory (metadata only, no file data).
+//   4. Each entry's compressed data is read on demand in extractEntry().
+
+const EOCD_MAX_TAIL = 22 + 65535;
+
+async function findAndParseEOCD(accessor) {
+  const tailSize   = Math.min(accessor.size, EOCD_MAX_TAIL);
+  const tailOffset = accessor.size - tailSize;
+  const tail       = await accessor.read(tailOffset, tailSize);
+
+  // Scan backwards for PK\x05\x06
+  let eocdPos = -1;
+  for (let i = tail.length - 22; i >= 0; i--) {
+    if (tail[i]===0x50 && tail[i+1]===0x4B &&
+        tail[i+2]===0x05 && tail[i+3]===0x06) {
+      eocdPos = i;
+      break;
     }
   }
-  return -1;
-}
+  if (eocdPos < 0) throw new Error('Not a valid ZIP file: EOCD not found');
 
-/**
- * Find ZIP64 End of Central Directory record.
- */
-function findEOCD64(buf, eocdOffset) {
-  // Look for ZIP64 EOCD locator just before EOCD
-  const locOffset = eocdOffset - 20;
-  if (locOffset < 0) return null;
-  if (buf[locOffset] !== 0x50 || buf[locOffset+1] !== 0x4B ||
-      buf[locOffset+2] !== 0x06 || buf[locOffset+3] !== 0x07) {
-    return null;
-  }
-  // Offset of ZIP64 EOCD is at bytes 8-15 of locator
-  const eocd64Offset = readUint64LE(buf, locOffset + 8);
-  if (eocd64Offset >= buf.length) return null;
-  if (buf[eocd64Offset] !== 0x50 || buf[eocd64Offset+1] !== 0x4B ||
-      buf[eocd64Offset+2] !== 0x06 || buf[eocd64Offset+3] !== 0x06) {
-    return null;
-  }
-  return eocd64Offset;
-}
-
-/**
- * Decode a filename from bytes (UTF-8 if flag set, otherwise CP437 approximation).
- */
-function decodeName(bytes, isUtf8) {
-  if (isUtf8) {
-    return new TextDecoder('utf-8').decode(bytes);
-  }
-  // CP437: basic ASCII range is identical; extended chars approximated
-  // For comic filenames this is almost always fine.
-  try {
-    return new TextDecoder('utf-8').decode(bytes);
-  } catch (e) {
-    return new TextDecoder('latin1').decode(bytes);
-  }
-}
-
-/**
- * Parse the central directory and return an array of entry metadata.
- */
-function parseCentralDirectory(buf) {
-  const eocdOffset = findEOCD(buf);
-  if (eocdOffset < 0) throw new Error('Not a valid ZIP file: EOCD not found');
-
+  const eocdAbsolute = tailOffset + eocdPos;
   let cdOffset, cdSize, totalEntries;
 
-  // Check for ZIP64
-  const eocd64Offset = findEOCD64(buf, eocdOffset);
-  if (eocd64Offset !== null) {
-    totalEntries = readUint64LE(buf, eocd64Offset + 32);
-    cdSize       = readUint64LE(buf, eocd64Offset + 40);
-    cdOffset     = readUint64LE(buf, eocd64Offset + 48);
-  } else {
-    totalEntries = readUint16LE(buf, eocdOffset + 10);
-    cdSize       = readUint32LE(buf, eocdOffset + 12);
-    cdOffset     = readUint32LE(buf, eocdOffset + 16);
+  // Check for ZIP64 EOCD locator (PK\x06\x07) immediately before EOCD
+  const locAbsolute = eocdAbsolute - 20;
+  if (locAbsolute >= 0) {
+    const loc = await accessor.read(locAbsolute, 20);
+    if (loc[0]===0x50 && loc[1]===0x4B && loc[2]===0x06 && loc[3]===0x07) {
+      const eocd64Absolute = readUint64LE(loc, 8);
+      if (eocd64Absolute < accessor.size) {
+        const e64 = await accessor.read(eocd64Absolute, 56);
+        if (e64[0]===0x50 && e64[1]===0x4B && e64[2]===0x06 && e64[3]===0x06) {
+          totalEntries = readUint64LE(e64, 32);
+          cdSize       = readUint64LE(e64, 40);
+          cdOffset     = readUint64LE(e64, 48);
+        }
+      }
+    }
   }
 
+  if (cdOffset === undefined) {
+    // Standard ZIP32
+    totalEntries = readUint16LE(tail, eocdPos + 10);
+    cdSize       = readUint32LE(tail, eocdPos + 12);
+    cdOffset     = readUint32LE(tail, eocdPos + 16);
+  }
+
+  return { cdOffset, cdSize, totalEntries };
+}
+
+function decodeName(bytes, isUtf8) {
+  if (isUtf8) return new TextDecoder('utf-8').decode(bytes);
+  try   { return new TextDecoder('utf-8').decode(bytes); }
+  catch { return new TextDecoder('latin1').decode(bytes); }
+}
+
+async function parseCentralDirectory(accessor) {
+  setStatus('Reading ZIP directory…');
+  const { cdOffset, cdSize, totalEntries } = await findAndParseEOCD(accessor);
+
+  // Read the entire central directory at once — it's pure metadata.
+  // Even a 1000-issue omnibus typically has a CD under a few MB.
+  const cd = await accessor.read(cdOffset, cdSize);
+
   const entries = [];
-  let pos = cdOffset;
+  let pos = 0;
 
   for (let i = 0; i < totalEntries; i++) {
-    if (pos + 46 > buf.length) break;
-    const sig = readUint32LE(buf, pos);
-    if (sig !== 0x02014b50) break; // Central directory entry signature
+    if (pos + 46 > cd.length) break;
+    if (readUint32LE(cd, pos) !== 0x02014b50) break;
 
-    const flags          = readUint16LE(buf, pos + 8);
-    const compression    = readUint16LE(buf, pos + 10);
-    const compressedSize = readUint32LE(buf, pos + 20);
-    const uncompressedSize = readUint32LE(buf, pos + 24);
-    const nameLen        = readUint16LE(buf, pos + 28);
-    const extraLen       = readUint16LE(buf, pos + 30);
-    const commentLen     = readUint16LE(buf, pos + 32);
-    let   localOffset    = readUint32LE(buf, pos + 42);
-    const isUtf8         = (flags & 0x0800) !== 0;
+    const flags           = readUint16LE(cd, pos + 8);
+    const compression     = readUint16LE(cd, pos + 10);
+    let compressedSize    = readUint32LE(cd, pos + 20);
+    let uncompressedSize  = readUint32LE(cd, pos + 24);
+    const nameLen         = readUint16LE(cd, pos + 28);
+    const extraLen        = readUint16LE(cd, pos + 30);
+    const commentLen      = readUint16LE(cd, pos + 32);
+    let localOffset       = readUint32LE(cd, pos + 42);
+    const isUtf8          = (flags & 0x0800) !== 0;
 
-    const nameBytes = buf.slice(pos + 46, pos + 46 + nameLen);
-    const name = decodeName(nameBytes, isUtf8);
+    const name = decodeName(cd.slice(pos + 46, pos + 46 + nameLen), isUtf8);
 
-    // Parse ZIP64 extra field if needed
-    let actualCompressedSize = compressedSize;
-    let actualUncompressedSize = uncompressedSize;
-    let actualLocalOffset = localOffset;
-
-    if (compressedSize === 0xFFFFFFFF || uncompressedSize === 0xFFFFFFFF || localOffset === 0xFFFFFFFF) {
-      // Need ZIP64 extra
-      const extraStart = pos + 46 + nameLen;
-      const extraEnd = extraStart + extraLen;
-      let ep = extraStart;
+    // Resolve ZIP64 extra fields if sentinel values are present
+    if (compressedSize === 0xFFFFFFFF || uncompressedSize === 0xFFFFFFFF ||
+        localOffset === 0xFFFFFFFF) {
+      let ep = pos + 46 + nameLen;
+      const extraEnd = ep + extraLen;
       while (ep + 4 <= extraEnd) {
-        const headerId = readUint16LE(buf, ep);
-        const dataSize = readUint16LE(buf, ep + 2);
+        const headerId = readUint16LE(cd, ep);
+        const dataSize = readUint16LE(cd, ep + 2);
         if (headerId === 0x0001) {
           let z = ep + 4;
           if (uncompressedSize === 0xFFFFFFFF && z + 8 <= extraEnd) {
-            actualUncompressedSize = readUint64LE(buf, z); z += 8;
+            uncompressedSize = readUint64LE(cd, z); z += 8;
           }
           if (compressedSize === 0xFFFFFFFF && z + 8 <= extraEnd) {
-            actualCompressedSize = readUint64LE(buf, z); z += 8;
+            compressedSize = readUint64LE(cd, z); z += 8;
           }
           if (localOffset === 0xFFFFFFFF && z + 8 <= extraEnd) {
-            actualLocalOffset = readUint64LE(buf, z); z += 8;
+            localOffset = readUint64LE(cd, z); z += 8;
           }
           break;
         }
@@ -154,117 +267,85 @@ function parseCentralDirectory(buf) {
       }
     }
 
-    entries.push({
-      name,
-      compression,       // 0 = stored, 8 = deflated
-      compressedSize: actualCompressedSize,
-      uncompressedSize: actualUncompressedSize,
-      localOffset: actualLocalOffset,
-    });
-
+    entries.push({ name, compression, compressedSize, uncompressedSize, localOffset });
     pos += 46 + nameLen + extraLen + commentLen;
   }
 
   return entries;
 }
 
-/**
- * Get the actual data offset for an entry by reading its local file header.
- */
-function getDataOffset(buf, entry) {
-  const lhOffset = entry.localOffset;
-  if (lhOffset + 30 > buf.length) throw new Error('Local header out of bounds');
-  const sig = readUint32LE(buf, lhOffset);
-  if (sig !== 0x04034b50) throw new Error('Bad local file header signature');
-  const nameLen  = readUint16LE(buf, lhOffset + 26);
-  const extraLen = readUint16LE(buf, lhOffset + 28);
-  return lhOffset + 30 + nameLen + extraLen;
+// ─── ENTRY EXTRACTION ────────────────────────────────────────────────────────
+// Reads only the local file header (to find data offset) and compressed bytes.
+
+async function extractEntry(accessor, entry) {
+  // Local file header fixed part is 30 bytes
+  const lh = await accessor.read(entry.localOffset, 30);
+  if (readUint32LE(lh, 0) !== 0x04034b50) {
+    throw new Error('Bad local file header signature');
+  }
+  const dataOffset = entry.localOffset + 30 +
+                     readUint16LE(lh, 26) +  // name length
+                     readUint16LE(lh, 28);   // extra length
+
+  const compressed = await accessor.read(dataOffset, entry.compressedSize);
+
+  if      (entry.compression === 0) return compressed;
+  else if (entry.compression === 8) return inflateDeflate(compressed);
+  else throw new Error(`Unsupported compression method: ${entry.compression}`);
 }
 
-/**
- * Decompress a deflated entry using DecompressionStream.
- */
-async function inflateDeflate(compressedData) {
+async function inflateDeflate(data) {
   const ds = new DecompressionStream('deflate-raw');
   const writer = ds.writable.getWriter();
   const reader = ds.readable.getReader();
-
-  writer.write(compressedData);
+  writer.write(data);
   writer.close();
 
   const chunks = [];
-  while (true) {
+  for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     chunks.push(value);
   }
-
-  // Concatenate
-  let totalLen = 0;
-  for (const c of chunks) totalLen += c.length;
-  const result = new Uint8Array(totalLen);
-  let offset = 0;
-  for (const c of chunks) {
-    result.set(c, offset);
-    offset += c.length;
-  }
-  return result;
+  let len = 0;
+  for (const c of chunks) len += c.length;
+  const out = new Uint8Array(len);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
 }
 
-/**
- * Extract the raw bytes for a given entry from the buffer.
- */
-async function extractEntry(buf, entry) {
-  const dataOffset = getDataOffset(buf, entry);
-  const compressedData = buf.slice(dataOffset, dataOffset + entry.compressedSize);
+// ─── IMAGE FILTERING / MIME ───────────────────────────────────────────────────
 
-  if (entry.compression === 0) {
-    // Stored
-    return compressedData;
-  } else if (entry.compression === 8) {
-    // Deflated
-    return await inflateDeflate(compressedData);
-  } else {
-    throw new Error(`Unsupported compression method: ${entry.compression}`);
-  }
-}
+const IMAGE_EXTENSIONS = new Set([
+  'jpg','jpeg','png','gif','webp','avif','bmp','tiff','tif'
+]);
 
-/**
- * Given entry list, return only image files sorted alphabetically.
- */
 function filterAndSortImages(entries) {
   return entries
     .filter(e => {
-      if (e.name.endsWith('/')) return false; // directory
-      const parts = e.name.split('.');
-      const ext = parts[parts.length - 1].toLowerCase();
+      if (e.name.endsWith('/')) return false;
+      const ext = e.name.split('.').pop().toLowerCase();
       return IMAGE_EXTENSIONS.has(ext);
     })
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+    .sort((a, b) => a.name.localeCompare(b.name, undefined,
+                      { numeric: true, sensitivity: 'base' }));
 }
 
-/**
- * Get mime type from file extension.
- */
 function getMimeType(filename) {
   const ext = filename.split('.').pop().toLowerCase();
-  const mimes = {
-    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
-    gif: 'image/gif', webp: 'image/webp', avif: 'image/avif',
-    bmp: 'image/bmp', tiff: 'image/tiff', tif: 'image/tiff',
-  };
-  return mimes[ext] || 'image/jpeg';
+  return { jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png',
+           gif:'image/gif',  webp:'image/webp', avif:'image/avif',
+           bmp:'image/bmp',  tiff:'image/tiff', tif:'image/tiff' }[ext]
+         || 'image/jpeg';
 }
 
 // ─── FRAGMENT PARSING ────────────────────────────────────────────────────────
 
 function parseFragment(hash) {
-  // hash is like "#cbz" or "#cbz&page=3" or "?src=...#cbz&page=3"
-  let page = 1;
-  // Remove leading #
   const frag = hash.startsWith('#') ? hash.slice(1) : hash;
-  const params = frag.split('&');
-  for (const p of params) {
+  let page = 1;
+  for (const p of frag.split('&')) {
     if (p.startsWith('page=')) {
       const n = parseInt(p.slice(5), 10);
       if (!isNaN(n) && n >= 1) page = n;
@@ -276,22 +357,19 @@ function parseFragment(hash) {
 // ─── UI STATE ────────────────────────────────────────────────────────────────
 
 let state = {
-  buf: null,
-  entries: [],       // all image entries sorted
+  accessor: null,   // FileAccessor instance — the only reference to file data
+  entries: [],      // image entry metadata only (no file bytes)
   currentPage: 1,
   totalPages: 0,
   srcUrl: '',
-  loading: false,
-  blobUrls: {},      // cache: page index -> blob URL
+  blobUrls: {},     // decoded image cache: pageNum -> blob: URL
 };
 
 // ─── UI HELPERS ──────────────────────────────────────────────────────────────
 
 const $ = id => document.getElementById(id);
 
-function setStatus(msg) {
-  $('status-text').textContent = msg;
-}
+function setStatus(msg) { $('status-text').textContent = msg; }
 
 function showLoading(msg = 'Loading…') {
   $('loading-screen').classList.remove('hidden');
@@ -317,8 +395,14 @@ function updatePageUI() {
   $('page-indicator').textContent = `${state.currentPage} / ${state.totalPages}`;
   $('prev-btn').disabled = state.currentPage <= 1;
   $('next-btn').disabled = state.currentPage >= state.totalPages;
-  $('page-input').value = state.currentPage;
-  $('page-input').max = state.totalPages;
+  $('page-input').value  = state.currentPage;
+  $('page-input').max    = state.totalPages;
+}
+
+function setTitle(name) {
+  const display = name.replace(/\.cbz$/i, '');
+  document.title = display + ' \u2014 CBZ Viewer';
+  $('comic-title').textContent = display;
 }
 
 // ─── PAGE DISPLAY ────────────────────────────────────────────────────────────
@@ -327,9 +411,8 @@ async function displayPage(pageNum) {
   if (pageNum < 1 || pageNum > state.totalPages) return;
   state.currentPage = pageNum;
 
-  const img = $('comic-image');
+  const img     = $('comic-image');
   const spinner = $('page-spinner');
-
   img.classList.add('loading');
   spinner.classList.remove('hidden');
 
@@ -338,27 +421,23 @@ async function displayPage(pageNum) {
     if (!blobUrl) {
       const entry = state.entries[pageNum - 1];
       setStatus(`Extracting page ${pageNum}…`);
-      const data = await extractEntry(state.buf, entry);
-      const mime = getMimeType(entry.name);
-      const blob = new Blob([data], { type: mime });
-      blobUrl = URL.createObjectURL(blob);
+      const data = await extractEntry(state.accessor, entry);
+      blobUrl = URL.createObjectURL(new Blob([data], { type: getMimeType(entry.name) }));
       state.blobUrls[pageNum] = blobUrl;
     }
 
     await new Promise((resolve, reject) => {
-      img.onload = resolve;
+      img.onload  = resolve;
       img.onerror = reject;
-      img.src = blobUrl;
+      img.src     = blobUrl;
     });
 
     updatePageUI();
 
-    // Update fragment in viewer URL (doesn't affect the src param)
-    const viewerUrl = new URL(window.location.href);
-    viewerUrl.hash = `cbz&page=${pageNum}`;
-    history.replaceState(null, '', viewerUrl.toString());
+    const u = new URL(window.location.href);
+    u.hash = `cbz&page=${pageNum}`;
+    history.replaceState(null, '', u.toString());
 
-    // Prefetch adjacent pages quietly
     prefetchPage(pageNum + 1);
     prefetchPage(pageNum - 1);
 
@@ -376,139 +455,60 @@ async function prefetchPage(pageNum) {
   if (state.blobUrls[pageNum]) return;
   try {
     const entry = state.entries[pageNum - 1];
-    const data = await extractEntry(state.buf, entry);
-    const mime = getMimeType(entry.name);
-    const blob = new Blob([data], { type: mime });
-    state.blobUrls[pageNum] = URL.createObjectURL(blob);
-  } catch (e) {
-    // Silent prefetch failure is fine
-  }
+    const data  = await extractEntry(state.accessor, entry);
+    state.blobUrls[pageNum] = URL.createObjectURL(
+      new Blob([data], { type: getMimeType(entry.name) })
+    );
+  } catch (_) { /* silent */ }
 }
 
+// ─── ACCESSOR FACTORY ────────────────────────────────────────────────────────
 
-// ─── NATIVE FILE LOADING (cbz-native:// scheme) ──────────────────────────────
-// When a file is opened via cbz-open (command line), the src is a
-// cbz-native://encoded-path URL. We can't fetch() it directly; instead we
-// request chunks from the background script, which relays to the native host.
-
-function nativeSendMessage(msg) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(msg, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-      } else {
-        resolve(response);
-      }
-    });
-  });
-}
-
-async function loadCbzNative(nativePath, fileSize, startPage) {
-  // Read the entire file in chunks, assembling into a Uint8Array.
-  // We request 768KB chunks (host caps them there too).
-  const CHUNK = 768 * 1024;
-  state.buf = new Uint8Array(fileSize);
-  let offset = 0;
-
-  while (offset < fileSize) {
-    const length = Math.min(CHUNK, fileSize - offset);
-    const pct = Math.round(offset / fileSize * 100);
-    setStatus(`Loading… ${pct}% (${(offset/1024/1024).toFixed(1)} / ${(fileSize/1024/1024).toFixed(1)} MB)`);
-
-    const resp = await nativeSendMessage({
-      type: 'nativeRead',
-      path: nativePath,
-      offset: offset,
-      length: length,
-    });
-
-    if (!resp.ok) throw new Error(resp.error || 'Chunk read failed');
-
-    // Decode base64 chunk
-    const binary = atob(resp.data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    state.buf.set(bytes, offset);
-    offset += resp.length;
+async function createAccessor(url) {
+  if (url.startsWith('cbz-native://')) {
+    const path = decodeURIComponent(url.slice('cbz-native://'.length));
+    return NativeAccessor.create(path);
   }
-
-  setStatus('Parsing ZIP…');
-  const allEntries = parseCentralDirectory(state.buf);
-  state.entries = filterAndSortImages(allEntries);
-  state.totalPages = state.entries.length;
-
-  if (state.totalPages === 0) {
-    throw new Error('No image files found in this CBZ archive.');
+  if (url.startsWith('blob:')) {
+    // fetch() a blob: URL to get the underlying Blob object.
+    // The Blob is browser-managed storage, not JS heap.
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('Could not read blob URL');
+    return new BlobAccessor(await resp.blob());
   }
-
-  showViewer();
-  updatePageUI();
-  const page = Math.max(1, Math.min(startPage, state.totalPages));
-  await displayPage(page);
+  if (url.startsWith('http:') || url.startsWith('https:')) {
+    return HttpAccessor.create(url);
+  }
+  // Fallback (e.g. unexpected file:// that wasn't caught by webRequest)
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Could not fetch: ${url}`);
+  return new BlobAccessor(await resp.blob());
 }
 
 // ─── MAIN LOAD ───────────────────────────────────────────────────────────────
 
 async function loadCbz(url, startPage) {
-  showLoading('Fetching file…');
-
+  showLoading('Opening…');
   try {
-    // cbz-native:// URLs come from the command-line cbz-open tool.
-    // The path is encoded in the URL; we read bytes via the native host.
-    if (url.startsWith('cbz-native://')) {
-      const nativePath = decodeURIComponent(url.slice('cbz-native://'.length));
+    state.accessor = await createAccessor(url);
 
-      setStatus('Contacting native host…');
-      const statResp = await nativeSendMessage({ type: 'nativeStat', path: nativePath });
-      if (!statResp.ok) throw new Error(statResp.error || 'Could not stat file');
+    const allEntries   = await parseCentralDirectory(state.accessor);
+    state.entries      = filterAndSortImages(allEntries);
+    state.totalPages   = state.entries.length;
 
-      // Title from stat response (name param may already be set from init())
-      const displayName = statResp.name.replace(/\.cbz$/i, '');
-      document.title = displayName + ' \u2014 CBZ Viewer';
-      $('comic-title').textContent = displayName;
+    if (state.totalPages === 0) throw new Error('No image files found in this CBZ archive.');
 
-      await loadCbzNative(nativePath, statResp.size, startPage);
-      return;
-    }
-
-    // Normal fetch path (http, https, blob, file via webRequest redirect)
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-
-    const contentLength = response.headers.get('content-length');
-    if (contentLength) {
-      setStatus(`Downloading… (${(parseInt(contentLength) / 1024 / 1024).toFixed(1)} MB)`);
-    } else {
-      setStatus('Downloading…');
-    }
-
-    const arrayBuf = await response.arrayBuffer();
-    state.buf = new Uint8Array(arrayBuf);
-    setStatus('Parsing ZIP…');
-
-    const allEntries = parseCentralDirectory(state.buf);
-    state.entries = filterAndSortImages(allEntries);
-    state.totalPages = state.entries.length;
-
-    if (state.totalPages === 0) {
-      throw new Error('No image files found in this CBZ archive.');
-    }
-
-    // Update title (only if not already set by init() from a name param)
-    if (!$('comic-title').textContent || $('comic-title').textContent === 'Comic') {
+    // Set title from URL path if not already set by init() from a name param
+    if ($('comic-title').textContent === 'Comic') {
       try {
-        const srcUrl = new URL(url);
-        const fileName = decodeURIComponent(srcUrl.pathname.split('/').pop()) || 'Comic';
-        document.title = fileName.replace(/\.cbz$/i, '') + ' \u2014 CBZ Viewer';
-        $('comic-title').textContent = fileName.replace(/\.cbz$/i, '');
-      } catch (e) {}
+        const name = decodeURIComponent(new URL(url).pathname.split('/').pop());
+        if (name) setTitle(name);
+      } catch (_) {}
     }
 
     showViewer();
     updatePageUI();
-
-    const page = Math.max(1, Math.min(startPage, state.totalPages));
-    await displayPage(page);
+    await displayPage(Math.max(1, Math.min(startPage, state.totalPages)));
 
   } catch (err) {
     console.error('Load error:', err);
@@ -520,35 +520,20 @@ async function loadCbz(url, startPage) {
 
 function goToPage(n) {
   const page = Math.max(1, Math.min(n, state.totalPages));
-  if (page !== state.currentPage) {
-    displayPage(page);
-  }
+  if (page !== state.currentPage) displayPage(page);
 }
 
-// ─── KEYBOARD / INPUT ────────────────────────────────────────────────────────
+// ─── EVENT LISTENERS ─────────────────────────────────────────────────────────
 
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   switch (e.key) {
-    case 'ArrowRight':
-    case 'ArrowDown':
-    case ' ':
-    case 'PageDown':
-      e.preventDefault();
-      goToPage(state.currentPage + 1);
-      break;
-    case 'ArrowLeft':
-    case 'ArrowUp':
-    case 'PageUp':
-      e.preventDefault();
-      goToPage(state.currentPage - 1);
-      break;
-    case 'Home':
-      goToPage(1);
-      break;
-    case 'End':
-      goToPage(state.totalPages);
-      break;
+    case 'ArrowRight': case 'ArrowDown': case ' ': case 'PageDown':
+      e.preventDefault(); goToPage(state.currentPage + 1); break;
+    case 'ArrowLeft': case 'ArrowUp': case 'PageUp':
+      e.preventDefault(); goToPage(state.currentPage - 1); break;
+    case 'Home': goToPage(1); break;
+    case 'End':  goToPage(state.totalPages); break;
   }
 });
 
@@ -559,31 +544,25 @@ $('page-input').addEventListener('change', e => {
   const n = parseInt(e.target.value, 10);
   if (!isNaN(n)) goToPage(n);
 });
-
 $('page-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') {
-    const n = parseInt(e.target.value, 10);
-    if (!isNaN(n)) goToPage(n);
-    e.target.blur();
-  }
+  if (e.key !== 'Enter') return;
+  const n = parseInt(e.target.value, 10);
+  if (!isNaN(n)) goToPage(n);
+  e.target.blur();
 });
 
-// Click left/right halves of image to navigate
 $('comic-image').addEventListener('click', e => {
   const rect = e.target.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  if (x < rect.width / 2) {
-    goToPage(state.currentPage - 1);
-  } else {
-    goToPage(state.currentPage + 1);
-  }
+  goToPage(e.clientX - rect.left < rect.width / 2
+    ? state.currentPage - 1
+    : state.currentPage + 1);
 });
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 
 (function init() {
   const params = new URLSearchParams(window.location.search);
-  const src = params.get('src');
+  const src    = params.get('src');
 
   if (!src) {
     showError('No CBZ source URL provided. Open a .cbz file using the toolbar button, or navigate to a .cbz URL.');
@@ -592,33 +571,24 @@ $('comic-image').addEventListener('click', e => {
 
   state.srcUrl = src;
 
-  // If a display name was provided (e.g. from the file picker), use it for the title
-  // before the file is loaded, so the UI isn't blank while fetching.
   const nameParam = params.get('name');
-  if (nameParam) {
-    const displayName = decodeURIComponent(nameParam).replace(/\.cbz$/i, '');
-    document.title = displayName + ' — CBZ Viewer';
-    $('comic-title').textContent = displayName;
-  }
+  if (nameParam) setTitle(decodeURIComponent(nameParam));
 
-  // Parse starting page: check query param first (used by cbz-open / native host),
-  // then fragment, then original URL fragment.
+  // Starting page: ?page= param > #fragment > src URL fragment
   let startPage = 1;
   const pageParam = params.get('page');
   if (pageParam) {
     const n = parseInt(pageParam, 10);
     if (!isNaN(n) && n >= 1) startPage = n;
   } else {
-    const viewerHash = window.location.hash;
-    if (viewerHash) {
-      startPage = parseFragment(viewerHash).page;
+    const hash = window.location.hash;
+    if (hash) {
+      startPage = parseFragment(hash).page;
     } else {
       try {
-        const srcParsed = new URL(src);
-        if (srcParsed.hash) {
-          startPage = parseFragment(srcParsed.hash).page;
-        }
-      } catch (e) {}
+        const srcHash = new URL(src).hash;
+        if (srcHash) startPage = parseFragment(srcHash).page;
+      } catch (_) {}
     }
   }
 
