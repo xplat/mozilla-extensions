@@ -273,26 +273,28 @@ function setTitle(name) {
 }
 
 function updatePageUI() {
-  const p    = state.currentPage;
+  const p     = state.currentPage;
   const isTwo = state.twoPage && state.totalPages > 1;
-  const [leftP, rightP] = pagesForDisplay(p);
-  // Show "X–Y of Z" in two-page mode when both pages are present
-  const secondVisible = isTwo && rightP !== null;
-  // Display the page range in the input label area
-  // We put the second page number in the page-second span
+
+  // Second page indicator: always show the higher page number regardless of RTL.
+  // p is always the first (lower-numbered) page of the spread.
+  const secondPage = (isTwo && p + 1 <= state.totalPages) ? p + 1 : null;
   $('page-input').value = p;
   $('page-input').min   = state.twoPage ? '0' : '1';
   $('page-input').max   = state.totalPages;
   $('page-total').textContent = state.totalPages;
   const secondSpan = $('page-second');
   if (secondSpan) {
-    secondSpan.textContent = secondVisible ? '–' + rightP : '';
-    secondSpan.style.display = secondVisible ? '' : 'none';
+    secondSpan.textContent = secondPage !== null ? '–' + secondPage : '';
+    secondSpan.style.display = secondPage !== null ? '' : 'none';
   }
-  $('prev-btn').disabled = p <= (state.twoPage ? 0 : 1);
-  $('next-btn').disabled = isTwo
-    ? (rightP === null && p >= state.totalPages) || p >= state.totalPages
-    : p >= state.totalPages;
+
+  // Disabled state reflects what "prev" and "next" actually do in this mode.
+  // In RTL the buttons swap meaning, so swap the disabled logic too.
+  const atStart = p <= (state.twoPage ? 0 : 1);
+  const atEnd   = isTwo ? p + 2 > state.totalPages : p >= state.totalPages;
+  $('prev-btn').disabled = state.rtl ? atEnd   : atStart;
+  $('next-btn').disabled = state.rtl ? atStart : atEnd;
   $('btn-two').classList.toggle('active', state.twoPage);
   $('btn-rtl').classList.toggle('active', state.rtl);
 }
@@ -363,10 +365,12 @@ async function displayPage(pageNum) {
   async function loadSlot(slot, page, primary) {
     if (page === null) {
       slot.removeAttribute('src');
-      slot.style.display = '';   // visible blank
+      slot.alt = '';             // suppress alt text on blank slot
+      slot.style.display = '';
       slot.classList.remove('loading');
       return;
     }
+    slot.alt = 'Page';           // restore alt text for real pages
     const url = await getPageBlobUrl(page, primary);
     await new Promise((res, rej) => { slot.onload=res; slot.onerror=rej; slot.src=url; });
     slot.style.display = '';
@@ -432,11 +436,17 @@ function setZoom(mode) {
 // ─── NAVIGATION ───────────────────────────────────────────────────────────────
 
 function goNext(shift) {
-  goToPage(state.currentPage + (state.twoPage && !shift ? 2 : 1));
+  const step = state.twoPage && !shift ? 2 : 1;
+  // In two-page mode without shift, only move if a full spread is available
+  if (state.twoPage && !shift && state.currentPage + step > state.totalPages) return;
+  goToPage(state.currentPage + step);
 }
 
 function goPrev(shift) {
-  goToPage(state.currentPage - (state.twoPage && !shift ? 2 : 1));
+  const step = state.twoPage && !shift ? 2 : 1;
+  // In two-page mode without shift, only move if a full spread back is available
+  if (state.twoPage && !shift && state.currentPage - step < 0) return;
+  goToPage(state.currentPage - step);
 }
 
 function goToPage(n) {
