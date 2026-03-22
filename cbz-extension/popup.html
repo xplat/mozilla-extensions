@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CBZ Viewer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d0d0d;
+      --surface: #141414;
+      --border: #2a2a2a;
+      --amber: #c8933a;
+      --text: #e0d8cc;
+      --text-dim: #888;
+    }
+    body {
+      width: 220px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 13px;
+      padding: 14px;
+    }
+    .title {
+      font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+      font-size: 20px;
+      letter-spacing: 0.1em;
+      color: var(--amber);
+      margin-bottom: 12px;
+    }
+    .desc {
+      color: var(--text-dim);
+      line-height: 1.5;
+      margin-bottom: 14px;
+      font-size: 12px;
+    }
+    .open-btn {
+      display: block;
+      width: 100%;
+      padding: 9px 12px;
+      background: var(--amber);
+      color: #0d0d0d;
+      border: none;
+      border-radius: 5px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      letter-spacing: 0.03em;
+    }
+    .open-btn:hover { background: #e0aa58; }
+    .hint {
+      margin-top: 10px;
+      font-size: 11px;
+      color: var(--text-dim);
+      text-align: center;
+      line-height: 1.4;
+    }
+    #file-input { display: none; }
+  </style>
+</head>
+<body>
+  <div class="title">CBZ Viewer</div>
+  <p class="desc">Open a local .cbz comic file, or just navigate to a .cbz URL and it will open automatically.</p>
+  <button class="open-btn" id="open-btn">📂 Open CBZ File…</button>
+  <input type="file" id="file-input" accept=".cbz,application/zip,application/vnd.comicbook+zip">
+  <p class="hint">HTTP/HTTPS .cbz links open automatically.</p>
+  <script src="popup.js"></script>
+</body>
+</html>

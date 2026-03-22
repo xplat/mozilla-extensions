@@ -385,12 +385,93 @@ async function prefetchPage(pageNum) {
   }
 }
 
+
+// ─── NATIVE FILE LOADING (cbz-native:// scheme) ──────────────────────────────
+// When a file is opened via cbz-open (command line), the src is a
+// cbz-native://encoded-path URL. We can't fetch() it directly; instead we
+// request chunks from the background script, which relays to the native host.
+
+function nativeSendMessage(msg) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(msg, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else {
+        resolve(response);
+      }
+    });
+  });
+}
+
+async function loadCbzNative(nativePath, fileSize, startPage) {
+  // Read the entire file in chunks, assembling into a Uint8Array.
+  // We request 768KB chunks (host caps them there too).
+  const CHUNK = 768 * 1024;
+  state.buf = new Uint8Array(fileSize);
+  let offset = 0;
+
+  while (offset < fileSize) {
+    const length = Math.min(CHUNK, fileSize - offset);
+    const pct = Math.round(offset / fileSize * 100);
+    setStatus(`Loading… ${pct}% (${(offset/1024/1024).toFixed(1)} / ${(fileSize/1024/1024).toFixed(1)} MB)`);
+
+    const resp = await nativeSendMessage({
+      type: 'nativeRead',
+      path: nativePath,
+      offset: offset,
+      length: length,
+    });
+
+    if (!resp.ok) throw new Error(resp.error || 'Chunk read failed');
+
+    // Decode base64 chunk
+    const binary = atob(resp.data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    state.buf.set(bytes, offset);
+    offset += resp.length;
+  }
+
+  setStatus('Parsing ZIP…');
+  const allEntries = parseCentralDirectory(state.buf);
+  state.entries = filterAndSortImages(allEntries);
+  state.totalPages = state.entries.length;
+
+  if (state.totalPages === 0) {
+    throw new Error('No image files found in this CBZ archive.');
+  }
+
+  showViewer();
+  updatePageUI();
+  const page = Math.max(1, Math.min(startPage, state.totalPages));
+  await displayPage(page);
+}
+
 // ─── MAIN LOAD ───────────────────────────────────────────────────────────────
 
 async function loadCbz(url, startPage) {
   showLoading('Fetching file…');
 
   try {
+    // cbz-native:// URLs come from the command-line cbz-open tool.
+    // The path is encoded in the URL; we read bytes via the native host.
+    if (url.startsWith('cbz-native://')) {
+      const nativePath = decodeURIComponent(url.slice('cbz-native://'.length));
+
+      setStatus('Contacting native host…');
+      const statResp = await nativeSendMessage({ type: 'nativeStat', path: nativePath });
+      if (!statResp.ok) throw new Error(statResp.error || 'Could not stat file');
+
+      // Title from stat response (name param may already be set from init())
+      const displayName = statResp.name.replace(/\.cbz$/i, '');
+      document.title = displayName + ' \u2014 CBZ Viewer';
+      $('comic-title').textContent = displayName;
+
+      await loadCbzNative(nativePath, statResp.size, startPage);
+      return;
+    }
+
+    // Normal fetch path (http, https, blob, file via webRequest redirect)
     const response = await fetch(url);
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 
@@ -413,13 +494,15 @@ async function loadCbz(url, startPage) {
       throw new Error('No image files found in this CBZ archive.');
     }
 
-    // Update title
-    try {
-      const srcUrl = new URL(url);
-      const fileName = decodeURIComponent(srcUrl.pathname.split('/').pop()) || 'Comic';
-      document.title = fileName.replace(/\.cbz$/i, '') + ' — CBZ Viewer';
-      $('comic-title').textContent = fileName.replace(/\.cbz$/i, '');
-    } catch (e) {}
+    // Update title (only if not already set by init() from a name param)
+    if (!$('comic-title').textContent || $('comic-title').textContent === 'Comic') {
+      try {
+        const srcUrl = new URL(url);
+        const fileName = decodeURIComponent(srcUrl.pathname.split('/').pop()) || 'Comic';
+        document.title = fileName.replace(/\.cbz$/i, '') + ' \u2014 CBZ Viewer';
+        $('comic-title').textContent = fileName.replace(/\.cbz$/i, '');
+      } catch (e) {}
+    }
 
     showViewer();
     updatePageUI();
@@ -503,25 +586,40 @@ $('comic-image').addEventListener('click', e => {
   const src = params.get('src');
 
   if (!src) {
-    showError('No CBZ source URL provided. Open a .cbz file to use this viewer.');
+    showError('No CBZ source URL provided. Open a .cbz file using the toolbar button, or navigate to a .cbz URL.');
     return;
   }
 
   state.srcUrl = src;
 
-  // Parse page from both the viewer's own fragment AND the original URL's fragment
+  // If a display name was provided (e.g. from the file picker), use it for the title
+  // before the file is loaded, so the UI isn't blank while fetching.
+  const nameParam = params.get('name');
+  if (nameParam) {
+    const displayName = decodeURIComponent(nameParam).replace(/\.cbz$/i, '');
+    document.title = displayName + ' — CBZ Viewer';
+    $('comic-title').textContent = displayName;
+  }
+
+  // Parse starting page: check query param first (used by cbz-open / native host),
+  // then fragment, then original URL fragment.
   let startPage = 1;
-  const viewerHash = window.location.hash;
-  if (viewerHash) {
-    startPage = parseFragment(viewerHash).page;
+  const pageParam = params.get('page');
+  if (pageParam) {
+    const n = parseInt(pageParam, 10);
+    if (!isNaN(n) && n >= 1) startPage = n;
   } else {
-    // Try extracting page from original URL fragment
-    try {
-      const srcParsed = new URL(src);
-      if (srcParsed.hash) {
-        startPage = parseFragment(srcParsed.hash).page;
-      }
-    } catch (e) {}
+    const viewerHash = window.location.hash;
+    if (viewerHash) {
+      startPage = parseFragment(viewerHash).page;
+    } else {
+      try {
+        const srcParsed = new URL(src);
+        if (srcParsed.hash) {
+          startPage = parseFragment(srcParsed.hash).page;
+        }
+      } catch (e) {}
+    }
   }
 
   loadCbz(src, startPage);

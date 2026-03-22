@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "CBZ Comic Viewer",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "View CBZ comic archives directly in your browser. Supports stored and deflate-compressed pages.",
 
   "permissions": [
     "webRequest",
     "webRequestBlocking",
     "webNavigation",
-    "tabs"
+    "tabs",
+    "nativeMessaging"
   ],
 
   "host_permissions": [
@@ -16,6 +17,16 @@
     "https://*/*",
     "file:///*"
   ],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Open CBZ file",
+    "default_icon": {
+      "16":  "icons/icon16.png",
+      "48":  "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
 
   "web_accessible_resources": [
     {

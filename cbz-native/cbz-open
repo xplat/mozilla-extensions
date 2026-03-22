@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""
+cbz-open — open a local CBZ file in the CBZ Viewer Firefox extension.
+
+Usage:
+    cbz-open <file.cbz> [page]
+
+Drops a small JSON request into ~/.cbz-viewer/queue/. The native messaging
+host (already running inside Firefox) picks it up within ~0.5s and tells the
+extension to open the file.
+
+Firefox must be running with the CBZ Viewer extension installed and active.
+"""
+
+import sys
+import os
+import json
+import time
+import pathlib
+
+QUEUE_DIR = pathlib.Path.home() / '.cbz-viewer' / 'queue'
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ('-h', '--help'):
+        print('Usage: cbz-open <file.cbz> [page]', file=sys.stderr)
+        sys.exit(0 if args else 1)
+
+    path = os.path.realpath(args[0])
+    page = 1
+    if len(args) >= 2:
+        try:
+            page = max(1, int(args[1]))
+        except ValueError:
+            print(f'cbz-open: invalid page number: {args[1]!r}', file=sys.stderr)
+            sys.exit(1)
+
+    if not path.lower().endswith('.cbz'):
+        print(f'cbz-open: not a .cbz file: {path}', file=sys.stderr)
+        sys.exit(1)
+    if not os.path.isfile(path):
+        print(f'cbz-open: file not found: {path}', file=sys.stderr)
+        sys.exit(1)
+
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    req = {'path': path, 'page': page, 'ts': time.time()}
+    # Unique name so concurrent calls don't collide
+    req_file = QUEUE_DIR / f'open_{int(time.time() * 1000)}_{os.getpid()}.json'
+    req_file.write_text(json.dumps(req))
+    print(f'Opening {os.path.basename(path)} (page {page})…')
+
+if __name__ == '__main__':
+    main()

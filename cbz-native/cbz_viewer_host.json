@@ -1,0 +1,7 @@
+{
+  "name": "cbz_viewer_host",
+  "description": "Native messaging host for the CBZ Viewer extension",
+  "path": "REPLACE_WITH_INSTALL_PATH/cbz_native_host.py",
+  "type": "stdio",
+  "allowed_extensions": ["cbz-viewer@extension"]
+}
