@@ -30,7 +30,7 @@
 
   "web_accessible_resources": [
     {
-      "resources": ["viewer.html", "viewer.js", "viewer.css", "bridge.html", "bridge.js"],
+      "resources": ["viewer.html", "viewer.js", "viewer.css", "bridge-worker.js"],
       "matches": ["<all_urls>"]
     }
   ],

@@ -143,74 +143,49 @@ class NativeAccessor {
   }
 }
 
-// ─── BRIDGE IFRAME ───────────────────────────────────────────────────────────
-// The viewer page itself must never call chrome.* APIs directly. Firefox
-// records any moz-extension:// page that uses extension APIs in an
-// ExtensionPageContextChild map, and on extension reload it closes the window
-// associated with each entry — killing the tab. By confining all chrome.*
-// calls to a hidden iframe (bridge.html), only the iframe's window is in that
-// map. When the extension reloads, the iframe is destroyed but the parent tab
-// survives, since its window has no ExtensionPageContextChild.
+// ─── BRIDGE WORKER ───────────────────────────────────────────────────────────
+// The viewer page must never call chrome.* APIs directly. Firefox creates an
+// ExtensionPageContextChild for any window (including iframe windows) that
+// uses extension APIs, and on extension reload it closes the rootWindow of
+// each context — which is the tab's top-level window for any frame within the
+// tab. So iframes don't help; we need a context whose rootWindow is NOT the
+// tab's window.
 //
-// The bridge communicates via postMessage. On disconnect it tells us, we
-// wait for the new background to start, recreate the iframe, and replay
-// any requests that were in flight.
+// A Worker's global scope is a WorkerGlobalScope, not a window. Firefox
+// extension Workers can use chrome.* APIs, and their ExtensionPageContextChild
+// has the worker scope as its root — not the tab window. So the Worker is
+// destroyed on extension reload without closing the tab.
+//
+// The Worker is created lazily (only when NativeAccessor first needs it) so
+// that http/https and blob tabs never create one at all.
 
-const _bgPending = new Map(); // msgId -> { resolve, reject, msg }
+const _bgPending = new Map(); // msgId -> { resolve, reject }
 let   _bgNextId  = 1;
-let   _bridge    = null;   // the iframe element
-let   _bridgeReady = false;
-let   _bridgeQueue = [];   // messages queued while bridge is being recreated
+let   _bgWorker  = null;
+let   _bgQueue   = [];   // messages queued before worker is ready
 
-function _createBridge() {
-  _bridgeReady = false;
-  if (_bridge) _bridge.remove();
-  _bridge = document.createElement('iframe');
-  // Derive the extension base URL from our own page URL (no chrome.* call needed)
-  const _extBase = location.href.replace(/\/[^/]*$/, '/');
-  _bridge.src = _extBase + 'bridge.html';
-  _bridge.style.cssText = 'display:none;position:absolute;width:0;height:0';
-  document.body.appendChild(_bridge);
-}
+function _ensureBridge() {
+  if (_bgWorker) return;
+  // Derive extension base URL from our own moz-extension:// page URL
+  const base = location.pathname.replace(/\/[^/]*$/, '/');
+  const workerUrl = location.origin + base + 'bridge-worker.js';
+  _bgWorker = new Worker(workerUrl);
 
-window.addEventListener('message', e => {
-  if (e.source !== _bridge?.contentWindow) return;
-  const msg = e.data;
-
-  if (msg._bridgeInit) {
-    // Bridge iframe has loaded and is ready to relay
-    _bridgeReady = true;
-    const q = _bridgeQueue.splice(0);
-    for (const m of q) _bridge.contentWindow.postMessage(m, '*');
-    return;
-  }
-
-  if (msg._bridgeDisconnect) {
-    // Background died (extension reloading). Reject everything in flight
-    // except we actually want to *re-queue* them so they replay once the
-    // new bridge is up — that way a reload mid-read recovers automatically.
-    _bridgeReady = false;
-    const inflight = [..._bgPending.entries()];
-    // Reject them immediately — callers (extractEntry etc.) will propagate to
-    // showError. The user sees an error screen, the tab stays open, and they
-    // can reload the file. Full auto-replay would be complex and fragile.
-    for (const [, pending] of inflight) {
-      pending.reject(new Error('Extension reloaded — reload the file to continue'));
+  _bgWorker.onmessage = e => {
+    const msg = e.data;
+    if (msg._bridgeDisconnect) {
+      // Background died. Reject in-flight requests — callers propagate to
+      // showError. Tab stays open; user reloads the file.
+      for (const p of _bgPending.values()) {
+        p.reject(new Error('Extension reloaded — reload the file to continue'));
+      }
+      _bgPending.clear();
+      // Recreate worker after background has restarted
+      _bgWorker.terminate();
+      _bgWorker = null;
+      setTimeout(_ensureBridge, 1000);
+      return;
     }
-    _bgPending.clear();
-
-    // Recreate the bridge after a short delay so the new background is ready
-    setTimeout(() => {
-      _createBridge();
-      _bridgeReady = true;
-      // Flush any messages that arrived while bridge was dead
-      const q = _bridgeQueue.splice(0);
-      for (const m of q) _bridge.contentWindow.postMessage(m, '*');
-    }, 1000);
-    return;
-  }
-
-  if (msg._bridgeReply) {
     const pending = _bgPending.get(msg._id);
     if (!pending) return;
     _bgPending.delete(msg._id);
@@ -219,24 +194,31 @@ window.addEventListener('message', e => {
     } else {
       pending.resolve(msg);
     }
-  }
-});
+  };
+
+  _bgWorker.onerror = e => {
+    // Worker failed to load (e.g. bridge-worker.js missing) — fall through
+    console.error('Bridge worker error:', e.message);
+  };
+
+  // Flush queued messages
+  const q = _bgQueue.splice(0);
+  for (const m of q) _bgWorker.postMessage(m);
+}
 
 function bgMessage(msg) {
+  _ensureBridge();
   return new Promise((resolve, reject) => {
     const id = _bgNextId++;
     const tagged = { ...msg, _id: id };
-    _bgPending.set(id, { resolve, reject, msg: tagged });
-    if (_bridgeReady && _bridge?.contentWindow) {
-      _bridge.contentWindow.postMessage(tagged, '*');
+    _bgPending.set(id, { resolve, reject });
+    if (_bgWorker) {
+      _bgWorker.postMessage(tagged);
     } else {
-      _bridgeQueue.push(tagged);
+      _bgQueue.push(tagged);
     }
   });
 }
-
-// Create the bridge. _bridgeReady is set when bridge.js sends _bridgeInit.
-_createBridge();
 
 // ─── ZIP PARSING (lazy, accessor-based) ──────────────────────────────────────
 //
