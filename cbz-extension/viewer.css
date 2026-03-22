@@ -355,26 +355,7 @@ html, body {
   position: relative;
   background:
     radial-gradient(ellipse at center, #161616 0%, #0d0d0d 100%);
-}
-
-/* Navigation zone cursors: left/right = arrows, middle = zoom toggle.
-   These sit behind the image (z-index:-1) so they don't block image interaction,
-   but cover the whole container so bare-background clicks still work. */
-#page-container::before,
-#page-container::after {
-  content: '';
-  position: absolute;
-  top: 0; bottom: 0;
-  width: 40%;
-  z-index: 0;
-  pointer-events: none; /* JS click handler on container handles it */
-}
-#page-container::before { left:  0;    cursor: w-resize; }
-#page-container::after  { right: 0;    cursor: e-resize; }
-
-/* Middle zone cursor via the container itself (covered by image, but visible
-   in the gap between image edge and container edge) */
-#page-container {
+  /* Default cursor; JS updates it on mousemove based on zone */
   cursor: zoom-in;
 }
 
@@ -386,7 +367,6 @@ html, body {
   position: relative;
   z-index: 1;
   transition: opacity 0.2s ease;
-  /* Slight shadow for page depth */
   box-shadow:
     0 4px 24px rgba(0,0,0,0.7),
     0 0 0 1px rgba(255,255,255,0.04);
@@ -396,9 +376,6 @@ html, body {
   opacity: 0.3;
 }
 
-#page-container.zoom-full {
-  cursor: zoom-out;
-}
 
 .page-spinner {
   position: absolute;

@@ -438,24 +438,23 @@ async function prefetchPage(pageNum) {
   catch (_) { /* silent prefetch failure */ }
 }
 
-// ─── CONFIG BOOTSTRAP ────────────────────────────────────────────────────────
-// The viewer page makes no chrome.* calls (that would create an
+// ─── PROXY URL ───────────────────────────────────────────────────────────────
+// The viewer never calls chrome.* APIs (that would create an
 // ExtensionPageContextChild and cause Firefox to close the tab on extension
-// reload). Instead, it fetches a sentinel URL that the background's webRequest
-// listener intercepts and redirects to a data: URL containing the current
-// server config (port + token).
+// reload). File reads go through a stable proxy URL that the background's
+// webRequest listener rewrites — synchronously, with current port+token —
+// to the real HTTP file server on every request. This means post-update
+// navigation works immediately without a reload.
 
-async function fetchServerConfig() {
-  // Fetches http://127.7.203.66/cbz-config, which the background's webRequest
-  // listener intercepts and redirects to a data: URL containing current
-  // {"port": N, "token": "..."} — no chrome.* calls needed.
-  try {
-    const resp = await fetch('http://127.7.203.66/cbz-config');
-    if (!resp.ok) return null;
-    return await resp.json();   // { port: N, token: "..." }
-  } catch (_) {
-    return null;
-  }
+const PROXY_PREFIX = 'http://127.7.203.66/cbz-file/';
+
+function fileUrlToProxyUrl(fileUrl) {
+  // file:///home/user/My%20Comics/file.cbz
+  // → http://127.7.203.66/cbz-file/home/user/My%20Comics/file.cbz
+  // The pathname is already percent-encoded; strip the leading slash and
+  // append to the proxy prefix (which ends with /).
+  const pathname = new URL(fileUrl).pathname; // e.g. /home/user/...
+  return PROXY_PREFIX + pathname.slice(1);    // strip leading /
 }
 
 // ─── ACCESSOR FACTORY ────────────────────────────────────────────────────────
@@ -510,15 +509,8 @@ async function loadCbz(url, startPage) {
     // Convert to an HTTP server URL using the server base from ?server= param
     // or by fetching fresh config from the background's sentinel intercept.
     if (url.startsWith('file://')) {
-      setStatus('Getting server config…');
-      const cfg = await fetchServerConfig();
-      if (!cfg || !cfg.port || !cfg.token) throw new Error(
-        'Native file server not available. Is the native host installed and running?'
-      );
-      const server = 'http://127.7.203.66:' + cfg.port + '/' + cfg.token;
-      // Convert file:///path to http://127.7.203.66:PORT/TOKEN/path
-      // The pathname is already percent-encoded from the file:// URL.
-      fetchUrl = server + new URL(url).pathname;
+      // Convert to proxy URL — background rewrites to real server on each request
+      fetchUrl = fileUrlToProxyUrl(url);
     }
 
     const accessor = await createAccessor(fetchUrl);
@@ -608,22 +600,35 @@ function setZoom(mode) {
     container.style.alignItems     = '';
     container.style.justifyContent = '';
   }
-  $('page-container').classList.toggle('zoom-full', mode === 'full');
+
 }
+
+function getContainerZone(clientX) {
+  const rect = $('page-container').getBoundingClientRect();
+  const x = clientX - rect.left;
+  if (x < rect.width * 0.4) return 'prev';
+  if (x > rect.width * 0.6) return 'next';
+  return 'zoom';
+}
+
+$('page-container').addEventListener('mousemove', e => {
+  const zone = getContainerZone(e.clientX);
+  const cursors = {
+    prev: 'w-resize',
+    next: 'e-resize',
+    zoom: zoomMode === 'fit' ? 'zoom-in' : 'zoom-out',
+  };
+  $('page-container').style.cursor = cursors[zone];
+});
 
 $('page-container').addEventListener('click', e => {
   // Ignore clicks on the topbar or spinner
   if (e.target.closest('#topbar') || e.target.closest('.page-spinner')) return;
 
-  const rect = $('page-container').getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const w    = rect.width;
-  const left = w * 0.4;
-  const right = w * 0.6;
-
-  if (x < left) {
+  const zone = getContainerZone(e.clientX);
+  if (zone === 'prev') {
     goToPage(state.currentPage - 1);
-  } else if (x > right) {
+  } else if (zone === 'next') {
     goToPage(state.currentPage + 1);
   } else {
     setZoom(zoomMode === 'fit' ? 'full' : 'fit');

@@ -17,19 +17,19 @@ const AMBIGUOUS_MIME_TYPES = new Set([
 const VIEWER_HTML = chrome.runtime.getURL('viewer.html');
 const HOST_NAME   = 'cbz_viewer_host';
 
-// Fixed loopback address for the file server and config sentinel.
-// 127.7.203.66 — all of 127.0.0.0/8 is loopback on Linux/macOS, this
-// specific address is unlikely to conflict with anything real.
+// Fixed loopback address. All of 127.0.0.0/8 is loopback on Linux/macOS;
+// this specific address is unlikely to conflict with anything real, and
+// file paths won't leak off the machine if redirect handling has a bug.
 const LOOPBACK = '127.7.203.66';
 
-// Current server coordinates from the native host. Null until host starts.
+// Proxy URL prefix that the viewer uses for all file reads.
+// The background rewrites these to the real server URL on every request,
+// so port/token changes (after extension update/restart) take effect
+// immediately without any reload.
+const PROXY_PREFIX = 'http://' + LOOPBACK + '/cbz-file/';
+
 var serverPort  = null;
 var serverToken = null;
-
-function serverBase() {
-  if (!serverPort || !serverToken) return null;
-  return 'http://' + LOOPBACK + ':' + serverPort + '/' + serverToken;
-}
 
 function buildViewerUrl(src, name, page) {
   var url = VIEWER_HTML + '?src=' + encodeURIComponent(src);
@@ -52,23 +52,28 @@ function isAlreadyViewer(url) {
   return url.startsWith(VIEWER_HTML) || url.startsWith(chrome.runtime.getURL(''));
 }
 
-// ── Config sentinel intercept ─────────────────────────────────────────────────
-// The viewer fetches http://LOOPBACK/cbz-config (no port — port 80, which we
-// never actually bind) just to trigger this interception. We redirect to a
-// data: URL containing the current port and token. This lets the viewer get
-// fresh server coordinates on every load without any chrome.* calls, so no
-// ExtensionPageContextChild is created and Firefox won't close the tab on
-// extension reload.
-
-var SENTINEL_URL = 'http://' + LOOPBACK + '/cbz-config';
+// ── Per-request proxy redirect ────────────────────────────────────────────────
+// The viewer fetches http://127.7.203.66/cbz-file/<encoded-path> for every
+// read (Range or full). We intercept and rewrite to the real server URL using
+// the current port and token. This is fully synchronous — no async work needed
+// since port/token are already in memory. This means:
+//   - No chrome.* calls in the viewer (no ExtensionPageContextChild)
+//   - Post-update navigation works immediately (new port/token used at once)
+//   - No separate config-fetch roundtrip on load
 
 chrome.webRequest.onBeforeRequest.addListener(
   function(details) {
-    var cfg  = JSON.stringify({ port: serverPort, token: serverToken });
-    var data = 'data:application/json,' + encodeURIComponent(cfg);
-    return { redirectUrl: data };
+    if (!serverPort || !serverToken) {
+      // Native host not connected yet — let the request fail naturally
+      return {};
+    }
+    // Rewrite: strip PROXY_PREFIX, prepend real server base
+    var encodedPath = details.url.slice(PROXY_PREFIX.length);
+    var realUrl = 'http://' + LOOPBACK + ':' + serverPort +
+                  '/' + serverToken + '/' + encodedPath;
+    return { redirectUrl: realUrl };
   },
-  { urls: [SENTINEL_URL], types: ['xmlhttprequest', 'other'] },
+  { urls: [PROXY_PREFIX + '*'], types: ['xmlhttprequest', 'other'] },
   ['blocking']
 );
 
@@ -151,10 +156,13 @@ function connectNative() {
 }
 
 function handleNativeOpen(msg) {
-  // src= is the file:// URL — clean, stable across extension reloads, no
-  // server coordinates baked in. The viewer fetches cbz-config on load to
-  // get the current port+token and derives the HTTP fetch URL from there.
-  var fileUrl = 'file://' + msg.path.split('/').map(encodeURIComponent).join('/');
+  // src= is the proxy URL — stable, no port/token, works across restarts.
+  // Encode each path segment so spaces/brackets etc. are valid in the URL.
+  var encodedPath = msg.path.split('/').map(encodeURIComponent).join('/');
+  var proxyUrl = PROXY_PREFIX + encodedPath;
+  // Store file:// URL as src so the tab URL is familiar and session-restore
+  // friendly. The viewer maps it to a proxy URL for fetching.
+  var fileUrl = 'file://' + encodedPath;
   chrome.tabs.create({ url: buildViewerUrl(fileUrl, msg.name, msg.page || 1) });
 }
 

@@ -78,7 +78,13 @@ class CBZHandler(BaseHTTPRequestHandler):
         self.send_cors()
         self.end_headers()
 
+    def do_HEAD(self):
+        self._serve(head_only=True)
+
     def do_GET(self):
+        self._serve(head_only=False)
+
+    def _serve(self, head_only):
         # Path: /TOKEN/url-encoded-absolute-file-path
         parts = self.path.split('/', 2)   # ['', TOKEN, encoded-path]
         if len(parts) < 3 or parts[1] != TOKEN:
@@ -116,13 +122,15 @@ class CBZHandler(BaseHTTPRequestHandler):
                 return
 
         length = end - start + 1
-        try:
-            with open(file_path, 'rb') as f:
-                f.seek(start)
-                data = f.read(length)
-        except OSError as exc:
-            self._error(500, str(exc))
-            return
+        data = b''
+        if not head_only:
+            try:
+                with open(file_path, 'rb') as f:
+                    f.seek(start)
+                    data = f.read(length)
+            except OSError as exc:
+                self._error(500, str(exc))
+                return
 
         self.send_response(206 if partial else 200)
         self.send_cors()
@@ -132,7 +140,8 @@ class CBZHandler(BaseHTTPRequestHandler):
         if partial:
             self.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
         self.end_headers()
-        self.wfile.write(data)
+        if not head_only:
+            self.wfile.write(data)
 
     def _error(self, code, msg):
         body = msg.encode()
