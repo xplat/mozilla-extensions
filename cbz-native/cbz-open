@@ -35,7 +35,7 @@ def main():
             print(f'cbz-open: invalid page number: {args[1]!r}', file=sys.stderr)
             sys.exit(1)
 
-    if not path.lower().endswith('.cbz'):
+    if not path.lower().endswith('.cbz') and not path.lower().endswith('.zip'):
         print(f'cbz-open: not a .cbz file: {path}', file=sys.stderr)
         sys.exit(1)
     if not os.path.isfile(path):

@@ -100,7 +100,7 @@ class CBZHandler(BaseHTTPRequestHandler):
         if not os.path.isabs(file_path):
             file_path = '/' + file_path
         file_path = os.path.normpath(file_path)
-        if not file_path.lower().endswith('.cbz'):
+        if not file_path.lower().endswith('.cbz') and not file_path.lower().endswith('.zip'):
             self._error(400, 'Not a .cbz file')
             return
         if not os.path.isfile(file_path):
@@ -183,7 +183,7 @@ def main():
         for req in check_queue():
             path = req.get('path', '')
             page = int(req.get('page', 1))
-            if os.path.isfile(path) and path.lower().endswith('.cbz'):
+            if os.path.isfile(path) and (path.lower().endswith('.cbz') or path.lower().endswith('.zip')):
                 send_message({
                     "event": "open",
                     "path":  path,
