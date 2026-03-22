@@ -353,19 +353,29 @@ html, body {
   justify-content: center;
   overflow: hidden;
   position: relative;
-  cursor: pointer;
   background:
     radial-gradient(ellipse at center, #161616 0%, #0d0d0d 100%);
 }
 
-/* Subtle corner vignette */
-#page-container::before {
+/* Navigation zone cursors: left/right = arrows, middle = zoom toggle.
+   These sit behind the image (z-index:-1) so they don't block image interaction,
+   but cover the whole container so bare-background clicks still work. */
+#page-container::before,
+#page-container::after {
   content: '';
   position: absolute;
-  inset: 0;
-  background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.5) 100%);
-  pointer-events: none;
-  z-index: 1;
+  top: 0; bottom: 0;
+  width: 40%;
+  z-index: 0;
+  pointer-events: none; /* JS click handler on container handles it */
+}
+#page-container::before { left:  0;    cursor: w-resize; }
+#page-container::after  { right: 0;    cursor: e-resize; }
+
+/* Middle zone cursor via the container itself (covered by image, but visible
+   in the gap between image edge and container edge) */
+#page-container {
+  cursor: zoom-in;
 }
 
 #comic-image {
@@ -374,7 +384,7 @@ html, body {
   object-fit: contain;
   display: block;
   position: relative;
-  z-index: 0;
+  z-index: 1;
   transition: opacity 0.2s ease;
   /* Slight shadow for page depth */
   box-shadow:
@@ -384,6 +394,10 @@ html, body {
 
 #comic-image.loading {
   opacity: 0.3;
+}
+
+#page-container.zoom-full {
+  cursor: zoom-out;
 }
 
 .page-spinner {

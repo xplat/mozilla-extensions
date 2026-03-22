@@ -9,13 +9,16 @@
     "webRequestBlocking",
     "webNavigation",
     "tabs",
-    "nativeMessaging"
+    "nativeMessaging",
+    "storage",
+    "storage"
   ],
 
   "host_permissions": [
     "http://*/*",
     "https://*/*",
-    "file:///*"
+    "file:///*",
+    "http://127.7.203.66/*"
   ],
 
   "action": {
@@ -30,7 +33,7 @@
 
   "web_accessible_resources": [
     {
-      "resources": ["viewer.html", "viewer.js", "viewer.css", "bridge-worker.js"],
+      "resources": ["viewer.html", "viewer.js", "viewer.css"],
       "matches": ["<all_urls>"]
     }
   ],

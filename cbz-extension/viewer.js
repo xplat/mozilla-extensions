@@ -100,125 +100,7 @@ class HttpAccessor {
   }
 }
 
-// ── NativeAccessor ───────────────────────────────────────────────────────────
-// Used for file:// URLs. Extension pages can't fetch() file:// URLs in Firefox,
-// so reads are relayed through the background script to the native messaging
-// host. The host caps reads at 512 KB; larger reads are split here.
 
-class NativeAccessor {
-  constructor(path, size) {
-    this._path = path;
-    this.size  = size;
-  }
-
-  static async create(path) {
-    const resp = await bgMessage({ type: 'nativeStat', path });
-    if (!resp.ok) throw new Error(resp.error || 'Could not stat file');
-    return new NativeAccessor(path, resp.size);
-  }
-
-  async read(offset, length) {
-    // 512 KB raw → ~683 KB base64 → safely under the 1 MB native message limit
-    // even accounting for JSON framing overhead.
-    const CHUNK = 512 * 1024;
-    if (length <= CHUNK) return this._chunk(offset, length);
-    const out = new Uint8Array(length);
-    let pos = 0;
-    while (pos < length) {
-      const n = Math.min(CHUNK, length - pos);
-      const part = await this._chunk(offset + pos, n);
-      out.set(part, pos);
-      pos += part.length;
-    }
-    return out;
-  }
-
-  async _chunk(offset, length) {
-    const resp = await bgMessage({ type: 'nativeRead', path: this._path, offset, length });
-    if (!resp.ok) throw new Error(resp.error || 'Chunk read failed');
-    const binary = atob(resp.data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-  }
-}
-
-// ─── BRIDGE WORKER ───────────────────────────────────────────────────────────
-// The viewer page must never call chrome.* APIs directly. Firefox creates an
-// ExtensionPageContextChild for any window (including iframe windows) that
-// uses extension APIs, and on extension reload it closes the rootWindow of
-// each context — which is the tab's top-level window for any frame within the
-// tab. So iframes don't help; we need a context whose rootWindow is NOT the
-// tab's window.
-//
-// A Worker's global scope is a WorkerGlobalScope, not a window. Firefox
-// extension Workers can use chrome.* APIs, and their ExtensionPageContextChild
-// has the worker scope as its root — not the tab window. So the Worker is
-// destroyed on extension reload without closing the tab.
-//
-// The Worker is created lazily (only when NativeAccessor first needs it) so
-// that http/https and blob tabs never create one at all.
-
-const _bgPending = new Map(); // msgId -> { resolve, reject }
-let   _bgNextId  = 1;
-let   _bgWorker  = null;
-let   _bgQueue   = [];   // messages queued before worker is ready
-
-function _ensureBridge() {
-  if (_bgWorker) return;
-  // Derive extension base URL from our own moz-extension:// page URL
-  const base = location.pathname.replace(/\/[^/]*$/, '/');
-  const workerUrl = location.origin + base + 'bridge-worker.js';
-  _bgWorker = new Worker(workerUrl);
-
-  _bgWorker.onmessage = e => {
-    const msg = e.data;
-    if (msg._bridgeDisconnect) {
-      // Background died. Reject in-flight requests — callers propagate to
-      // showError. Tab stays open; user reloads the file.
-      for (const p of _bgPending.values()) {
-        p.reject(new Error('Extension reloaded — reload the file to continue'));
-      }
-      _bgPending.clear();
-      // Recreate worker after background has restarted
-      _bgWorker.terminate();
-      _bgWorker = null;
-      setTimeout(_ensureBridge, 1000);
-      return;
-    }
-    const pending = _bgPending.get(msg._id);
-    if (!pending) return;
-    _bgPending.delete(msg._id);
-    if (msg.error) {
-      pending.reject(new Error(msg.error));
-    } else {
-      pending.resolve(msg);
-    }
-  };
-
-  _bgWorker.onerror = e => {
-    // Worker failed to load (e.g. bridge-worker.js missing) — fall through
-    console.error('Bridge worker error:', e.message);
-  };
-
-  // Flush queued messages
-  const q = _bgQueue.splice(0);
-  for (const m of q) _bgWorker.postMessage(m);
-}
-
-function bgMessage(msg) {
-  _ensureBridge();
-  return new Promise((resolve, reject) => {
-    const id = _bgNextId++;
-    const tagged = { ...msg, _id: id };
-    _bgPending.set(id, { resolve, reject });
-    if (_bgWorker) {
-      _bgWorker.postMessage(tagged);
-    } else {
-      _bgQueue.push(tagged);
-    }
-  });
-}
 
 // ─── ZIP PARSING (lazy, accessor-based) ──────────────────────────────────────
 //
@@ -431,8 +313,6 @@ let state = {
   srcUrl: '',
   blobUrls: {},         // decoded image cache: pageNum -> blob: URL
   extracting: {},       // in-flight extraction promises: pageNum -> Promise<string>
-                        // Deduplicates concurrent requests for the same page so
-                        // prefetch and displayPage never both extract the same entry.
 };
 
 // ─── UI HELPERS ──────────────────────────────────────────────────────────────
@@ -525,7 +405,7 @@ async function displayPage(pageNum) {
 
     updatePageUI();
 
-    // Store current page in ?page= so session restore and reloads preserve it.
+    // Store current page in ?page= so session restore preserves it.
     const u = new URL(window.location.href);
     u.searchParams.set('page', pageNum);
     history.replaceState(null, '', u.toString());
@@ -558,16 +438,29 @@ async function prefetchPage(pageNum) {
   catch (_) { /* silent prefetch failure */ }
 }
 
+// ─── CONFIG BOOTSTRAP ────────────────────────────────────────────────────────
+// The viewer page makes no chrome.* calls (that would create an
+// ExtensionPageContextChild and cause Firefox to close the tab on extension
+// reload). Instead, it fetches a sentinel URL that the background's webRequest
+// listener intercepts and redirects to a data: URL containing the current
+// server config (port + token).
+
+async function fetchServerConfig() {
+  // Fetches http://127.7.203.66/cbz-config, which the background's webRequest
+  // listener intercepts and redirects to a data: URL containing current
+  // {"port": N, "token": "..."} — no chrome.* calls needed.
+  try {
+    const resp = await fetch('http://127.7.203.66/cbz-config');
+    if (!resp.ok) return null;
+    return await resp.json();   // { port: N, token: "..." }
+  } catch (_) {
+    return null;
+  }
+}
+
 // ─── ACCESSOR FACTORY ────────────────────────────────────────────────────────
 
 async function createAccessor(url) {
-  if (url.startsWith('file://')) {
-    // Extension pages cannot fetch() file:// URLs in Firefox.
-    // Extract the filesystem path from the URL and use NativeAccessor.
-    const path = decodeURIComponent(new URL(url).pathname);
-    return NativeAccessor.create(path);
-  }
-
   if (url.startsWith('blob:')) {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error('Could not read blob URL');
@@ -611,9 +504,26 @@ async function loadWithAccessor(accessor, startPage) {
 async function loadCbz(url, startPage) {
   showLoading('Opening…');
   try {
-    const accessor = await createAccessor(url);
+    let fetchUrl = url;
 
-    // Set title from URL path if not already set from a name param
+    // file:// URLs can't be fetched directly from extension pages in Firefox.
+    // Convert to an HTTP server URL using the server base from ?server= param
+    // or by fetching fresh config from the background's sentinel intercept.
+    if (url.startsWith('file://')) {
+      setStatus('Getting server config…');
+      const cfg = await fetchServerConfig();
+      if (!cfg || !cfg.port || !cfg.token) throw new Error(
+        'Native file server not available. Is the native host installed and running?'
+      );
+      const server = 'http://127.7.203.66:' + cfg.port + '/' + cfg.token;
+      // Convert file:///path to http://127.7.203.66:PORT/TOKEN/path
+      // The pathname is already percent-encoded from the file:// URL.
+      fetchUrl = server + new URL(url).pathname;
+    }
+
+    const accessor = await createAccessor(fetchUrl);
+
+    // Set title from file path if not already set from a name param
     if ($('comic-title').textContent === 'Comic') {
       try {
         const name = decodeURIComponent(new URL(url).pathname.split('/').pop());
@@ -680,15 +590,25 @@ function setZoom(mode) {
     img.style.maxWidth  = 'none';
     img.style.maxHeight = 'none';
     container.style.overflow = 'auto';
-    container.style.alignItems = 'flex-start';
-    container.style.justifyContent = 'flex-start';
+    // Only anchor to top-left if the image is actually larger than the container.
+    // If it fits, keep it centered so small images don't jump to a corner.
+    const fitsW = img.naturalWidth  <= container.clientWidth;
+    const fitsH = img.naturalHeight <= container.clientHeight;
+    if (fitsW && fitsH) {
+      container.style.alignItems     = 'center';
+      container.style.justifyContent = 'center';
+    } else {
+      container.style.alignItems     = 'flex-start';
+      container.style.justifyContent = 'flex-start';
+    }
   } else {
     img.style.maxWidth  = '';
     img.style.maxHeight = '';
-    container.style.overflow = 'hidden';
-    container.style.alignItems = '';
+    container.style.overflow       = 'hidden';
+    container.style.alignItems     = '';
     container.style.justifyContent = '';
   }
+  $('page-container').classList.toggle('zoom-full', mode === 'full');
 }
 
 $('page-container').addEventListener('click', e => {
@@ -697,11 +617,13 @@ $('page-container').addEventListener('click', e => {
 
   const rect = $('page-container').getBoundingClientRect();
   const x = e.clientX - rect.left;
-  const third = rect.width / 3;
+  const w    = rect.width;
+  const left = w * 0.4;
+  const right = w * 0.6;
 
-  if (x < third) {
+  if (x < left) {
     goToPage(state.currentPage - 1);
-  } else if (x > third * 2) {
+  } else if (x > right) {
     goToPage(state.currentPage + 1);
   } else {
     setZoom(zoomMode === 'fit' ? 'full' : 'fit');

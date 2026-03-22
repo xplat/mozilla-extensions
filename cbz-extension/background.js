@@ -1,6 +1,4 @@
-// background.js — background script
-// Works as MV3 service worker in Chrome; MV3 background script in Firefox.
-
+// background.js — background script (MV3, Firefox + Chrome)
 'use strict';
 
 const CBZ_MIME_TYPES = new Set([
@@ -8,7 +6,6 @@ const CBZ_MIME_TYPES = new Set([
   'application/x-cbz',
   'application/cbz',
 ]);
-
 const AMBIGUOUS_MIME_TYPES = new Set([
   'application/zip',
   'application/x-zip-compressed',
@@ -19,6 +16,20 @@ const AMBIGUOUS_MIME_TYPES = new Set([
 
 const VIEWER_HTML = chrome.runtime.getURL('viewer.html');
 const HOST_NAME   = 'cbz_viewer_host';
+
+// Fixed loopback address for the file server and config sentinel.
+// 127.7.203.66 — all of 127.0.0.0/8 is loopback on Linux/macOS, this
+// specific address is unlikely to conflict with anything real.
+const LOOPBACK = '127.7.203.66';
+
+// Current server coordinates from the native host. Null until host starts.
+var serverPort  = null;
+var serverToken = null;
+
+function serverBase() {
+  if (!serverPort || !serverToken) return null;
+  return 'http://' + LOOPBACK + ':' + serverPort + '/' + serverToken;
+}
 
 function buildViewerUrl(src, name, page) {
   var url = VIEWER_HTML + '?src=' + encodeURIComponent(src);
@@ -41,9 +52,27 @@ function isAlreadyViewer(url) {
   return url.startsWith(VIEWER_HTML) || url.startsWith(chrome.runtime.getURL(''));
 }
 
-// ── webRequest interception (http/https) ──────────────────────────────────────
-// file:// is not interceptable via webRequest in Firefox, so local files are
-// opened directly as viewer tabs with src=file://... by handleNativeOpen.
+// ── Config sentinel intercept ─────────────────────────────────────────────────
+// The viewer fetches http://LOOPBACK/cbz-config (no port — port 80, which we
+// never actually bind) just to trigger this interception. We redirect to a
+// data: URL containing the current port and token. This lets the viewer get
+// fresh server coordinates on every load without any chrome.* calls, so no
+// ExtensionPageContextChild is created and Firefox won't close the tab on
+// extension reload.
+
+var SENTINEL_URL = 'http://' + LOOPBACK + '/cbz-config';
+
+chrome.webRequest.onBeforeRequest.addListener(
+  function(details) {
+    var cfg  = JSON.stringify({ port: serverPort, token: serverToken });
+    var data = 'data:application/json,' + encodeURIComponent(cfg);
+    return { redirectUrl: data };
+  },
+  { urls: [SENTINEL_URL], types: ['xmlhttprequest', 'other'] },
+  ['blocking']
+);
+
+// ── HTTP/HTTPS CBZ interception ───────────────────────────────────────────────
 
 chrome.webRequest.onHeadersReceived.addListener(
   function(details) {
@@ -75,12 +104,11 @@ chrome.webRequest.onHeadersReceived.addListener(
 
 // ── Native messaging ──────────────────────────────────────────────────────────
 
-var nativePort = null;
+var nativePort   = null;
 var pendingQueue = [];
 
 function connectNative() {
   if (nativePort) return;
-
   try {
     nativePort = chrome.runtime.connectNative(HOST_NAME);
   } catch (e) {
@@ -89,15 +117,18 @@ function connectNative() {
   }
 
   nativePort.onMessage.addListener(function(msg) {
+    if (msg.event === 'server') {
+      serverPort  = msg.port;
+      serverToken = msg.token;
+      return;
+    }
     if (msg.event === 'open') {
       handleNativeOpen(msg);
       return;
     }
-
     var pending = pendingQueue.shift();
     if (!pending) return;
     clearTimeout(pending.timeoutId);
-
     if (msg.status === 'error') {
       pending.reject(new Error(msg.message || 'Native host error'));
     } else {
@@ -106,8 +137,10 @@ function connectNative() {
   });
 
   nativePort.onDisconnect.addListener(function() {
-    nativePort = null;
-    var queue = pendingQueue;
+    nativePort  = null;
+    serverPort  = null;
+    serverToken = null;
+    var queue   = pendingQueue;
     pendingQueue = [];
     for (var i = 0; i < queue.length; i++) {
       clearTimeout(queue[i].timeoutId);
@@ -117,74 +150,12 @@ function connectNative() {
   });
 }
 
-function sendNative(msg) {
-  return new Promise(function(resolve, reject) {
-    if (!nativePort) {
-      reject(new Error('Native host not connected'));
-      return;
-    }
-    var timeoutId = setTimeout(function() {
-      var idx = pendingQueue.findIndex(function(p) { return p.timeoutId === timeoutId; });
-      if (idx !== -1) {
-        pendingQueue.splice(idx, 1);
-        reject(new Error('Native host timeout'));
-      }
-    }, 30000);
-    pendingQueue.push({ resolve: resolve, reject: reject, timeoutId: timeoutId });
-    nativePort.postMessage(msg);
-  });
-}
-
 function handleNativeOpen(msg) {
-  // Build a proper file:// URL from the path. Using the URL constructor
-  // ensures special characters in the path are percent-encoded correctly.
-  // We pass this as src= in the viewer URL. Tabs with src=file://... survive
-  // extension reloads; tabs with src=cbz-native://... do not.
-  // Page position is stored in the URL fragment by the viewer via
-  // history.replaceState, so session restore preserves it automatically.
-  // Construct a valid file:// URL by encoding each path segment individually.
-  // msg.path is a raw filesystem path (e.g. "/home/user/My Comics/[Vol].cbz")
-  // which may contain spaces, brackets, and other characters that are valid in
-  // filenames but must be percent-encoded in URLs. We split on '/', encode each
-  // segment with encodeURIComponent, then rejoin — this encodes everything that
-  // needs encoding without double-encoding the '/' separators.
+  // src= is the file:// URL — clean, stable across extension reloads, no
+  // server coordinates baked in. The viewer fetches cbz-config on load to
+  // get the current port+token and derives the HTTP fetch URL from there.
   var fileUrl = 'file://' + msg.path.split('/').map(encodeURIComponent).join('/');
-  var page = msg.page || 1;
-  chrome.tabs.create({ url: buildViewerUrl(fileUrl, msg.name, page) });
+  chrome.tabs.create({ url: buildViewerUrl(fileUrl, msg.name, msg.page || 1) });
 }
-
-// ── Port-based message handler ───────────────────────────────────────────────
-// Viewer pages connect via chrome.runtime.connect (long-lived port) so that
-// if the background dies the port.onDisconnect fires on the viewer side,
-// allowing it to reject pending promises and settle into an error state rather
-// than hanging as "loading" (which causes Firefox to close the tab on reload).
-
-chrome.runtime.onConnect.addListener(function(port) {
-  if (port.name !== 'viewer') return;
-
-  port.onMessage.addListener(function(request) {
-    var id = request._id;
-
-    function reply(msg) {
-      // Port may have disconnected by the time we reply; guard against that.
-      try { port.postMessage(Object.assign({ _id: id }, msg)); } catch (_) {}
-    }
-
-    if (request.type === 'nativeStat') {
-      sendNative({ cmd: 'stat', path: request.path })
-        .then(function(r) { reply({ ok: true, size: r.size, name: r.name }); })
-        .catch(function(e) { reply({ error: e.message }); });
-      return;
-    }
-
-    if (request.type === 'nativeRead') {
-      sendNative({ cmd: 'read', path: request.path,
-                   offset: request.offset, length: request.length })
-        .then(function(r) { reply({ ok: true, data: r.data, length: r.length }); })
-        .catch(function(e) { reply({ error: e.message }); });
-      return;
-    }
-  });
-});
 
 connectNative();
