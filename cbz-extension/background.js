@@ -19,6 +19,7 @@ const AMBIGUOUS_MIME_TYPES = new Set([
 
 const VIEWER_HTML = chrome.runtime.getURL('viewer.html');
 const HOST_NAME   = 'cbz_viewer_host';
+console.log('[cbz-bg] background started, VIEWER_HTML =', VIEWER_HTML);
 
 function buildViewerUrl(src, name, page) {
   let url = VIEWER_HTML + '?src=' + encodeURIComponent(src);
@@ -46,9 +47,11 @@ function isAlreadyViewer(url) {
 chrome.webRequest.onHeadersReceived.addListener(
   function(details) {
     if (details.type !== 'main_frame') return {};
-    if (isAlreadyViewer(details.url)) return {};
+    console.log('[cbz-bg] webRequest:', details.url.slice(0, 120));
+    if (isAlreadyViewer(details.url)) { console.log('[cbz-bg] -> already viewer, skip'); return {}; }
 
     if (isCbzByUrl(details.url)) {
+      console.log('[cbz-bg] -> redirecting (url match)');
       return { redirectUrl: buildViewerUrl(details.url, null, null) };
     }
 
@@ -63,6 +66,7 @@ chrome.webRequest.onHeadersReceived.addListener(
 
     if (CBZ_MIME_TYPES.has(contentType) ||
         (AMBIGUOUS_MIME_TYPES.has(contentType) && isCbzByUrl(details.url))) {
+      console.log('[cbz-bg] -> redirecting (mime match:', contentType, ')');
       return { redirectUrl: buildViewerUrl(details.url, null, null) };
     }
 
@@ -153,6 +157,7 @@ function handleNativeOpen(msg) {
 // ── Message handler ───────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+  console.log('[cbz-bg] onMessage:', request.type, 'nativePort:', !!nativePort);
 
   // Viewer requests a stat or read from the native host
   if (request.type === 'nativeStat') {

@@ -145,10 +145,13 @@ class NativeAccessor {
 
 function bgMessage(msg) {
   return new Promise((resolve, reject) => {
+    console.log('[cbz-viewer] bgMessage ->', msg.type);
     chrome.runtime.sendMessage(msg, response => {
       if (chrome.runtime.lastError) {
+        console.log('[cbz-viewer] bgMessage error:', chrome.runtime.lastError.message);
         reject(new Error(chrome.runtime.lastError.message));
       } else {
+        console.log('[cbz-viewer] bgMessage response ok:', response && response.ok);
         resolve(response);
       }
     });
@@ -496,6 +499,7 @@ async function prefetchPage(pageNum) {
 // ─── ACCESSOR FACTORY ────────────────────────────────────────────────────────
 
 async function createAccessor(url) {
+  console.log('[cbz-viewer] createAccessor:', url.slice(0, 80));
   if (url.startsWith('cbz-native://')) {
     const path = decodeURIComponent(url.slice('cbz-native://'.length));
     return NativeAccessor.create(path);
@@ -667,5 +671,6 @@ function wireFilePicker(btnId, inputId) {
     }
   }
 
+  console.log('[cbz-viewer] init: src =', src.slice(0, 80), 'page =', startPage);
   loadCbz(src, startPage);
 })();
