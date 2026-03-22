@@ -10,7 +10,6 @@
     "webNavigation",
     "tabs",
     "nativeMessaging",
-    "storage",
     "storage"
   ],
 
@@ -54,7 +53,7 @@
 
   "browser_specific_settings": {
     "gecko": {
-      "id": "cbz-viewer@extension",
+      "id": "cbz-viewer@xplat.github.io",
       "strict_min_version": "109.0"
     }
   },

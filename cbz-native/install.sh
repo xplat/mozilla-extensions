@@ -62,7 +62,7 @@ cat > "$MANIFEST_PATH" << JSON
   "description": "Native messaging host for the CBZ Viewer extension",
   "path": "$INSTALL_DIR/cbz_native_host.py",
   "type": "stdio",
-  "allowed_extensions": ["cbz-viewer@extension"]
+  "allowed_extensions": ["cbz-viewer@xplat.github.io"]
 }
 JSON
 
