@@ -19,10 +19,9 @@ const AMBIGUOUS_MIME_TYPES = new Set([
 
 const VIEWER_HTML = chrome.runtime.getURL('viewer.html');
 const HOST_NAME   = 'cbz_viewer_host';
-console.log('[cbz-bg] background started, VIEWER_HTML =', VIEWER_HTML);
 
 function buildViewerUrl(src, name, page) {
-  let url = VIEWER_HTML + '?src=' + encodeURIComponent(src);
+  var url = VIEWER_HTML + '?src=' + encodeURIComponent(src);
   if (name) url += '&name=' + encodeURIComponent(name);
   if (page && page > 1) url += '&page=' + page;
   return url;
@@ -30,9 +29,9 @@ function buildViewerUrl(src, name, page) {
 
 function isCbzByUrl(url) {
   try {
-    const u = new URL(url);
+    var u = new URL(url);
     if (u.pathname.toLowerCase().endsWith('.cbz')) return true;
-    const frag = u.hash;
+    var frag = u.hash;
     if (frag === '#cbz' || frag.startsWith('#cbz&') || frag.startsWith('#cbz=')) return true;
   } catch (e) {}
   return false;
@@ -42,16 +41,16 @@ function isAlreadyViewer(url) {
   return url.startsWith(VIEWER_HTML) || url.startsWith(chrome.runtime.getURL(''));
 }
 
-// ── webRequest interception (http/https/file) ─────────────────────────────────
+// ── webRequest interception (http/https) ──────────────────────────────────────
+// file:// is not interceptable via webRequest in Firefox, so local files are
+// opened directly as viewer tabs with src=file://... by handleNativeOpen.
 
 chrome.webRequest.onHeadersReceived.addListener(
   function(details) {
     if (details.type !== 'main_frame') return {};
-    console.log('[cbz-bg] webRequest:', details.url.slice(0, 120));
-    if (isAlreadyViewer(details.url)) { console.log('[cbz-bg] -> already viewer, skip'); return {}; }
+    if (isAlreadyViewer(details.url)) return {};
 
     if (isCbzByUrl(details.url)) {
-      console.log('[cbz-bg] -> redirecting (url match)');
       return { redirectUrl: buildViewerUrl(details.url, null, null) };
     }
 
@@ -63,30 +62,21 @@ chrome.webRequest.onHeadersReceived.addListener(
         break;
       }
     }
-
     if (CBZ_MIME_TYPES.has(contentType) ||
         (AMBIGUOUS_MIME_TYPES.has(contentType) && isCbzByUrl(details.url))) {
-      console.log('[cbz-bg] -> redirecting (mime match:', contentType, ')');
       return { redirectUrl: buildViewerUrl(details.url, null, null) };
     }
 
     return {};
   },
-  { urls: ['http://*/*', 'https://*/*', 'file:///*'], types: ['main_frame'] },
+  { urls: ['http://*/*', 'https://*/*'], types: ['main_frame'] },
   ['blocking', 'responseHeaders']
 );
 
 // ── Native messaging ──────────────────────────────────────────────────────────
 
 var nativePort = null;
-
-// Pending requests: id -> { resolve, reject, timeoutId }
-// The id is assigned HERE and kept only in this map; it is NOT sent to the
-// native host (which would have to echo it back). Instead we use the fact
-// that native messaging is strictly sequential on a single port — each
-// postMessage gets exactly one response before the next is sent.
-// We therefore use a simple FIFO queue rather than IDs.
-var pendingQueue = [];   // [ { resolve, reject, timeoutId }, ... ]
+var pendingQueue = [];
 
 function connectNative() {
   if (nativePort) return;
@@ -104,10 +94,8 @@ function connectNative() {
       return;
     }
 
-    // Every other message is a response to the oldest pending request.
     var pending = pendingQueue.shift();
-    if (!pending) return; // spurious message, ignore
-
+    if (!pending) return;
     clearTimeout(pending.timeoutId);
 
     if (msg.status === 'error') {
@@ -119,14 +107,13 @@ function connectNative() {
 
   nativePort.onDisconnect.addListener(function() {
     nativePort = null;
-    // Reject any requests that were in flight
     var queue = pendingQueue;
     pendingQueue = [];
     for (var i = 0; i < queue.length; i++) {
       clearTimeout(queue[i].timeoutId);
       queue[i].reject(new Error('Native host disconnected'));
     }
-    setTimeout(connectNative, 3000);
+    setTimeout(function() { connectNative(); }, 3000);
   });
 }
 
@@ -137,7 +124,6 @@ function sendNative(msg) {
       return;
     }
     var timeoutId = setTimeout(function() {
-      // Remove from queue so later responses don't mis-route
       var idx = pendingQueue.findIndex(function(p) { return p.timeoutId === timeoutId; });
       if (idx !== -1) {
         pendingQueue.splice(idx, 1);
@@ -150,16 +136,27 @@ function sendNative(msg) {
 }
 
 function handleNativeOpen(msg) {
-  var encoded = 'cbz-native://' + encodeURIComponent(msg.path);
-  chrome.tabs.create({ url: buildViewerUrl(encoded, msg.name, msg.page || 1) });
+  // Build a proper file:// URL from the path. Using the URL constructor
+  // ensures special characters in the path are percent-encoded correctly.
+  // We pass this as src= in the viewer URL. Tabs with src=file://... survive
+  // extension reloads; tabs with src=cbz-native://... do not.
+  // Page position is stored in the URL fragment by the viewer via
+  // history.replaceState, so session restore preserves it automatically.
+  // Construct a valid file:// URL by encoding each path segment individually.
+  // msg.path is a raw filesystem path (e.g. "/home/user/My Comics/[Vol].cbz")
+  // which may contain spaces, brackets, and other characters that are valid in
+  // filenames but must be percent-encoded in URLs. We split on '/', encode each
+  // segment with encodeURIComponent, then rejoin — this encodes everything that
+  // needs encoding without double-encoding the '/' separators.
+  var fileUrl = 'file://' + msg.path.split('/').map(encodeURIComponent).join('/');
+  var page = msg.page || 1;
+  chrome.tabs.create({ url: buildViewerUrl(fileUrl, msg.name, page) });
 }
 
 // ── Message handler ───────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
-  console.log('[cbz-bg] onMessage:', request.type, 'nativePort:', !!nativePort);
 
-  // Viewer requests a stat or read from the native host
   if (request.type === 'nativeStat') {
     sendNative({ cmd: 'stat', path: request.path })
       .then(function(r) { sendResponse({ ok: true, size: r.size, name: r.name }); })

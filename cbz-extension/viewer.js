@@ -101,9 +101,9 @@ class HttpAccessor {
 }
 
 // ── NativeAccessor ───────────────────────────────────────────────────────────
-// Used for files opened via cbz-open (native messaging).
-// Reads are relayed through the background script to the native host.
-// The host caps individual reads at 768 KB; larger reads are split here.
+// Used for file:// URLs. Extension pages can't fetch() file:// URLs in Firefox,
+// so reads are relayed through the background script to the native messaging
+// host. The host caps reads at 512 KB; larger reads are split here.
 
 class NativeAccessor {
   constructor(path, size) {
@@ -145,13 +145,10 @@ class NativeAccessor {
 
 function bgMessage(msg) {
   return new Promise((resolve, reject) => {
-    console.log('[cbz-viewer] bgMessage ->', msg.type);
     chrome.runtime.sendMessage(msg, response => {
       if (chrome.runtime.lastError) {
-        console.log('[cbz-viewer] bgMessage error:', chrome.runtime.lastError.message);
         reject(new Error(chrome.runtime.lastError.message));
       } else {
-        console.log('[cbz-viewer] bgMessage response ok:', response && response.ok);
         resolve(response);
       }
     });
@@ -460,12 +457,9 @@ async function displayPage(pageNum) {
 
     updatePageUI();
 
-    // Track current page in the query string so it survives reload and can be
-    // bookmarked. We deliberately avoid putting it in the fragment because
-    // Firefox appends visible fragments to the tab title.
+    // Store current page in ?page= so session restore and reloads preserve it.
     const u = new URL(window.location.href);
     u.searchParams.set('page', pageNum);
-    u.hash = '';
     history.replaceState(null, '', u.toString());
 
     prefetchPage(pageNum + 1);
@@ -499,12 +493,6 @@ async function prefetchPage(pageNum) {
 // ─── ACCESSOR FACTORY ────────────────────────────────────────────────────────
 
 async function createAccessor(url) {
-  console.log('[cbz-viewer] createAccessor:', url.slice(0, 80));
-  if (url.startsWith('cbz-native://')) {
-    const path = decodeURIComponent(url.slice('cbz-native://'.length));
-    return NativeAccessor.create(path);
-  }
-
   if (url.startsWith('blob:')) {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error('Could not read blob URL');
@@ -671,6 +659,5 @@ function wireFilePicker(btnId, inputId) {
     }
   }
 
-  console.log('[cbz-viewer] init: src =', src.slice(0, 80), 'page =', startPage);
   loadCbz(src, startPage);
 })();
