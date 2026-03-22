@@ -359,12 +359,15 @@ function parseFragment(hash) {
 // ─── UI STATE ────────────────────────────────────────────────────────────────
 
 let state = {
-  accessor: null,   // FileAccessor instance — the only reference to file data
-  entries: [],      // image entry metadata only (no file bytes)
+  accessor: null,       // FileAccessor instance — the only reference to file data
+  entries: [],          // image entry metadata only (no file bytes)
   currentPage: 1,
   totalPages: 0,
   srcUrl: '',
-  blobUrls: {},     // decoded image cache: pageNum -> blob: URL
+  blobUrls: {},         // decoded image cache: pageNum -> blob: URL
+  extracting: {},       // in-flight extraction promises: pageNum -> Promise<string>
+                        // Deduplicates concurrent requests for the same page so
+                        // prefetch and displayPage never both extract the same entry.
 };
 
 // ─── UI HELPERS ──────────────────────────────────────────────────────────────
@@ -374,6 +377,7 @@ const $ = id => document.getElementById(id);
 function setStatus(msg) { $('status-text').textContent = msg; }
 
 function showLoading(msg = 'Loading…') {
+  $('pick-screen').classList.add('hidden');
   $('loading-screen').classList.remove('hidden');
   $('viewer-screen').classList.add('hidden');
   $('error-screen').classList.add('hidden');
@@ -407,6 +411,30 @@ function setTitle(name) {
   $('comic-title').textContent = display;
 }
 
+// ─── PAGE EXTRACTION (deduplicated) ──────────────────────────────────────────
+// Returns a blob: URL for the given page, extracting it if needed.
+// Uses state.extracting to ensure only one extraction runs per page at a time:
+// if displayPage and prefetchPage both want the same page, the second caller
+// just awaits the first's promise rather than starting a duplicate extraction.
+
+async function getPageBlobUrl(pageNum, updateStatus) {
+  if (state.blobUrls[pageNum]) return state.blobUrls[pageNum];
+
+  if (!state.extracting[pageNum]) {
+    state.extracting[pageNum] = (async () => {
+      const entry = state.entries[pageNum - 1];
+      if (updateStatus) setStatus(`Extracting page ${pageNum}…`);
+      const data = await extractEntry(state.accessor, entry);
+      const url  = URL.createObjectURL(new Blob([data], { type: getMimeType(entry.name) }));
+      state.blobUrls[pageNum]   = url;
+      delete state.extracting[pageNum];
+      return url;
+    })();
+  }
+
+  return state.extracting[pageNum];
+}
+
 // ─── PAGE DISPLAY ────────────────────────────────────────────────────────────
 
 async function displayPage(pageNum) {
@@ -419,14 +447,7 @@ async function displayPage(pageNum) {
   spinner.classList.remove('hidden');
 
   try {
-    let blobUrl = state.blobUrls[pageNum];
-    if (!blobUrl) {
-      const entry = state.entries[pageNum - 1];
-      setStatus(`Extracting page ${pageNum}…`);
-      const data = await extractEntry(state.accessor, entry);
-      blobUrl = URL.createObjectURL(new Blob([data], { type: getMimeType(entry.name) }));
-      state.blobUrls[pageNum] = blobUrl;
-    }
+    const blobUrl = await getPageBlobUrl(pageNum, /*updateStatus=*/true);
 
     await new Promise((resolve, reject) => {
       img.onload  = resolve;
@@ -468,13 +489,8 @@ async function displayPage(pageNum) {
 async function prefetchPage(pageNum) {
   if (pageNum < 1 || pageNum > state.totalPages) return;
   if (state.blobUrls[pageNum]) return;
-  try {
-    const entry = state.entries[pageNum - 1];
-    const data  = await extractEntry(state.accessor, entry);
-    state.blobUrls[pageNum] = URL.createObjectURL(
-      new Blob([data], { type: getMimeType(entry.name) })
-    );
-  } catch (_) { /* silent */ }
+  try { await getPageBlobUrl(pageNum, /*updateStatus=*/false); }
+  catch (_) { /* silent prefetch failure */ }
 }
 
 // ─── ACCESSOR FACTORY ────────────────────────────────────────────────────────
@@ -509,6 +525,7 @@ async function loadWithAccessor(accessor, startPage) {
   try {
     state.accessor   = accessor;
     state.blobUrls   = {};   // clear any previous page cache
+    state.extracting = {};   // clear any in-flight extractions
 
     const allEntries = await parseCentralDirectory(state.accessor);
     state.entries    = filterAndSortImages(allEntries);
