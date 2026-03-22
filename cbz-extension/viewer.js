@@ -469,16 +469,29 @@ async function createAccessor(url) {
     const path = decodeURIComponent(url.slice('cbz-native://'.length));
     return NativeAccessor.create(path);
   }
+
+  if (url.startsWith('cbz-blob://')) {
+    // File was read by the popup and handed to the background for safekeeping.
+    // Claim the ArrayBuffer by token, then wrap it in a BlobAccessor.
+    const token = url.slice('cbz-blob://'.length);
+    const resp = await bgMessage({ type: 'claimBlob', token });
+    if (!resp.ok) throw new Error(resp.error || 'Could not retrieve file data');
+    const blob = new Blob([resp.buffer]);
+    return new BlobAccessor(blob);
+  }
+
   if (url.startsWith('blob:')) {
-    // fetch() a blob: URL to get the underlying Blob object.
-    // The Blob is browser-managed storage, not JS heap.
+    // Shouldn't normally be reached now that popup uses cbz-blob://, but
+    // keep as a fallback for any direct blob: URL that somehow arrives.
     const resp = await fetch(url);
     if (!resp.ok) throw new Error('Could not read blob URL');
     return new BlobAccessor(await resp.blob());
   }
+
   if (url.startsWith('http:') || url.startsWith('https:')) {
     return HttpAccessor.create(url);
   }
+
   // Fallback (e.g. unexpected file:// that wasn't caught by webRequest)
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`Could not fetch: ${url}`);

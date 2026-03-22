@@ -72,22 +72,24 @@ chrome.webRequest.onHeadersReceived.addListener(
   ['blocking', 'responseHeaders']
 );
 
-// ── Native messaging — file open from command line ────────────────────────────
-//
-// We maintain a single long-lived native port. The host polls the queue
-// directory and sends {"event":"open",...} messages when cbz-open drops a
-// request file. We also expose a message channel so viewer.js can request
-// file chunks through the background (since content/viewer pages can't use
-// native messaging directly).
-//
-// If the native host isn't installed, connectNative() will fail silently —
-// the extension still works for http/https and the popup file picker.
+// ── Popup file picker blob store ──────────────────────────────────────────────
+// The popup reads the file into an ArrayBuffer and sends it here for safe-
+// keeping. The viewer tab retrieves it by token, then we discard it.
+// Tokens are random so they can't be guessed by other pages.
+
+var blobStore = {};  // token -> { buffer: ArrayBuffer, name: string }
+
+// ── Native messaging ──────────────────────────────────────────────────────────
 
 var nativePort = null;
 
-// Map of pending chunk requests: requestId -> {resolve, reject}
-var pendingChunks = {};
-var nextRequestId = 1;
+// Pending requests: id -> { resolve, reject, timeoutId }
+// The id is assigned HERE and kept only in this map; it is NOT sent to the
+// native host (which would have to echo it back). Instead we use the fact
+// that native messaging is strictly sequential on a single port — each
+// postMessage gets exactly one response before the next is sent.
+// We therefore use a simple FIFO queue rather than IDs.
+var pendingQueue = [];   // [ { resolve, reject, timeoutId }, ... ]
 
 function connectNative() {
   if (nativePort) return;
@@ -95,35 +97,38 @@ function connectNative() {
   try {
     nativePort = chrome.runtime.connectNative(HOST_NAME);
   } catch (e) {
-    // Host not installed — that's fine, just no CLI support.
     nativePort = null;
     return;
   }
 
   nativePort.onMessage.addListener(function(msg) {
     if (msg.event === 'open') {
-      // cbz-open dropped a file request; open the viewer.
-      // The viewer will fetch file chunks via background messages.
       handleNativeOpen(msg);
-    } else if (msg.status === 'ok' || msg.status === 'chunk' || msg.status === 'error') {
-      // Response to a stat or read command — route to waiting promise.
-      var id = msg._reqId;
-      if (id && pendingChunks[id]) {
-        if (msg.status === 'error') {
-          pendingChunks[id].reject(new Error(msg.message));
-        } else {
-          pendingChunks[id].resolve(msg);
-        }
-        delete pendingChunks[id];
-      }
+      return;
+    }
+
+    // Every other message is a response to the oldest pending request.
+    var pending = pendingQueue.shift();
+    if (!pending) return; // spurious message, ignore
+
+    clearTimeout(pending.timeoutId);
+
+    if (msg.status === 'error') {
+      pending.reject(new Error(msg.message || 'Native host error'));
+    } else {
+      pending.resolve(msg);
     }
   });
 
   nativePort.onDisconnect.addListener(function() {
     nativePort = null;
-    pendingChunks = {};
-    // Reconnect after a short delay so we keep watching the queue
-    // even if the host crashes or is restarted.
+    // Reject any requests that were in flight
+    var queue = pendingQueue;
+    pendingQueue = [];
+    for (var i = 0; i < queue.length; i++) {
+      clearTimeout(queue[i].timeoutId);
+      queue[i].reject(new Error('Native host disconnected'));
+    }
     setTimeout(connectNative, 3000);
   });
 }
@@ -134,39 +139,53 @@ function sendNative(msg) {
       reject(new Error('Native host not connected'));
       return;
     }
-    var id = nextRequestId++;
-    msg._reqId = id;
-    pendingChunks[id] = { resolve: resolve, reject: reject };
-    // Timeout after 30s to avoid leaking promises on host errors
-    setTimeout(function() {
-      if (pendingChunks[id]) {
-        delete pendingChunks[id];
+    var timeoutId = setTimeout(function() {
+      // Remove from queue so later responses don't mis-route
+      var idx = pendingQueue.findIndex(function(p) { return p.timeoutId === timeoutId; });
+      if (idx !== -1) {
+        pendingQueue.splice(idx, 1);
         reject(new Error('Native host timeout'));
       }
     }, 30000);
+    pendingQueue.push({ resolve: resolve, reject: reject, timeoutId: timeoutId });
     nativePort.postMessage(msg);
   });
 }
 
 function handleNativeOpen(msg) {
-  // msg = { event:"open", path:"/abs/path", name:"file.cbz", size:N, page:1 }
-  // We encode the path as a special cbz-native: URL so the viewer knows to
-  // request chunks via background messages rather than fetch().
   var encoded = 'cbz-native://' + encodeURIComponent(msg.path);
-  var viewerUrl = buildViewerUrl(encoded, msg.name, msg.page || 1);
-  chrome.tabs.create({ url: viewerUrl });
+  chrome.tabs.create({ url: buildViewerUrl(encoded, msg.name, msg.page || 1) });
 }
 
-// ── Message relay from viewer page ───────────────────────────────────────────
-// viewer.js sends chrome.runtime.sendMessage({type:'nativeStat'/'nativeRead'})
-// and we forward to the native host, returning the response.
+// ── Message handler ───────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+
+  // Popup stores a file buffer here before opening the viewer tab
+  if (request.type === 'storeBlob') {
+    blobStore[request.token] = { buffer: request.buffer, name: request.name };
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // Viewer tab claims the buffer by token (cbz-blob:// src)
+  if (request.type === 'claimBlob') {
+    var entry = blobStore[request.token];
+    if (entry) {
+      delete blobStore[request.token];
+      sendResponse({ ok: true, buffer: entry.buffer, name: entry.name });
+    } else {
+      sendResponse({ ok: false, error: 'Blob token not found (already claimed or expired)' });
+    }
+    return false;
+  }
+
+  // Viewer requests a stat or read from the native host
   if (request.type === 'nativeStat') {
     sendNative({ cmd: 'stat', path: request.path })
       .then(function(r) { sendResponse({ ok: true, size: r.size, name: r.name }); })
       .catch(function(e) { sendResponse({ ok: false, error: e.message }); });
-    return true; // async
+    return true;
   }
 
   if (request.type === 'nativeRead') {
@@ -174,9 +193,8 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
                  offset: request.offset, length: request.length })
       .then(function(r) { sendResponse({ ok: true, data: r.data, length: r.length }); })
       .catch(function(e) { sendResponse({ ok: false, error: e.message }); });
-    return true; // async
+    return true;
   }
 });
 
-// Start native connection at extension load
 connectNative();
