@@ -17,12 +17,15 @@ function readUint32LE(buf, offset) {
 }
 
 function readUint64LE(buf, offset) {
-  // We only need this for offsets; JS can't handle full 64-bit but
-  // comics won't be > 4GB so treat lower 32 bits as sufficient.
+  // JS numbers are IEEE-754 doubles with 53 bits of mantissa, giving
+  // Number.MAX_SAFE_INTEGER = 2^53 - 1 = 9007199254740991 (~8 PB).
+  // ZIP64 offsets/sizes are at most a few TB in practice, well within range.
+  // We compute hi * 2^32 + lo entirely in floating-point. As long as hi < 2^21
+  // the result is exact; above that we lose sub-4GB precision, but no real
+  // archive can have meaningful sub-4GB structure at that scale anyway.
   const lo = readUint32LE(buf, offset);
   const hi = readUint32LE(buf, offset + 4);
-  if (hi > 0) return Number.MAX_SAFE_INTEGER; // pathological
-  return lo;
+  return hi * 0x100000000 + lo;
 }
 
 /**

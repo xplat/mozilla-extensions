@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "CBZ Comic Viewer",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "View CBZ comic archives directly in your browser. Supports stored and deflate-compressed pages.",
 
   "permissions": [
     "webRequest",
+    "webRequestBlocking",
     "webNavigation",
     "tabs"
   ],

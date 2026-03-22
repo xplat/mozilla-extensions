@@ -1,11 +1,13 @@
-// background.js — service worker (Manifest V3)
+// background.js — background script (works as MV3 service worker in Chrome,
+// MV3 background script in Firefox via "scripts" key).
 //
-// Strategy:
-//   1. webRequest.onHeadersReceived (non-blocking in MV3) reads content-type.
-//      When a CBZ content-type is found, or an ambiguous zip mime on a .cbz URL,
-//      we redirect via chrome.tabs.update.
-//   2. webNavigation.onCommitted catches file:// URLs with .cbz extension.
-//   3. Fragment-based detection (#cbz) is handled entirely by content.js.
+// Interception strategy:
+//   1. webRequest.onHeadersReceived with blocking redirect handles both
+//      http/https AND file:// navigations, firing before the browser decides
+//      to download or render the response. This is the only reliable way to
+//      intercept file:// CBZs in Firefox (which shows a save dialog otherwise).
+//   2. webRequestBlocking is declared so Firefox allows the redirectUrl return.
+//   3. Fragment-based detection (#cbz) is handled by content.js.
 
 'use strict';
 
@@ -43,12 +45,24 @@ function isAlreadyViewer(url) {
   return url.startsWith(VIEWER_HTML) || url.startsWith(chrome.runtime.getURL(''));
 }
 
-// HTTP/HTTPS: intercept by content-type header
+// Single blocking listener covering http, https, and file://
+// Returning { redirectUrl } works in both Chrome MV3 (where blocking is
+// allowed for extensions with host permissions) and Firefox MV3
+// (which requires the webRequestBlocking permission declared in manifest).
 chrome.webRequest.onHeadersReceived.addListener(
   function(details) {
-    if (details.type !== 'main_frame') return;
-    if (isAlreadyViewer(details.url)) return;
+    if (details.type !== 'main_frame') return {};
+    if (isAlreadyViewer(details.url)) return {};
 
+    // For file:// URLs the content-type header is set by the browser based on
+    // file extension. A .cbz file will get application/zip or octet-stream.
+    // We check the URL extension directly — that's sufficient and reliable.
+    if (isCbzByUrl(details.url)) {
+      return { redirectUrl: buildViewerUrl(details.url) };
+    }
+
+    // For http/https, also check the actual content-type header so we catch
+    // servers that serve CBZ with a cbz-specific mime type, or zip mime + cbz URL.
     var contentType = '';
     var headers = details.responseHeaders || [];
     for (var i = 0; i < headers.length; i++) {
@@ -58,24 +72,15 @@ chrome.webRequest.onHeadersReceived.addListener(
       }
     }
 
-    var isCbzMime = CBZ_MIME_TYPES.has(contentType);
-    var isAmbiguous = AMBIGUOUS_MIME_TYPES.has(contentType);
-
-    if (isCbzMime || (isAmbiguous && isCbzByUrl(details.url))) {
-      chrome.tabs.update(details.tabId, { url: buildViewerUrl(details.url) });
+    if (CBZ_MIME_TYPES.has(contentType) ||
+        (AMBIGUOUS_MIME_TYPES.has(contentType) && isCbzByUrl(details.url))) {
+      return { redirectUrl: buildViewerUrl(details.url) };
     }
-  },
-  { urls: ['http://*/*', 'https://*/*'], types: ['main_frame'] },
-  ['responseHeaders']
-);
 
-// file:// URLs: intercept by path extension via webNavigation
-chrome.webNavigation.onCommitted.addListener(function(details) {
-  if (details.frameId !== 0) return;
-  var url = details.url;
-  if (!url.startsWith('file://')) return;
-  if (isAlreadyViewer(url)) return;
-  if (isCbzByUrl(url)) {
-    chrome.tabs.update(details.tabId, { url: buildViewerUrl(url) });
-  }
-});
+    return {};
+  },
+  // file:// must be listed explicitly; <all_urls> covers it in Firefox but
+  // we list all three schemes to be unambiguous.
+  { urls: ['http://*/*', 'https://*/*', 'file:///*'], types: ['main_frame'] },
+  ['blocking', 'responseHeaders']
+);
