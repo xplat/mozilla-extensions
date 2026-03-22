@@ -353,6 +353,7 @@ html, body {
   justify-content: center;
   overflow: hidden;
   position: relative;
+  cursor: pointer;
   background:
     radial-gradient(ellipse at center, #161616 0%, #0d0d0d 100%);
 }
@@ -372,7 +373,6 @@ html, body {
   max-height: 100%;
   object-fit: contain;
   display: block;
-  cursor: pointer;
   position: relative;
   z-index: 0;
   transition: opacity 0.2s ease;

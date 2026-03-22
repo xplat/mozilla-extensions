@@ -441,6 +441,9 @@ async function displayPage(pageNum) {
   if (pageNum < 1 || pageNum > state.totalPages) return;
   state.currentPage = pageNum;
 
+  // Always return to fit mode when navigating to a new page
+  setZoom('fit');
+
   const img     = $('comic-image');
   const spinner = $('page-spinner');
   img.classList.add('loading');
@@ -493,6 +496,13 @@ async function prefetchPage(pageNum) {
 // ─── ACCESSOR FACTORY ────────────────────────────────────────────────────────
 
 async function createAccessor(url) {
+  if (url.startsWith('file://')) {
+    // Extension pages cannot fetch() file:// URLs in Firefox.
+    // Extract the filesystem path from the URL and use NativeAccessor.
+    const path = decodeURIComponent(new URL(url).pathname);
+    return NativeAccessor.create(path);
+  }
+
   if (url.startsWith('blob:')) {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error('Could not read blob URL');
@@ -503,10 +513,7 @@ async function createAccessor(url) {
     return HttpAccessor.create(url);
   }
 
-  // Fallback (e.g. unexpected file:// that wasn't caught by webRequest)
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`Could not fetch: ${url}`);
-  return new BlobAccessor(await resp.blob());
+  throw new Error(`Unsupported URL scheme: ${url.split(':')[0]}`);
 }
 
 // ─── MAIN LOAD ───────────────────────────────────────────────────────────────
@@ -592,11 +599,48 @@ $('page-input').addEventListener('keydown', e => {
   e.target.blur();
 });
 
-$('comic-image').addEventListener('click', e => {
-  const rect = e.target.getBoundingClientRect();
-  goToPage(e.clientX - rect.left < rect.width / 2
-    ? state.currentPage - 1
-    : state.currentPage + 1);
+// ─── ZOOM TOGGLE ─────────────────────────────────────────────────────────────
+// Two modes: 'fit' (default) — image constrained to the viewport with
+// max-width/max-height; 'full' — image at natural size with scrollbars.
+// Clicking the middle third of the page area toggles between them.
+// Navigating to a new page always resets to 'fit'.
+
+let zoomMode = 'fit';
+
+function setZoom(mode) {
+  zoomMode = mode;
+  const img = $('comic-image');
+  const container = $('page-container');
+  if (mode === 'full') {
+    img.style.maxWidth  = 'none';
+    img.style.maxHeight = 'none';
+    container.style.overflow = 'auto';
+    container.style.alignItems = 'flex-start';
+    container.style.justifyContent = 'flex-start';
+  } else {
+    img.style.maxWidth  = '';
+    img.style.maxHeight = '';
+    container.style.overflow = 'hidden';
+    container.style.alignItems = '';
+    container.style.justifyContent = '';
+  }
+}
+
+$('page-container').addEventListener('click', e => {
+  // Ignore clicks on the topbar or spinner
+  if (e.target.closest('#topbar') || e.target.closest('.page-spinner')) return;
+
+  const rect = $('page-container').getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const third = rect.width / 3;
+
+  if (x < third) {
+    goToPage(state.currentPage - 1);
+  } else if (x > third * 2) {
+    goToPage(state.currentPage + 1);
+  } else {
+    setZoom(zoomMode === 'fit' ? 'full' : 'fit');
+  }
 });
 
 // ─── FILE PICKER (in-tab) ────────────────────────────────────────────────────
