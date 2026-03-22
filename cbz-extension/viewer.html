@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CBZ Viewer</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+
+  <!-- LOADING SCREEN -->
+  <div id="loading-screen">
+    <div class="loading-inner">
+      <div class="loading-icon">
+        <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="8" y="4" width="36" height="48" rx="2" fill="#1a1a1a" stroke="#c8933a" stroke-width="2"/>
+          <rect x="12" y="8" width="28" height="40" rx="1" fill="#111"/>
+          <rect x="16" y="12" width="20" height="3" rx="1" fill="#c8933a" opacity="0.6"/>
+          <rect x="16" y="18" width="16" height="2" rx="1" fill="#555"/>
+          <rect x="16" y="23" width="18" height="2" rx="1" fill="#555"/>
+          <rect x="20" y="8" width="36" height="48" rx="2" fill="#1e1e1e" stroke="#c8933a" stroke-width="2"/>
+          <rect x="24" y="12" width="28" height="40" rx="1" fill="#141414"/>
+          <rect x="28" y="16" width="16" height="3" rx="1" fill="#c8933a" opacity="0.8"/>
+          <rect x="28" y="22" width="18" height="2" rx="1" fill="#666"/>
+          <rect x="28" y="27" width="14" height="2" rx="1" fill="#666"/>
+          <rect x="28" y="32" width="16" height="2" rx="1" fill="#666"/>
+        </svg>
+      </div>
+      <div class="loading-title">CBZ Viewer</div>
+      <div id="status-text" class="loading-status">Initializing…</div>
+      <div class="loading-bar-track">
+        <div class="loading-bar-fill"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ERROR SCREEN -->
+  <div id="error-screen" class="hidden">
+    <div class="error-inner">
+      <div class="error-icon">✕</div>
+      <div class="error-title">Failed to open comic</div>
+      <div id="error-message" class="error-message">Unknown error.</div>
+    </div>
+  </div>
+
+  <!-- VIEWER SCREEN -->
+  <div id="viewer-screen" class="hidden">
+
+    <!-- TOP BAR -->
+    <header id="topbar">
+      <div class="topbar-left">
+        <div class="app-badge">CBZ</div>
+        <span id="comic-title" class="comic-title">Comic</span>
+      </div>
+      <div class="topbar-center">
+        <button id="prev-btn" class="nav-btn" title="Previous page (←)" aria-label="Previous page">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"/></svg>
+        </button>
+        <div class="page-control">
+          <input type="number" id="page-input" min="1" value="1" aria-label="Current page" />
+          <span class="page-sep">/</span>
+          <span id="page-indicator" class="page-total">—</span>
+        </div>
+        <button id="next-btn" class="nav-btn" title="Next page (→)" aria-label="Next page">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"/></svg>
+        </button>
+      </div>
+      <div class="topbar-right">
+        <span class="kb-hint">← → to navigate</span>
+      </div>
+    </header>
+
+    <!-- PAGE DISPLAY -->
+    <main id="page-container">
+      <div id="page-spinner" class="page-spinner hidden">
+        <div class="spinner-ring"></div>
+      </div>
+      <img id="comic-image" alt="Comic page" draggable="false" />
+    </main>
+
+  </div>
+
+  <script src="viewer.js"></script>
+</body>
+</html>
