@@ -153,24 +153,38 @@ function handleNativeOpen(msg) {
   chrome.tabs.create({ url: buildViewerUrl(fileUrl, msg.name, page) });
 }
 
-// ── Message handler ───────────────────────────────────────────────────────────
+// ── Port-based message handler ───────────────────────────────────────────────
+// Viewer pages connect via chrome.runtime.connect (long-lived port) so that
+// if the background dies the port.onDisconnect fires on the viewer side,
+// allowing it to reject pending promises and settle into an error state rather
+// than hanging as "loading" (which causes Firefox to close the tab on reload).
 
-chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+chrome.runtime.onConnect.addListener(function(port) {
+  if (port.name !== 'viewer') return;
 
-  if (request.type === 'nativeStat') {
-    sendNative({ cmd: 'stat', path: request.path })
-      .then(function(r) { sendResponse({ ok: true, size: r.size, name: r.name }); })
-      .catch(function(e) { sendResponse({ ok: false, error: e.message }); });
-    return true;
-  }
+  port.onMessage.addListener(function(request) {
+    var id = request._id;
 
-  if (request.type === 'nativeRead') {
-    sendNative({ cmd: 'read', path: request.path,
-                 offset: request.offset, length: request.length })
-      .then(function(r) { sendResponse({ ok: true, data: r.data, length: r.length }); })
-      .catch(function(e) { sendResponse({ ok: false, error: e.message }); });
-    return true;
-  }
+    function reply(msg) {
+      // Port may have disconnected by the time we reply; guard against that.
+      try { port.postMessage(Object.assign({ _id: id }, msg)); } catch (_) {}
+    }
+
+    if (request.type === 'nativeStat') {
+      sendNative({ cmd: 'stat', path: request.path })
+        .then(function(r) { reply({ ok: true, size: r.size, name: r.name }); })
+        .catch(function(e) { reply({ error: e.message }); });
+      return;
+    }
+
+    if (request.type === 'nativeRead') {
+      sendNative({ cmd: 'read', path: request.path,
+                   offset: request.offset, length: request.length })
+        .then(function(r) { reply({ ok: true, data: r.data, length: r.length }); })
+        .catch(function(e) { reply({ error: e.message }); });
+      return;
+    }
+  });
 });
 
 connectNative();

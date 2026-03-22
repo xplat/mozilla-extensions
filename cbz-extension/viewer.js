@@ -143,15 +143,43 @@ class NativeAccessor {
   }
 }
 
+// ─── BACKGROUND PORT ─────────────────────────────────────────────────────────
+// We use a long-lived port (chrome.runtime.connect) rather than sendMessage so
+// that if the background script dies (e.g. extension reload), port.onDisconnect
+// fires immediately and we can reject all pending promises. With sendMessage,
+// the callback is silently never called when the background dies, leaving
+// promises hanging forever and causing Firefox to consider the page "loading",
+// which makes it close the tab on extension reload.
+
+const _bgPort = chrome.runtime.connect({ name: 'viewer' });
+const _bgPending = new Map(); // msgId -> { resolve, reject }
+let   _bgNextId  = 1;
+let   _bgDead    = false;
+
+_bgPort.onMessage.addListener(msg => {
+  const pending = _bgPending.get(msg._id);
+  if (!pending) return;
+  _bgPending.delete(msg._id);
+  if (msg.error) {
+    pending.reject(new Error(msg.error));
+  } else {
+    pending.resolve(msg);
+  }
+});
+
+_bgPort.onDisconnect.addListener(() => {
+  _bgDead = true;
+  const err = new Error('Extension reloaded — please wait, reopening…');
+  for (const pending of _bgPending.values()) pending.reject(err);
+  _bgPending.clear();
+});
+
 function bgMessage(msg) {
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(msg, response => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-      } else {
-        resolve(response);
-      }
-    });
+    if (_bgDead) { reject(new Error('Background disconnected')); return; }
+    const id = _bgNextId++;
+    _bgPending.set(id, { resolve, reject });
+    _bgPort.postMessage({ ...msg, _id: id });
   });
 }
 
