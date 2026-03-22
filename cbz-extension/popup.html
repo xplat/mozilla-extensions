@@ -6,65 +6,60 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #0d0d0d;
-      --surface: #141414;
-      --border: #2a2a2a;
-      --amber: #c8933a;
-      --text: #e0d8cc;
-      --text-dim: #888;
+      --bg: #0d0d0d; --surface: #141414; --surface-2: #1c1c1c;
+      --border: #2a2a2a; --amber: #c8933a; --amber-light: #e0aa58;
+      --amber-dim: #7a5520; --text: #e0d8cc; --text-dim: #888; --radius: 6px;
     }
-    body {
-      width: 220px;
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'DM Sans', system-ui, sans-serif;
-      font-size: 13px;
-      padding: 14px;
-    }
-    .title {
-      font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
-      font-size: 20px;
-      letter-spacing: 0.1em;
-      color: var(--amber);
-      margin-bottom: 12px;
-    }
-    .desc {
-      color: var(--text-dim);
-      line-height: 1.5;
-      margin-bottom: 14px;
-      font-size: 12px;
-    }
-    .open-btn {
-      display: block;
-      width: 100%;
-      padding: 9px 12px;
-      background: var(--amber);
-      color: #0d0d0d;
-      border: none;
-      border-radius: 5px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      text-align: center;
-      letter-spacing: 0.03em;
-    }
-    .open-btn:hover { background: #e0aa58; }
-    .hint {
-      margin-top: 10px;
-      font-size: 11px;
-      color: var(--text-dim);
-      text-align: center;
-      line-height: 1.4;
-    }
-    #file-input { display: none; }
+    body { width: 220px; background: var(--bg); color: var(--text);
+           font-family: 'DM Sans', system-ui, sans-serif; font-size: 13px;
+           padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+    .title { font-family: 'Bebas Neue','Arial Narrow',sans-serif; font-size: 20px;
+             letter-spacing: 0.1em; color: var(--amber); }
+    .open-btn { display: block; width: 100%; padding: 9px 12px;
+                background: var(--amber); color: #0d0d0d; border: none;
+                border-radius: var(--radius); font-size: 13px; font-weight: 600;
+                cursor: pointer; letter-spacing: 0.03em; }
+    .open-btn:hover { background: var(--amber-light); }
+    .divider { border: none; border-top: 1px solid var(--border); }
+    .section-label { font-size: 11px; color: var(--text-dim);
+                     letter-spacing: 0.06em; text-transform: uppercase; }
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; }
+    .toggle-label { font-size: 12px; color: var(--text-dim); }
+    .toggle { position: relative; width: 36px; height: 20px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-track { position: absolute; inset: 0; background: var(--surface-2);
+                    border: 1px solid var(--border); border-radius: 10px;
+                    cursor: pointer; transition: background 0.2s; }
+    .toggle input:checked + .toggle-track { background: var(--amber-dim);
+                                             border-color: var(--amber); }
+    .toggle-track::after { content: ''; position: absolute; width: 14px; height: 14px;
+                           top: 2px; left: 2px; background: var(--text-dim);
+                           border-radius: 50%; transition: transform 0.2s, background 0.2s; }
+    .toggle input:checked + .toggle-track::after { transform: translateX(16px);
+                                                    background: var(--amber); }
+    .hint { font-size: 11px; color: var(--text-dim); text-align: center; }
   </style>
 </head>
 <body>
   <div class="title">CBZ Viewer</div>
-  <p class="desc">Open a local .cbz comic file, or just navigate to a .cbz URL and it will open automatically.</p>
   <button class="open-btn" id="open-btn">📂 Open CBZ File…</button>
-  <input type="file" id="file-input" accept=".cbz,application/zip,application/vnd.comicbook+zip">
-  <p class="hint">HTTP/HTTPS .cbz links open automatically.</p>
+  <hr class="divider">
+  <div class="section-label">Defaults for new comics</div>
+  <div class="toggle-row">
+    <span class="toggle-label">Two-page mode</span>
+    <label class="toggle">
+      <input type="checkbox" id="default-two">
+      <span class="toggle-track"></span>
+    </label>
+  </div>
+  <div class="toggle-row">
+    <span class="toggle-label">Right-to-left</span>
+    <label class="toggle">
+      <input type="checkbox" id="default-rtl">
+      <span class="toggle-track"></span>
+    </label>
+  </div>
+  <p class="hint">Per-comic settings are remembered automatically.</p>
   <script src="popup.js"></script>
 </body>
 </html>

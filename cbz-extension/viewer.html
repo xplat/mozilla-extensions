@@ -8,7 +8,7 @@
 </head>
 <body>
 
-  <!-- PICK SCREEN (shown when no src is provided) -->
+  <!-- PICK SCREEN -->
   <div id="pick-screen" class="hidden">
     <div class="loading-inner">
       <div class="loading-icon">
@@ -80,7 +80,7 @@
         <span id="comic-title" class="comic-title">Comic</span>
       </div>
       <div class="topbar-center">
-        <button id="prev-btn" class="nav-btn" title="Previous page (←)" aria-label="Previous page">
+        <button id="prev-btn" class="nav-btn" aria-label="Previous">
           <svg viewBox="0 0 20 20" fill="currentColor"><path d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"/></svg>
         </button>
         <div class="page-control">
@@ -88,24 +88,34 @@
           <span class="page-sep">of</span>
           <span id="page-total" class="page-total">—</span>
         </div>
-        <button id="next-btn" class="nav-btn" title="Next page (→)" aria-label="Next page">
+        <button id="next-btn" class="nav-btn" aria-label="Next">
           <svg viewBox="0 0 20 20" fill="currentColor"><path d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"/></svg>
         </button>
       </div>
       <div class="topbar-right">
-        <span class="kb-hint">← → to navigate</span>
+        <button id="btn-two" class="mode-btn" title="Two-page mode (T)">2P</button>
+        <button id="btn-rtl" class="mode-btn" title="Right-to-left mode (R)">RTL</button>
+        <span class="kb-hint">← → Z T R</span>
       </div>
     </header>
 
     <!-- PAGE DISPLAY -->
     <main id="page-container">
-      <div id="zone-prev"  class="nav-zone zone-prev"></div>
-      <div id="zone-zoom"  class="nav-zone zone-zoom"></div>
-      <div id="zone-next"  class="nav-zone zone-next"></div>
+      <div id="zone-prev" class="nav-zone zone-prev"></div>
+      <div id="zone-zoom" class="nav-zone zone-zoom"></div>
+      <div id="zone-next" class="nav-zone zone-next"></div>
       <div id="page-spinner" class="page-spinner hidden">
         <div class="spinner-ring"></div>
       </div>
-      <img id="comic-image" alt="Comic page" draggable="false" />
+      <!-- zoom-wrapper ensures image is centered when smaller than viewport
+           in full-zoom mode, and scrollable when larger -->
+      <div id="zoom-wrapper">
+        <div id="page-spread">
+          <!-- In two-page mode both slots are used; in single mode only slot-a -->
+          <img id="slot-a" class="comic-page" alt="Page" draggable="false" />
+          <img id="slot-b" class="comic-page" alt="Page" draggable="false" style="display:none" />
+        </div>
+      </div>
     </main>
 
   </div>

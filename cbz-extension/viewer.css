@@ -337,6 +337,10 @@ html, body {
   justify-content: flex-end;
 }
 
+.topbar-right {
+  gap: 6px;
+}
+
 .kb-hint {
   font-family: 'DM Mono', monospace;
   font-size: 11px;
@@ -344,46 +348,108 @@ html, body {
   letter-spacing: 0.03em;
 }
 
+.mode-btn {
+  height: 24px;
+  padding: 0 7px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.mode-btn:hover {
+  border-color: var(--amber-dim);
+  color: var(--text);
+}
+.mode-btn.active {
+  background: var(--amber-dim);
+  border-color: var(--amber);
+  color: var(--amber-light);
+}
+
 /* ── PAGE CONTAINER ─────────────────────────────────────────────────────── */
 
 #page-container {
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
+  overflow: hidden;   /* overridden to auto in zoom-full mode */
   position: relative;
-  background:
-    radial-gradient(ellipse at center, #161616 0%, #0d0d0d 100%);
-  /* Default cursor; JS updates it on mousemove based on zone */
-  cursor: zoom-in;
+  background: radial-gradient(ellipse at center, #161616 0%, #0d0d0d 100%);
 }
 
 .nav-zone {
   position: absolute;
   top: 0;
   bottom: 0;
-  z-index: 2;   /* above image so cursor shows */
+  z-index: 3;   /* above zoom-wrapper and image */
 }
-.zone-prev { left:  0;    width: 40%; cursor: w-resize; }
-.zone-zoom { left: 40%;  width: 20%; cursor: zoom-in;   }
-.zone-next { right: 0;   width: 40%; cursor: e-resize;  }
+.zone-prev { left:  0;   width: 40%; cursor: w-resize; }
+.zone-zoom { left: 40%;  width: 20%; cursor: zoom-in;  }
+.zone-next { right: 0;   width: 40%; cursor: e-resize; }
 
-#comic-image {
+/* zoom-wrapper fills at least the full viewport in both dimensions.
+   In fit mode: flexbox centering constrains the image to fit.
+   In full mode: min-size + auto overflow lets it scroll, while still
+   centering the image when it is smaller than the viewport in either axis. */
+#zoom-wrapper {
+  min-width: 100%;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+/* fit mode: constrain to container */
+#page-container:not(.zoom-full) #zoom-wrapper {
+  width: 100%;
+  height: 100%;
+}
+
+/* page-spread holds one or two images side by side */
+#page-spread {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.comic-page {
+  display: block;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
-  display: block;
-  position: relative;
-  z-index: 1;
   transition: opacity 0.2s ease;
   box-shadow:
     0 4px 24px rgba(0,0,0,0.7),
     0 0 0 1px rgba(255,255,255,0.04);
 }
 
-#comic-image.loading {
+/* In fit mode each image is constrained to half width in two-page mode */
+#page-container:not(.zoom-full) #page-spread.two-page .comic-page {
+  max-width: 50vw;
+  max-height: calc(100vh - var(--topbar-h));
+}
+
+#page-container:not(.zoom-full) #page-spread:not(.two-page) .comic-page {
+  max-height: calc(100vh - var(--topbar-h));
+}
+
+.comic-page.loading {
   opacity: 0.3;
+}
+
+/* full zoom: container becomes scrollable */
+#page-container.zoom-full {
+  overflow: auto;
+}
+#page-container.zoom-full .comic-page {
+  max-width: none;
+  max-height: none;
 }
 
 
