@@ -146,23 +146,45 @@ html, body {
 
 #selector-pane {
   width: var(--selector-w);
-  min-width: 120px;
+  min-width: 80px;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--border);
   background: var(--surface);
   flex-shrink: 0;
   overflow: hidden;
 }
 
-/* Focus indicator on active pane */
-#viewer-screen[data-focus="selector"] #selector-pane {
-  border-right-color: var(--focus-ring);
+/* ── PANE DIVIDER ────────────────────────────────────────────────────────── */
+
+#pane-divider {
+  width: 5px;
+  flex-shrink: 0;
+  background: var(--border);
+  cursor: ew-resize;
+  position: relative;
+  z-index: 5;
+  transition: background 0.1s;
+}
+
+#pane-divider:hover,
+#pane-divider.dragging {
+  background: var(--text-muted);
+}
+
+/* Focus indicators: divider highlights when selector is active;
+   image pane gets an inset ring when viewer is active */
+#viewer-screen[data-focus="selector"] #pane-divider {
+  background: var(--focus-ring);
 }
 
 #viewer-screen[data-focus="viewer"] #image-pane {
   outline: 1px solid var(--focus-ring);
   outline-offset: -1px;
+}
+
+/* Hide divider along with selector */
+#viewer-screen.no-selector #pane-divider {
+  display: none;
 }
 
 /* Hide selector in Z-mode */

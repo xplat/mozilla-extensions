@@ -130,13 +130,14 @@ the URL.
 ```jsonc
 {
   "zoomFit":         true,    // z — fit image to window vs. explicit scale
-  "zoomReduceOnly":  true,    // -r flag: in fit mode, don't enlarge small images
-  "recursive":       true,    // include files from subdirectories
+  "zoomReduceOnly":  true,    // ` — in fit mode, don't enlarge small images (-r flag)
+  "recursive":       false,   // off by default (not an xzgv concept)
   "selectorVisible": true,    // Z — selector panel shown
   "showHidden":      false,   // . — show dotfiles
   "sortBy":          "name",  // s (selector) — "name" | "mtime" | "size"
   "rotation":        0,       // r/R/N (viewer) — 0 | 90 | 180 | 270 degrees
-  "mirror":          false,   // F (viewer) — mirror image horizontally
+  "mirror":          false,   // m (viewer) — mirror image horizontally (xzgv 'm')
+  "flip":            false,   // F (viewer) — flip image vertically    (xzgv 'f')
   "scale":           1.0      // d/D/s/S/n (viewer) — scale factor when zoomFit=false
 }
 ```
@@ -154,8 +155,9 @@ The viewer starts as if launched with xzgv options **`-z -r`**:
 * `-r` → `zoomReduceOnly: true` (in zoom-to-fit mode, shrink images larger than the
   window but do **not** enlarge images smaller than the window — they are shown at 1:1)
 
-Recursive directory listing (`recursive: true`) is also enabled by default but is not
-associated with any xzgv command-line flag.
+Recursive directory listing defaults to **off** (`recursive: false`).  xzgv has no
+equivalent concept (it only lists the current directory); recursive mode is an
+extension-specific addition, toggled with the REC button.
 
 ---
 
@@ -211,17 +213,19 @@ non-selectable** (same treatment as unreadable files).
 ## UI Layout
 
 ```
-┌───────────────┬───────────────────────────────────────┐
-│ /home/user/.. │                                       │
-├───────────────┤          IMAGE DISPLAY                │
-│  > vacation/  │                                       │
-│    beach.jpg  │         [image here]                  │
-│    sunset.jpg │                                       │
-│    video.mp4  │                                       │  ← greyed
-│               │                                       │
-├───────────────┤                                       │
-│ REC HID NAME  │                                       │
-└───────────────┴───────────────────────────────────────┘
+┌───────────────┬─┬─────────────────────────────────────┐
+│ /home/user/.. ││                                       │
+├───────────────┤│         IMAGE DISPLAY                 │
+│  > vacation/  ││                                       │
+│    beach.jpg  ││        [image here]                   │
+│    sunset.jpg ││                                       │
+│    video.mp4  ││                                       │  ← greyed
+│               ││                                       │
+├───────────────┤│                                       │
+│ REC HID NAME  ││                                       │
+└───────────────┴┴─────────────────────────────────────┘
+                ↑
+           pane divider (drag to resize)
 ```
 
 There is **no top bar**.  The selector pane has:
@@ -230,12 +234,16 @@ There is **no top bar**.  The selector pane has:
 * A scrollable **file list** (directories first, then files).
 * A narrow **footer** with the REC / HID / sort-order toggle buttons.
 
-The active pane (selector or image) is indicated by a coloured border on its
-edge.  Keyboard focus switches between panes with `Tab` or `Escape`.
+A **pane divider** between the selector and image pane can be dragged to resize
+the split.  Keyboard shortcuts `[` / `]` / `~` also narrow, widen, or reset the
+split width.
+
+The active pane is indicated by a coloured divider edge (selector focus) or an
+inset ring on the image pane (viewer focus).  Keyboard focus switches with
+`Tab` or `Escape`.
 
 When `selectorVisible = false` (Z mode or browser fullscreen) the entire
-selector pane (header, list, footer) is hidden and the image pane fills the
-full width.
+selector pane and divider are hidden and the image pane fills the full width.
 
 ---
 
@@ -262,6 +270,8 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
 | `f` | Toggle browser-level fullscreen (also hides selector; restores on exit) |
 | `i` | Toggle file-info overlay (filename, size, mtime, dimensions) |
 | `.` | Toggle visibility of hidden (dot) files |
+| `[` / `]` | Narrow / widen selector pane by 16 px (xzgv `[` / `]`) |
+| `~` | Reset selector pane to default width (xzgv `~`) |
 
 ### Selector focus
 
@@ -277,6 +287,7 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
 | `b` / `p` | Go to previous image |
 | `s` | Cycle sort order: name → mtime → size → name |
 | `z` | Toggle zoom fit-to-window |
+| `Ctrl-r` | Rescan current directory (xzgv `Ctrl-r`) |
 
 ### Viewer focus — scrolling / panning
 
@@ -300,32 +311,41 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
 
 | Key | Action |
 |-----|--------|
-| `r` | Rotate 90° clockwise |
-| `R` | Rotate 90° counter-clockwise |
-| `N` | Restore normal orientation (reset rotation and mirror) |
-| `F` | Mirror image horizontally |
+| `r` | Rotate 90° clockwise (xzgv `r`) |
+| `R` | Rotate 90° counter-clockwise (xzgv `R`) |
+| `N` | Restore normal orientation — reset rotation, mirror, and flip (xzgv `N`) |
+| `m` | Mirror image horizontally — flip left/right (xzgv `m`) |
+| `F` | Flip image vertically — flip top/bottom (xzgv `f`, uppercased to avoid fullscreen conflict) |
 
 ### Viewer focus — zoom / scale
 
 | Key | Action |
 |-----|--------|
-| `z` | Toggle fit-to-window mode |
-| `d` | Double current scale |
-| `D` | Halve current scale |
-| `s` | Increase scale one step |
-| `S` | Decrease scale one step |
-| `n` | Return to 1:1 (actual size) |
+| `z` | Toggle fit-to-window mode (xzgv `z`) |
+| `` ` `` | Toggle reduce-only fit (shrink large / keep small at 1:1) (replaces xzgv `Alt-r`) |
+| `d` | Double current scale (xzgv `d`) |
+| `D` | Halve current scale (xzgv `D`) |
+| `s` | Increase scale one step (xzgv `s`) |
+| `S` | Decrease scale one step (xzgv `S`) |
+| `n` / `1` | Return to 1:1 actual size (xzgv `n`) |
+| `2` / `3` / `4` | Quick zoom to 2×, 3×, 4× scale |
 
 ### Notes
 
 * **`f` vs `Z`**: `Z` hides/shows the selector within the normal browser window.
   `f` requests browser-level fullscreen and hides the selector; on exit the
   selector is restored to the state `Z` had set.
+* **`m` vs `F`**: xzgv's `m` = horizontal mirror; xzgv's `f` = vertical flip.
+  We map them to the same letters except `f`→`F` to avoid conflict with fullscreen.
+* **Alt+ replacements**: xzgv's `Alt-r` (reduce-only) is mapped to `` ` ``.  Other
+  Alt+ shortcuts either have equivalents (`Alt-n/s/d` sort → `s` key cycle) or are
+  omitted (tagging, thumbnail management, dithering).
 * **Removed from xzgv**: copy, move, rename, delete, tagging, thumbnail
   management, dithering / interpolation controls.
 * **Removed**: `q` to quit — the browser provides adequate tab-close controls.
 * **Mouse**: Left-click on the image pane switches to viewer focus.  Drag to
-  pan (scroll) the image when not in fit-to-window mode.
+  pan (scroll) the image when not in fit-to-window mode.  Drag the pane divider
+  to resize the selector/image split.
 
 ---
 

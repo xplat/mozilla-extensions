@@ -24,21 +24,29 @@ var listing      = [];     // sorted array of entry objects from latest dir load
 var ui = {
   zoomFit:         true,
   zoomReduceOnly:  true,   // in fit mode: shrink large images but don't enlarge small ones
-  recursive:       true,
+  recursive:       false,  // off by default (not an xzgv concept)
   selectorVisible: true,
   showHidden:      false,
   sortBy:          'name', // 'name' | 'mtime' | 'size'
   // Image transform
   rotation:        0,      // 0 | 90 | 180 | 270 (degrees)
-  mirror:          false,  // horizontal mirror
+  mirror:          false,  // horizontal mirror (m key) — xzgv 'm'
+  flip:            false,  // vertical flip   (F key) — xzgv 'f'
   scale:           1.0,    // scale factor when zoomFit=false
 };
 
 // Focus mode — NOT persisted (resets to selector on page load)
 var focusMode = 'selector'; // 'selector' | 'viewer'
 
-// Drag-to-scroll state
-var drag = { active: false, startX: 0, startY: 0, scrollX: 0, scrollY: 0, wasDrag: false };
+// Selector pane width in pixels (adjusted with [ ] ~ and drag)
+var selectorWidthPx = 260;
+var SELECTOR_W_DEFAULT = 260;
+var SELECTOR_W_MIN     = 80;
+var SELECTOR_W_MAX     = 600;
+
+// Drag state — shared across image-pan and divider-resize drags
+var dragMode  = null;  // null | 'image' | 'divider'
+var dragState = {};
 
 // Fullscreen bookkeeping — NOT persisted
 var selectorStateBeforeFS = true;
@@ -60,6 +68,8 @@ var imgSpinnerEl    = document.getElementById('img-spinner');
 var infoOverlayEl   = document.getElementById('info-overlay');
 var infoContentEl   = document.getElementById('info-content');
 var noImageHintEl   = document.getElementById('no-image-hint');
+
+var paneDividerEl  = document.getElementById('pane-divider');
 
 var btnRecursive = document.getElementById('btn-recursive');
 var btnHidden    = document.getElementById('btn-hidden');
@@ -100,6 +110,7 @@ function persistState(push, newDir, newFile) {
     sortBy:          ui.sortBy,
     rotation:        ui.rotation,
     mirror:          ui.mirror,
+    flip:            ui.flip,
     scale:           ui.scale,
   };
   var url = buildPageUrl(dir, file);
@@ -118,6 +129,7 @@ function applyHistoryState(state) {
   if (typeof state.selectorVisible === 'boolean') ui.selectorVisible = state.selectorVisible;
   if (typeof state.showHidden      === 'boolean') ui.showHidden      = state.showHidden;
   if (typeof state.mirror          === 'boolean') ui.mirror          = state.mirror;
+  if (typeof state.flip            === 'boolean') ui.flip            = state.flip;
   if (['name','mtime','size'].indexOf(state.sortBy) !== -1) ui.sortBy = state.sortBy;
   if (state.rotation === 0 || state.rotation === 90 ||
       state.rotation === 180 || state.rotation === 270) ui.rotation = state.rotation;
@@ -376,8 +388,9 @@ function applyImageTransform() {
   img.style.transformOrigin = 'center center';
 
   var parts = [];
-  if (rot)      parts.push('rotate(' + rot + 'deg)');
-  if (ui.mirror) parts.push('scaleX(-1)');
+  if (rot)       parts.push('rotate(' + rot + 'deg)');
+  if (ui.mirror) parts.push('scaleX(-1)');  // horizontal mirror (m)
+  if (ui.flip)   parts.push('scaleY(-1)');  // vertical flip    (F)
   if (scale !== 1) parts.push('scale(' + scale + ')');
   img.style.transform = parts.length ? parts.join(' ') : 'none';
 
@@ -417,10 +430,18 @@ function rotateBy(deg) {
   persistState(false);
 }
 
-// ── Mirror ────────────────────────────────────────────────────────────────
+// ── Mirror / Flip ─────────────────────────────────────────────────────────
 
+// m — horizontal mirror (xzgv 'm')
 function toggleMirror() {
   ui.mirror = !ui.mirror;
+  applyImageTransform();
+  persistState(false);
+}
+
+// F — vertical flip (xzgv 'f', uppercased to avoid conflict with fullscreen)
+function toggleFlip() {
+  ui.flip = !ui.flip;
   applyImageTransform();
   persistState(false);
 }
@@ -430,6 +451,7 @@ function toggleMirror() {
 function resetOrientation() {
   ui.rotation = 0;
   ui.mirror   = false;
+  ui.flip     = false;
   applyImageTransform();
   persistState(false);
 }
@@ -504,6 +526,18 @@ function scaleTo1() {
 function scrollImage(dx, dy) {
   imagePaneEl.scrollLeft += dx;
   imagePaneEl.scrollTop  += dy;
+}
+
+// ── Pane width ────────────────────────────────────────────────────────────
+// Keyboard: [ narrows, ] widens, ~ resets.  Also set by divider drag.
+
+function setSelectorWidth(w) {
+  selectorWidthPx = Math.max(SELECTOR_W_MIN, Math.min(SELECTOR_W_MAX, Math.round(w)));
+  document.documentElement.style.setProperty('--selector-w', selectorWidthPx + 'px');
+}
+
+function adjustSelectorWidth(delta) {
+  setSelectorWidth(selectorWidthPx + delta);
 }
 
 // ── Selector visibility ───────────────────────────────────────────────────
@@ -690,6 +724,10 @@ document.addEventListener('keydown', function(e) {
       case 'Escape':
         if (focusMode === 'viewer') { e.preventDefault(); setFocusMode('selector'); }
         return;
+      // Pane-width adjustment (xzgv [ ] ~)
+      case '[': e.preventDefault(); adjustSelectorWidth(-16); return;
+      case ']': e.preventDefault(); adjustSelectorWidth(+16); return;
+      case '~': e.preventDefault(); setSelectorWidth(SELECTOR_W_DEFAULT); return;
     }
   }
 
@@ -701,7 +739,13 @@ document.addEventListener('keydown', function(e) {
 });
 
 function handleSelectorKey(e, key, ctrl, plain) {
-  if (ctrl) return; // don't intercept Ctrl shortcuts in selector
+  // Ctrl-r: rescan directory (xzgv Ctrl-r)
+  if (ctrl && key === 'r') {
+    e.preventDefault();
+    if (currentDir) loadDir(currentDir, false);
+    return;
+  }
+  if (ctrl) return; // don't intercept other Ctrl shortcuts
   switch (key) {
     case 'ArrowDown':  e.preventDefault(); moveSelectionBy(1);   break;
     case 'ArrowUp':    e.preventDefault(); moveSelectionBy(-1);  break;
@@ -779,21 +823,32 @@ function handleViewerKey(e, key, ctrl, plain) {
       case ' ': e.preventDefault(); nextImage(); break;
       case 'b':
       case 'p': prevImage(); break;
-      // Rotation
-      case 'r': rotateBy(90);   break;
-      case 'R': rotateBy(-90);  break;
-      case 'N': resetOrientation(); break;
-      // Mirror
-      case 'F': toggleMirror(); break;
-      // Scale
+      // Rotation (xzgv r/R/N)
+      case 'r': rotateBy(90);        break;
+      case 'R': rotateBy(-90);       break;
+      case 'N': resetOrientation();  break;
+      // Mirror / flip (xzgv m/f, F avoids fullscreen conflict)
+      case 'm': toggleMirror(); break;  // horizontal mirror
+      case 'F': toggleFlip();   break;  // vertical flip
+      // Scale (xzgv d/D/s/S/n)
       case 'd': scaleDouble(); break;
       case 'D': scaleHalve();  break;
       case 's': scaleStep(+1); break;
       case 'S': scaleStep(-1); break;
       case 'n': scaleTo1();    break;
-      // Zoom toggle
-      case 'z': toggleZoom();  break;
-      // Info
+      // Quick zoom levels
+      case '1': scaleTo1();                                    break;
+      case '2': ui.zoomFit=false; ui.scale=2; applyImageTransform(); persistState(false); break;
+      case '3': ui.zoomFit=false; ui.scale=3; applyImageTransform(); persistState(false); break;
+      case '4': ui.zoomFit=false; ui.scale=4; applyImageTransform(); persistState(false); break;
+      // Zoom-fit toggle (z) and reduce-only toggle (` — replaces xzgv Alt-r)
+      case 'z': toggleZoom(); break;
+      case '`':
+        ui.zoomReduceOnly = !ui.zoomReduceOnly;
+        if (ui.zoomFit) applyImageTransform();
+        persistState(false);
+        break;
+      // Info (xzgv : / ;)
       case ':':
       case ';': e.preventDefault(); toggleInfoOverlay(); break;
     }
@@ -839,35 +894,50 @@ function jumpToEdge(dir) {
   }
 }
 
-// ── Mouse drag-to-scroll (image pane) ─────────────────────────────────────
+// ── Mouse: image-pane drag-to-scroll and divider drag-to-resize ───────────
 
 imagePaneEl.addEventListener('mousedown', function(e) {
   if (e.button !== 0) return;
-  drag.active  = true;
-  drag.wasDrag = false;
-  drag.startX  = e.clientX;
-  drag.startY  = e.clientY;
-  drag.scrollX = imagePaneEl.scrollLeft;
-  drag.scrollY = imagePaneEl.scrollTop;
+  dragMode = 'image';
+  dragState.wasDrag = false;
+  dragState.startX  = e.clientX;
+  dragState.startY  = e.clientY;
+  dragState.scrollX = imagePaneEl.scrollLeft;
+  dragState.scrollY = imagePaneEl.scrollTop;
   e.preventDefault();
 });
 
+if (paneDividerEl) {
+  paneDividerEl.addEventListener('mousedown', function(e) {
+    if (e.button !== 0) return;
+    dragMode = 'divider';
+    dragState.startX = e.clientX;
+    dragState.startW = selectorWidthPx;
+    paneDividerEl.classList.add('dragging');
+    e.preventDefault();
+  });
+}
+
 document.addEventListener('mousemove', function(e) {
-  if (!drag.active) return;
-  var dx = e.clientX - drag.startX;
-  var dy = e.clientY - drag.startY;
-  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.wasDrag = true;
-  imagePaneEl.scrollLeft = drag.scrollX - dx;
-  imagePaneEl.scrollTop  = drag.scrollY - dy;
+  if (dragMode === 'image') {
+    var dx = e.clientX - dragState.startX;
+    var dy = e.clientY - dragState.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragState.wasDrag = true;
+    imagePaneEl.scrollLeft = dragState.scrollX - dx;
+    imagePaneEl.scrollTop  = dragState.scrollY - dy;
+  } else if (dragMode === 'divider') {
+    setSelectorWidth(dragState.startW + (e.clientX - dragState.startX));
+  }
 });
 
-document.addEventListener('mouseup', function(e) {
-  if (!drag.active) return;
-  drag.active = false;
-  if (!drag.wasDrag) {
-    // Plain click on image pane — switch to viewer focus
+document.addEventListener('mouseup', function() {
+  if (dragMode === 'image' && !dragState.wasDrag) {
     setFocusMode('viewer');
   }
+  if (dragMode === 'divider' && paneDividerEl) {
+    paneDividerEl.classList.remove('dragging');
+  }
+  dragMode = null;
 });
 
 // Clicking on the selector switches to selector focus
