@@ -2,7 +2,7 @@
 # install.sh — Install the Media Viewer native messaging host.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 QUEUE_DIR="$HOME/.media-viewer/queue"
 
 # ── Detect OS ────────────────────────────────────────────────────────────────
@@ -25,7 +25,8 @@ esac
 # This installs media_native_host and media-open as console scripts and pulls
 # in jeepney (D-Bus client) as a dependency on Linux.
 
-pip3 install --user "$SCRIPT_DIR"
+pip3 install --user "$SCRIPT_DIR" || \
+pip3 install --user --break-system-packages "$SCRIPT_DIR"
 echo "Installed package (with dependencies) via pip"
 
 # ── Locate the installed host binary ─────────────────────────────────────────

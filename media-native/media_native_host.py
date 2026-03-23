@@ -60,12 +60,6 @@ POLL_INTERVAL = 0.5
 BIND_HOST     = '127.7.203.98'
 TOKEN         = secrets.token_hex(64)   # 512 bits of entropy
 
-# Extensions served as image files (viewer can display these).
-IMAGE_EXTS = frozenset([
-    '.jpg', '.jpeg', '.png', '.gif', '.webp',
-    '.avif', '.bmp', '.tiff', '.tif', '.svg', '.ico',
-])
-
 MIME_TYPES = {
     '.jpg':  'image/jpeg',
     '.jpeg': 'image/jpeg',
@@ -79,6 +73,8 @@ MIME_TYPES = {
     '.svg':  'image/svg+xml',
     '.ico':  'image/x-icon',
 }
+
+IMAGE_EXTS = frozenset(MIME_TYPES)   # derived — MIME_TYPES is the single source of truth
 
 # ── Wire protocol ──────────────────────────────────────────────────────────────
 
@@ -107,7 +103,7 @@ def entry_info(entry, rel_path):
     """Build a listing entry dict for a single DirEntry."""
     info = {'u': rel_path}
     try:
-        st = entry.stat(follow_symlinks=False)
+        st = entry.stat()   # follow symlinks to report target metadata
         info['m'] = int(st.st_mtime)
         info['s'] = st.st_size
         if stat.S_ISDIR(st.st_mode):
@@ -130,7 +126,9 @@ def list_directory(dir_path, recursive=False):
             return
         for entry in entries:
             rel = prefix + entry.name if prefix else entry.name
-            if entry.is_dir(follow_symlinks=False):
+            # Follow dir-symlinks only in non-recursive mode (avoids infinite loops
+            # when recursing, while making symlinked dirs visible at the top level).
+            if entry.is_dir(follow_symlinks=not recursive):
                 if recursive:
                     _scan(entry.path, rel + '/')
                 else:
