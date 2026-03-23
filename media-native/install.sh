@@ -24,10 +24,16 @@ esac
 # ── Install Python package ────────────────────────────────────────────────────
 # This installs media_native_host and media-open as console scripts and pulls
 # in jeepney (D-Bus client) as a dependency on Linux.
+# Prefer pipx (isolated venv, works on all systems); fall back to pip3 --user.
 
-pip3 install --user "$SCRIPT_DIR" || \
-pip3 install --user --break-system-packages "$SCRIPT_DIR"
-echo "Installed package (with dependencies) via pip"
+if command -v pipx >/dev/null 2>&1; then
+  pipx install --force "$SCRIPT_DIR"
+  echo "Installed package via pipx"
+else
+  pip3 install --user "$SCRIPT_DIR" || \
+  pip3 install --user --break-system-packages "$SCRIPT_DIR"
+  echo "Installed package via pip"
+fi
 
 # ── Locate the installed host binary ─────────────────────────────────────────
 # pip --user installs scripts to the user scripts directory; ask Python where
