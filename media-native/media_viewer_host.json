@@ -1,0 +1,7 @@
+{
+  "name": "media_viewer_host",
+  "description": "Native messaging host for the Media Viewer Firefox extension",
+  "path": "REPLACE_WITH_INSTALL_PATH/media_native_host.py",
+  "type": "stdio",
+  "allowed_extensions": ["media-viewer@xplat.github.io"]
+}
