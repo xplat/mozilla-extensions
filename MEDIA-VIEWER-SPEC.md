@@ -72,9 +72,11 @@ Binds to `127.7.203.98:0` (OS-assigned random port).  Handles:
 * `GET /<token>/media-dir/<encoded-absolute-path>[?recursive=1]` — return a directory
   listing JSON object (see below).
 * `GET /<token>/media-thumb/<encoded-absolute-path>` — return a 128×128 thumbnail PNG.
-  Checks the XDG thumbnail cache (`~/.cache/thumbnails/normal/<md5>.png`) first;
-  generates and caches via Pillow if a cached copy is absent or stale.
-  Returns `404` if Pillow is unavailable and no cached thumbnail exists.
+  Checks the XDG thumbnail cache (`~/.cache/thumbnails/normal/<md5>.png`) first.
+  On a cache miss, generates via the platform thumbnail service and caches the result:
+  Linux: Tumbler (`org.freedesktop.thumbnails.Thumbnailer1` D-Bus, via `dbus-python`
+  or `dbus-send`); macOS: `qlmanage -t`.  Falls back to Pillow as a last resort.
+  Returns `404` if no thumbnail can be produced.
 * `OPTIONS` — CORS preflight.
 
 On startup the host sends:

@@ -31,16 +31,18 @@ Native messaging wire format: 4-byte LE length prefix + UTF-8 JSON.
 """
 
 import sys, os, json, struct, secrets, threading, time, pathlib, select, stat
-import hashlib, tempfile
+import hashlib, tempfile, platform, subprocess
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# Optional Pillow — used to generate thumbnails when the XDG cache lacks them.
+# Optional Pillow — last-resort thumbnail generator only.
 try:
     from PIL import Image as _PILImage, PngImagePlugin as _PngInfo
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
+
+PLATFORM = platform.system()   # 'Linux' | 'Darwin' | …
 
 QUEUE_DIR     = pathlib.Path.home() / '.media-viewer' / 'queue'
 POLL_INTERVAL = 0.5
@@ -272,22 +274,13 @@ class MediaHandler(BaseHTTPRequestHandler):
 
         thumb_path = _xdg_thumb_path(file_path)
 
-        # Use cached thumbnail if it exists and is not stale.
-        if thumb_path.exists():
-            try:
-                file_mtime = int(os.path.getmtime(file_path))
-                thumb_mtime = _read_thumb_mtime(thumb_path)
-                if thumb_mtime is None or thumb_mtime >= file_mtime:
-                    self._send_png(thumb_path, head_only)
-                    return
-            except OSError:
-                pass  # fall through to regeneration
+        if thumb_path.exists() and _is_thumb_valid(thumb_path, file_path):
+            self._send_png(thumb_path, head_only)
+            return
 
-        # Try generating with Pillow.
-        if PIL_AVAILABLE:
-            if _generate_xdg_thumb(file_path, thumb_path):
-                self._send_png(thumb_path, head_only)
-                return
+        if _try_generate_thumbnail(file_path, thumb_path):
+            self._send_png(thumb_path, head_only)
+            return
 
         self._error(404, 'No thumbnail available')
 
@@ -318,28 +311,138 @@ class MediaHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-# ── XDG thumbnail helpers ──────────────────────────────────────────────────────
+# ── Thumbnail helpers ──────────────────────────────────────────────────────────
 
 _THUMB_DIR = pathlib.Path.home() / '.cache' / 'thumbnails' / 'normal'
 
+
 def _xdg_thumb_path(file_path):
-    """Return the XDG 'normal' (128px) thumbnail path for an absolute file path."""
-    uri = pathlib.Path(file_path).as_uri()          # file:///abs/path
+    """Return the XDG 'normal' (128px) thumbnail cache path for an absolute file path."""
+    uri = pathlib.Path(file_path).as_uri()
     md5 = hashlib.md5(uri.encode()).hexdigest()
     return _THUMB_DIR / (md5 + '.png')
 
-def _read_thumb_mtime(thumb_path):
-    """Read Thumb::MTime from a PNG tEXt chunk; return int or None."""
-    if not PIL_AVAILABLE:
-        return None
-    try:
-        with _PILImage.open(str(thumb_path)) as img:
-            return int(img.text.get('Thumb::MTime', '0')) or None
-    except Exception:
-        return None
 
-def _generate_xdg_thumb(file_path, thumb_path):
-    """Generate a 128px XDG thumbnail and write it to thumb_path. Returns True on success."""
+def _is_thumb_valid(thumb_path, file_path):
+    """Return True if the cached thumbnail is up-to-date for file_path."""
+    try:
+        file_mtime = int(os.path.getmtime(file_path))
+        # Prefer the embedded Thumb::MTime tEXt chunk (XDG spec) when Pillow is available.
+        if PIL_AVAILABLE:
+            try:
+                with _PILImage.open(str(thumb_path)) as img:
+                    meta = int(img.text.get('Thumb::MTime', '0'))
+                if meta > 0:
+                    return meta >= file_mtime
+            except Exception:
+                pass
+        # Fall back to comparing filesystem mtimes (works for qlmanage-generated thumbs too).
+        return int(os.path.getmtime(str(thumb_path))) >= file_mtime
+    except OSError:
+        return False
+
+
+def _try_generate_thumbnail(file_path, thumb_path):
+    """Generate a thumbnail using platform-appropriate tools. Returns True on success."""
+    if PLATFORM == 'Linux':
+        if _request_tumbler_and_wait(file_path, thumb_path):
+            return True
+    elif PLATFORM == 'Darwin':
+        if _generate_via_qlmanage(file_path, thumb_path):
+            return True
+    # Last resort: Pillow (any platform).
+    if PIL_AVAILABLE:
+        return _generate_via_pillow(file_path, thumb_path)
+    return False
+
+
+# ── Linux: Tumbler via D-Bus ───────────────────────────────────────────────────
+
+def _request_tumbler_and_wait(file_path, thumb_path):
+    """Ask Tumbler to generate a thumbnail and poll for up to 3 s. Returns True if it appears."""
+    uri  = pathlib.Path(file_path).as_uri()
+    mime = MIME_TYPES.get(os.path.splitext(file_path)[1].lower(), 'application/octet-stream')
+    if not (_tumbler_dbus_module(uri, mime) or _tumbler_dbus_send(uri, mime)):
+        return False
+    for _ in range(30):
+        time.sleep(0.1)
+        if thumb_path.exists():
+            return True
+    return False
+
+
+def _tumbler_dbus_module(uri, mime):
+    """Call Thumbnailer1.Queue via dbus-python. Returns True if the call was accepted."""
+    try:
+        import dbus  # type: ignore
+        bus   = dbus.SessionBus()
+        obj   = bus.get_object('org.freedesktop.thumbnails.Thumbnailer1',
+                               '/org/freedesktop/thumbnails/Thumbnailer1')
+        iface = dbus.Interface(obj, 'org.freedesktop.thumbnails.Thumbnailer1')
+        iface.Queue(dbus.Array([uri], signature='s'),
+                    dbus.Array([mime], signature='s'),
+                    'normal', 'default', dbus.UInt32(0))
+        return True
+    except Exception:
+        return False
+
+
+def _tumbler_dbus_send(uri, mime):
+    """Call Thumbnailer1.Queue via dbus-send subprocess. Returns True if the call was accepted."""
+    try:
+        r = subprocess.run(
+            ['dbus-send', '--session', '--print-reply',
+             '--dest=org.freedesktop.thumbnails.Thumbnailer1',
+             '/org/freedesktop/thumbnails/Thumbnailer1',
+             'org.freedesktop.thumbnails.Thumbnailer1.Queue',
+             'array:string:' + uri,
+             'array:string:' + mime,
+             'string:normal', 'string:default', 'uint32:0'],
+            capture_output=True, timeout=5,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+# ── macOS: QuickLook via qlmanage ─────────────────────────────────────────────
+
+def _generate_via_qlmanage(file_path, thumb_path):
+    """Use qlmanage to generate a 128px thumbnail and cache it. Returns True on success."""
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            r = subprocess.run(
+                ['qlmanage', '-t', '-s', '128', '-o', tmp_dir, file_path],
+                capture_output=True, timeout=15,
+            )
+            if r.returncode != 0:
+                return False
+            candidates = [f for f in os.listdir(tmp_dir) if f.lower().endswith('.png')]
+            if not candidates:
+                return False
+            src = os.path.join(tmp_dir, candidates[0])
+            thumb_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=str(thumb_path.parent), suffix='.png')
+            os.close(fd)
+            try:
+                import shutil
+                shutil.copy2(src, tmp)
+                os.replace(tmp, str(thumb_path))
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        return True
+    except Exception:
+        return False
+
+
+# ── Fallback: Pillow ──────────────────────────────────────────────────────────
+
+def _generate_via_pillow(file_path, thumb_path):
+    """Generate a 128px XDG thumbnail via Pillow. Returns True on success."""
     try:
         with _PILImage.open(file_path) as img:
             img.thumbnail((128, 128))
@@ -347,7 +450,6 @@ def _generate_xdg_thumb(file_path, thumb_path):
             info.add_text('Thumb::URI',   pathlib.Path(file_path).as_uri())
             info.add_text('Thumb::MTime', str(int(os.path.getmtime(file_path))))
             thumb_path.parent.mkdir(parents=True, exist_ok=True)
-            # Write atomically via a temp file in the same dir.
             fd, tmp = tempfile.mkstemp(dir=str(thumb_path.parent), suffix='.png')
             os.close(fd)
             try:
