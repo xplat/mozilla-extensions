@@ -31,8 +31,16 @@ Native messaging wire format: 4-byte LE length prefix + UTF-8 JSON.
 """
 
 import sys, os, json, struct, secrets, threading, time, pathlib, select, stat
+import hashlib, tempfile
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# Optional Pillow — used to generate thumbnails when the XDG cache lacks them.
+try:
+    from PIL import Image as _PILImage, PngImagePlugin as _PngInfo
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
 QUEUE_DIR     = pathlib.Path.home() / '.media-viewer' / 'queue'
 POLL_INTERVAL = 0.5
@@ -178,6 +186,8 @@ class MediaHandler(BaseHTTPRequestHandler):
             params     = urllib.parse.parse_qs(query_str)
             recursive  = '1' in params.get('recursive', [])
             self._serve_dir(file_path, recursive, head_only)
+        elif req_type == 'media-thumb':
+            self._serve_thumb(file_path, head_only)
         else:
             self._error(400, 'Unknown request type')
 
@@ -249,6 +259,54 @@ class MediaHandler(BaseHTTPRequestHandler):
         if not head_only:
             self.wfile.write(body)
 
+    # ── Thumbnail serving ──────────────────────────────────────────────────
+
+    def _serve_thumb(self, file_path, head_only):
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in IMAGE_EXTS:
+            self._error(400, 'Not a supported image type')
+            return
+        if not os.path.isfile(file_path):
+            self._error(404, 'File not found')
+            return
+
+        thumb_path = _xdg_thumb_path(file_path)
+
+        # Use cached thumbnail if it exists and is not stale.
+        if thumb_path.exists():
+            try:
+                file_mtime = int(os.path.getmtime(file_path))
+                thumb_mtime = _read_thumb_mtime(thumb_path)
+                if thumb_mtime is None or thumb_mtime >= file_mtime:
+                    self._send_png(thumb_path, head_only)
+                    return
+            except OSError:
+                pass  # fall through to regeneration
+
+        # Try generating with Pillow.
+        if PIL_AVAILABLE:
+            if _generate_xdg_thumb(file_path, thumb_path):
+                self._send_png(thumb_path, head_only)
+                return
+
+        self._error(404, 'No thumbnail available')
+
+    def _send_png(self, png_path, head_only):
+        try:
+            data = b'' if head_only else png_path.read_bytes()
+            size = png_path.stat().st_size
+        except OSError as exc:
+            self._error(500, str(exc))
+            return
+        self.send_response(200)
+        self.send_cors()
+        self.send_header('Content-Type',   'image/png')
+        self.send_header('Content-Length', str(size))
+        self.send_header('Cache-Control',  'max-age=3600')
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(data)
+
     # ── Error helper ───────────────────────────────────────────────────────
 
     def _error(self, code, msg):
@@ -258,6 +316,52 @@ class MediaHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+# ── XDG thumbnail helpers ──────────────────────────────────────────────────────
+
+_THUMB_DIR = pathlib.Path.home() / '.cache' / 'thumbnails' / 'normal'
+
+def _xdg_thumb_path(file_path):
+    """Return the XDG 'normal' (128px) thumbnail path for an absolute file path."""
+    uri = pathlib.Path(file_path).as_uri()          # file:///abs/path
+    md5 = hashlib.md5(uri.encode()).hexdigest()
+    return _THUMB_DIR / (md5 + '.png')
+
+def _read_thumb_mtime(thumb_path):
+    """Read Thumb::MTime from a PNG tEXt chunk; return int or None."""
+    if not PIL_AVAILABLE:
+        return None
+    try:
+        with _PILImage.open(str(thumb_path)) as img:
+            return int(img.text.get('Thumb::MTime', '0')) or None
+    except Exception:
+        return None
+
+def _generate_xdg_thumb(file_path, thumb_path):
+    """Generate a 128px XDG thumbnail and write it to thumb_path. Returns True on success."""
+    try:
+        with _PILImage.open(file_path) as img:
+            img.thumbnail((128, 128))
+            info = _PngInfo.PngInfo()
+            info.add_text('Thumb::URI',   pathlib.Path(file_path).as_uri())
+            info.add_text('Thumb::MTime', str(int(os.path.getmtime(file_path))))
+            thumb_path.parent.mkdir(parents=True, exist_ok=True)
+            # Write atomically via a temp file in the same dir.
+            fd, tmp = tempfile.mkstemp(dir=str(thumb_path.parent), suffix='.png')
+            os.close(fd)
+            try:
+                img.save(tmp, 'PNG', pnginfo=info)
+                os.replace(tmp, str(thumb_path))
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        return True
+    except Exception:
+        return False
 
 
 def start_http_server():

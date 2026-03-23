@@ -431,6 +431,77 @@ html, body {
   display: none;
 }
 
+/* ── THUMBNAIL MODE ─────────────────────────────────────────────────────── */
+
+#file-list.thumbnails {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  padding: 4px;
+  gap: 3px;
+}
+
+#file-list.thumbnails .file-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  width: 90px;
+  height: 108px;
+  padding: 3px;
+  gap: 3px;
+  overflow: hidden;
+  min-height: unset;
+}
+
+/* Directories / non-image tiles are narrower and vertically centred */
+#file-list.thumbnails .file-item.is-dir,
+#file-list.thumbnails .file-item.dimmed {
+  justify-content: center;
+  height: auto;
+  min-height: 28px;
+}
+
+.thumb-img {
+  width: 84px;
+  height: 84px;
+  object-fit: contain;
+  background: #111;
+  flex-shrink: 0;
+}
+
+/* Placeholder shown when thumbnail fails to load */
+.thumb-img.thumb-missing {
+  visibility: hidden;
+}
+
+.thumb-label {
+  font-size: 10px;
+  font-family: monospace;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+  text-align: center;
+  line-height: 1.3;
+}
+
+#file-list.thumbnails .file-item.is-dir .file-icon {
+  font-size: 16px;
+  color: var(--dir-color);
+  width: auto;
+}
+
+#file-list.thumbnails .file-item.is-dir .thumb-label {
+  color: var(--dir-color);
+}
+
+#file-list.thumbnails .file-item.selected .thumb-label,
+#file-list.thumbnails .file-item.selected .file-icon {
+  color: var(--sel-text);
+}
+
 /* ── RESPONSIVE ─────────────────────────────────────────────────────────── */
 
 @media (max-width: 600px) {

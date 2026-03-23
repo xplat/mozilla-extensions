@@ -24,8 +24,9 @@ port or secret token:
 
 | Prefix | Purpose |
 |--------|---------|
-| `http://127.7.203.98/media-file/` | Fetch an image file |
-| `http://127.7.203.98/media-dir/`  | Fetch a directory listing (JSON) |
+| `http://127.7.203.98/media-file/`  | Fetch an image file |
+| `http://127.7.203.98/media-dir/`   | Fetch a directory listing (JSON) |
+| `http://127.7.203.98/media-thumb/` | Fetch a 128px thumbnail PNG |
 
 The background script intercepts `webRequest.onBeforeRequest` for both prefixes and
 rewrites them to the real native-host HTTP server URL:
@@ -70,6 +71,10 @@ Binds to `127.7.203.98:0` (OS-assigned random port).  Handles:
   `Content-Type`, supporting `Range` requests (HTTP 206).
 * `GET /<token>/media-dir/<encoded-absolute-path>[?recursive=1]` — return a directory
   listing JSON object (see below).
+* `GET /<token>/media-thumb/<encoded-absolute-path>` — return a 128×128 thumbnail PNG.
+  Checks the XDG thumbnail cache (`~/.cache/thumbnails/normal/<md5>.png`) first;
+  generates and caches via Pillow if a cached copy is absent or stale.
+  Returns `404` if Pillow is unavailable and no cached thumbnail exists.
 * `OPTIONS` — CORS preflight.
 
 On startup the host sends:
@@ -135,6 +140,7 @@ the URL.
   "selectorVisible": true,    // Z — selector panel shown
   "showHidden":      false,   // . — show dotfiles
   "sortBy":          "name",  // s (selector) — "name" | "mtime" | "size"
+  "thumbnails":      false,   // v — thumbnail grid vs. filename list
   "rotation":        0,       // r/R/N (viewer) — 0 | 90 | 180 | 270 degrees
   "mirror":          false,   // M (viewer) — mirror image horizontally (xzgv 'm')
   "flip":            false,   // F (viewer) — flip image vertically    (xzgv 'f')
@@ -270,6 +276,7 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
 | `f` | Toggle browser-level fullscreen (also hides selector; restores on exit) |
 | `i` | Toggle file-info overlay (filename, size, mtime, dimensions) |
 | `.` | Toggle visibility of hidden (dot) files |
+| `v` | Toggle thumbnail grid / filename-list mode in selector (xzgv `v`) |
 | `[` / `]` | Narrow / widen selector pane by 16 px (xzgv `[` / `]`) |
 | `~` | Reset selector pane to default width (xzgv `~`) |
 
@@ -340,6 +347,9 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
 * **Alt+ replacements**: xzgv's `Alt-r` (reduce-only) is mapped to `` ` ``.  Other
   Alt+ shortcuts either have equivalents (`Alt-n/s/d` sort → `s` key cycle) or are
   omitted (tagging, thumbnail management, dithering).
+* **`v` (thumbnail toggle)**: xzgv's `v` cycled between large and small thumbnail
+  sizes.  Here it toggles between a thumbnail grid (128px images, lazy-loaded
+  via `media-thumb`) and the plain filename list.  State is persisted in history.
 * **Removed from xzgv**: copy, move, rename, delete, tagging, thumbnail
   management, dithering / interpolation controls.
 * **Removed**: `q` to quit — the browser provides adequate tab-close controls.

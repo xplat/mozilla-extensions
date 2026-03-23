@@ -4,8 +4,9 @@
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const LOOPBACK          = '127.7.203.98';
-const FILE_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-file/';
-const DIR_PROXY_PREFIX  = 'http://' + LOOPBACK + '/media-dir/';
+const FILE_PROXY_PREFIX  = 'http://' + LOOPBACK + '/media-file/';
+const DIR_PROXY_PREFIX   = 'http://' + LOOPBACK + '/media-dir/';
+const THUMB_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-thumb/';
 
 const IMAGE_EXTS = new Set([
   'jpg','jpeg','png','gif','webp','avif','bmp','tiff','tif','svg','ico'
@@ -28,6 +29,8 @@ var ui = {
   selectorVisible: true,
   showHidden:      false,
   sortBy:          'name', // 'name' | 'mtime' | 'size'
+  // Selector display
+  thumbnails:      false,  // v — thumbnail grid vs filename list
   // Image transform
   rotation:        0,      // 0 | 90 | 180 | 270 (degrees)
   mirror:          false,  // horizontal mirror (m key) — xzgv 'm'
@@ -108,6 +111,7 @@ function persistState(push, newDir, newFile) {
     selectorVisible: ui.selectorVisible,
     showHidden:      ui.showHidden,
     sortBy:          ui.sortBy,
+    thumbnails:      ui.thumbnails,
     rotation:        ui.rotation,
     mirror:          ui.mirror,
     flip:            ui.flip,
@@ -128,6 +132,7 @@ function applyHistoryState(state) {
   if (typeof state.recursive       === 'boolean') ui.recursive       = state.recursive;
   if (typeof state.selectorVisible === 'boolean') ui.selectorVisible = state.selectorVisible;
   if (typeof state.showHidden      === 'boolean') ui.showHidden      = state.showHidden;
+  if (typeof state.thumbnails      === 'boolean') ui.thumbnails      = state.thumbnails;
   if (typeof state.mirror          === 'boolean') ui.mirror          = state.mirror;
   if (typeof state.flip            === 'boolean') ui.flip            = state.flip;
   if (['name','mtime','size'].indexOf(state.sortBy) !== -1) ui.sortBy = state.sortBy;
@@ -142,6 +147,12 @@ function toProxyFile(fileUrl) {
   var path    = fileUrl.replace(/^file:\/\//, '');
   var encoded = path.split('/').map(encodeURIComponent).join('/');
   return FILE_PROXY_PREFIX + encoded;
+}
+
+function toProxyThumb(fileUrl) {
+  var path    = fileUrl.replace(/^file:\/\//, '');
+  var encoded = path.split('/').map(encodeURIComponent).join('/');
+  return THUMB_PROXY_PREFIX + encoded;
 }
 
 function toProxyDir(dirUrl, recursive) {
@@ -235,6 +246,7 @@ var selectedIdx = -1;
 function renderSelector() {
   fileListEl.innerHTML = '';
   selectedIdx = -1;
+  fileListEl.classList.toggle('thumbnails', ui.thumbnails);
 
   listing.forEach(function(item, idx) {
     var el = document.createElement('div');
@@ -245,21 +257,11 @@ function renderSelector() {
     if (!sel)         el.classList.add('dimmed');
     if (item.t==='d') el.classList.add('is-dir');
 
-    var iconEl = document.createElement('span');
-    iconEl.className = 'file-icon';
-    iconEl.textContent = (item.t === 'd') ? '>' : ' ';
-
-    var nameEl = document.createElement('span');
-    nameEl.className = 'file-name';
-    nameEl.textContent = item.u;
-
-    var metaEl = document.createElement('span');
-    metaEl.className = 'file-meta';
-    if (item.s !== undefined) metaEl.textContent = fmtSize(item.s);
-
-    el.appendChild(iconEl);
-    el.appendChild(nameEl);
-    el.appendChild(metaEl);
+    if (ui.thumbnails) {
+      _renderThumbItem(el, item);
+    } else {
+      _renderListItem(el, item);
+    }
 
     if (sel) {
       el.addEventListener('click', function() {
@@ -273,6 +275,52 @@ function renderSelector() {
 
     fileListEl.appendChild(el);
   });
+}
+
+function _renderListItem(el, item) {
+  var iconEl = document.createElement('span');
+  iconEl.className = 'file-icon';
+  iconEl.textContent = (item.t === 'd') ? '>' : ' ';
+
+  var nameEl = document.createElement('span');
+  nameEl.className = 'file-name';
+  nameEl.textContent = item.u;
+
+  var metaEl = document.createElement('span');
+  metaEl.className = 'file-meta';
+  if (item.s !== undefined) metaEl.textContent = fmtSize(item.s);
+
+  el.appendChild(iconEl);
+  el.appendChild(nameEl);
+  el.appendChild(metaEl);
+}
+
+function _renderThumbItem(el, item) {
+  if (item.t === 'd' || !isDisplayable(item.u)) {
+    // Non-image: show icon + name as a compact tile
+    var iconEl = document.createElement('span');
+    iconEl.className = 'file-icon';
+    iconEl.textContent = (item.t === 'd') ? '>' : ' ';
+    var labelEl = document.createElement('span');
+    labelEl.className = 'thumb-label';
+    labelEl.textContent = item.u;
+    el.appendChild(iconEl);
+    el.appendChild(labelEl);
+  } else {
+    var fileUrl  = currentDir.replace(/\/$/, '') + '/' + item.u;
+    var imgEl = document.createElement('img');
+    imgEl.className = 'thumb-img';
+    imgEl.src = toProxyThumb(fileUrl);
+    imgEl.alt = '';
+    imgEl.draggable = false;
+    imgEl.loading = 'lazy';
+    imgEl.addEventListener('error', function() { imgEl.classList.add('thumb-missing'); });
+    var labelEl = document.createElement('span');
+    labelEl.className = 'thumb-label';
+    labelEl.textContent = item.u;
+    el.appendChild(imgEl);
+    el.appendChild(labelEl);
+  }
 }
 
 function selectItem(idx, scroll) {
@@ -615,6 +663,17 @@ function goToParent() {
 
 // ── Toggle helpers ─────────────────────────────────────────────────────────
 
+function toggleThumbnails() {
+  ui.thumbnails = !ui.thumbnails;
+  persistState(false);
+  renderSelector();
+  // Re-scroll to keep selected item visible after layout change.
+  if (selectedIdx >= 0) {
+    var el = fileListEl.children[selectedIdx];
+    if (el) el.scrollIntoView({ block: 'nearest' });
+  }
+}
+
 function toggleRecursive() {
   ui.recursive = !ui.recursive;
   if (btnRecursive) btnRecursive.classList.toggle('active', ui.recursive);
@@ -717,6 +776,8 @@ document.addEventListener('keydown', function(e) {
         e.preventDefault(); toggleInfoOverlay(); return;
       case '.':
         e.preventDefault(); toggleHidden(); return;
+      case 'v':
+        e.preventDefault(); toggleThumbnails(); return;
       case 'Tab':
         e.preventDefault();
         setFocusMode(focusMode === 'selector' ? 'viewer' : 'selector');

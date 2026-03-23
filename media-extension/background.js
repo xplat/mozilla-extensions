@@ -13,8 +13,9 @@ const LOOPBACK = '127.7.203.98';
 // Proxy URL prefixes used by the viewer.  The background rewrites every
 // request to the real server URL (with port + token) on the fly, so neither
 // the port nor the token ever appear in the viewer page or its URL.
-const FILE_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-file/';
-const DIR_PROXY_PREFIX  = 'http://' + LOOPBACK + '/media-dir/';
+const FILE_PROXY_PREFIX  = 'http://' + LOOPBACK + '/media-file/';
+const DIR_PROXY_PREFIX   = 'http://' + LOOPBACK + '/media-dir/';
+const THUMB_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-thumb/';
 
 var serverPort  = null;
 var serverToken = null;
@@ -52,11 +53,19 @@ chrome.webRequest.onBeforeRequest.addListener(
       };
     }
 
+    if (url.startsWith(THUMB_PROXY_PREFIX)) {
+      encodedPath = url.slice(THUMB_PROXY_PREFIX.length);
+      return {
+        redirectUrl: 'http://' + LOOPBACK + ':' + serverPort +
+                     '/' + serverToken + '/media-thumb/' + encodedPath
+      };
+    }
+
     return { cancel: true };
   },
   {
-    urls: [FILE_PROXY_PREFIX + '*', DIR_PROXY_PREFIX + '*'],
-    types: ['xmlhttprequest', 'other']
+    urls: [FILE_PROXY_PREFIX + '*', DIR_PROXY_PREFIX + '*', THUMB_PROXY_PREFIX + '*'],
+    types: ['xmlhttprequest', 'image', 'other']
   },
   ['blocking']
 );
