@@ -74,8 +74,9 @@ Binds to `127.7.203.98:0` (OS-assigned random port).  Handles:
 * `GET /<token>/media-thumb/<encoded-absolute-path>` — return a 128×128 thumbnail PNG.
   Checks the XDG thumbnail cache (`~/.cache/thumbnails/normal/<md5>.png`) first.
   On a cache miss, generates via the platform thumbnail service and caches the result:
-  Linux: Tumbler (`org.freedesktop.thumbnails.Thumbnailer1` D-Bus, via `dbus-python`
-  or `dbus-send`); macOS: `qlmanage -t`.  Falls back to Pillow as a last resort.
+  Linux: Tumbler (`org.freedesktop.thumbnails.Thumbnailer1` D-Bus) tried via
+  `jeepney` (pip dependency), then `dbus-python`, then `dbus-send` subprocess;
+  macOS: `qlmanage -t`.  Pillow is a last resort on any platform.
   Returns `404` if no thumbnail can be produced.
 * `OPTIONS` — CORS preflight.
 
@@ -101,9 +102,10 @@ media-extension/
   viewer.css             Styling
   icons/                 16 / 48 / 128 px PNGs
 media-native/
-  media_native_host.py   Native messaging host
-  media-open             CLI tool to open a directory/file
-  media_viewer_host.json Native messaging manifest
+  pyproject.toml         pip package definition (declares jeepney dependency)
+  media_native_host.py   Native messaging host (console script: media_native_host)
+  media_open.py          CLI tool to open a directory/file (console script: media-open)
+  media_viewer_host.json Native messaging manifest template (reference only)
   install.sh             Installation script
 ```
 
@@ -383,10 +385,12 @@ cd media-native
 ```
 
 The script:
-1. Copies `media_native_host.py` to `~/.local/share/media-viewer/`
-2. Copies `media-open` to `~/.local/bin/` (or `~/bin/` as fallback)
-3. Writes the native messaging manifest to the correct OS location
-4. Creates `~/.media-viewer/queue/`
+1. Runs `pip3 install --user .` from `media-native/`, which installs
+   `media_native_host` and `media-open` as console scripts and pulls in
+   `jeepney` (pure-Python D-Bus client) on Linux.
+2. Locates the installed `media_native_host` binary via `sysconfig`.
+3. Writes the native messaging manifest to the correct OS location.
+4. Creates `~/.media-viewer/queue/`.
 
 ### CLI Usage
 

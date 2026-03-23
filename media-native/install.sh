@@ -3,7 +3,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_DIR="$HOME/.local/share/media-viewer"
 QUEUE_DIR="$HOME/.media-viewer/queue"
 
 # ── Detect OS ────────────────────────────────────────────────────────────────
@@ -22,34 +21,39 @@ case "$OS" in
     ;;
 esac
 
-# ── Install Python host ───────────────────────────────────────────────────────
+# ── Install Python package ────────────────────────────────────────────────────
+# This installs media_native_host and media-open as console scripts and pulls
+# in jeepney (D-Bus client) as a dependency on Linux.
 
-mkdir -p "$INSTALL_DIR"
-cp "$SCRIPT_DIR/media_native_host.py" "$INSTALL_DIR/"
-chmod +x "$INSTALL_DIR/media_native_host.py"
-echo "Installed host → $INSTALL_DIR/media_native_host.py"
+pip3 install --user "$SCRIPT_DIR"
+echo "Installed package (with dependencies) via pip"
 
-# ── Install CLI tool ──────────────────────────────────────────────────────────
+# ── Locate the installed host binary ─────────────────────────────────────────
+# pip --user installs scripts to the user scripts directory; ask Python where
+# that is to handle non-standard setups correctly.
 
-if [ -d "$HOME/.local/bin" ]; then
-  BIN_DIR="$HOME/.local/bin"
-elif [ -d "$HOME/bin" ]; then
-  BIN_DIR="$HOME/bin"
-else
-  mkdir -p "$HOME/.local/bin"
-  BIN_DIR="$HOME/.local/bin"
+SCRIPTS_DIR="$(python3 -c \
+  'import sysconfig; print(sysconfig.get_path("scripts", "posix_user"))')"
+HOST_BIN="$SCRIPTS_DIR/media_native_host"
+
+if [ ! -f "$HOST_BIN" ]; then
+  # Fallback: common default
+  HOST_BIN="$HOME/.local/bin/media_native_host"
 fi
-
-cp "$SCRIPT_DIR/media-open" "$BIN_DIR/media-open"
-chmod +x "$BIN_DIR/media-open"
-echo "Installed CLI  → $BIN_DIR/media-open"
+echo "Host binary → $HOST_BIN"
 
 # ── Write native messaging manifest ──────────────────────────────────────────
 
 mkdir -p "$NM_HOSTS_DIR"
-sed "s|REPLACE_WITH_INSTALL_PATH|$INSTALL_DIR|g" \
-    "$SCRIPT_DIR/media_viewer_host.json" \
-    > "$NM_HOSTS_DIR/media_viewer_host.json"
+cat > "$NM_HOSTS_DIR/media_viewer_host.json" <<JSON
+{
+  "name": "media_viewer_host",
+  "description": "Native messaging host for the Media Viewer Firefox extension",
+  "path": "$HOST_BIN",
+  "type": "stdio",
+  "allowed_extensions": ["media-viewer@xplat.github.io"]
+}
+JSON
 echo "Installed manifest → $NM_HOSTS_DIR/media_viewer_host.json"
 
 # ── Create queue directory ────────────────────────────────────────────────────

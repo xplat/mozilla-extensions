@@ -362,7 +362,10 @@ def _request_tumbler_and_wait(file_path, thumb_path):
     """Ask Tumbler to generate a thumbnail and poll for up to 3 s. Returns True if it appears."""
     uri  = pathlib.Path(file_path).as_uri()
     mime = MIME_TYPES.get(os.path.splitext(file_path)[1].lower(), 'application/octet-stream')
-    if not (_tumbler_dbus_module(uri, mime) or _tumbler_dbus_send(uri, mime)):
+    # Try each D-Bus binding in order of preference; stop at first success.
+    if not (_tumbler_jeepney(uri, mime) or
+            _tumbler_dbus_python(uri, mime) or
+            _tumbler_dbus_send(uri, mime)):
         return False
     for _ in range(30):
         time.sleep(0.1)
@@ -371,8 +374,31 @@ def _request_tumbler_and_wait(file_path, thumb_path):
     return False
 
 
-def _tumbler_dbus_module(uri, mime):
-    """Call Thumbnailer1.Queue via dbus-python. Returns True if the call was accepted."""
+def _tumbler_jeepney(uri, mime):
+    """Call Thumbnailer1.Queue via jeepney (pure-Python D-Bus). Returns True if accepted."""
+    try:
+        from jeepney import DBusAddress, new_method_call          # type: ignore
+        from jeepney.io.blocking import open_dbus_connection      # type: ignore
+        addr = DBusAddress(
+            '/org/freedesktop/thumbnails/Thumbnailer1',
+            bus_name='org.freedesktop.thumbnails.Thumbnailer1',
+            interface='org.freedesktop.thumbnails.Thumbnailer1',
+        )
+        # Signature: as as s s u  (uris, mimetypes, flavor, scheduler, dequeue_handle)
+        msg  = new_method_call(addr, 'Queue', 'asasssu',
+                               ([uri], [mime], 'normal', 'default', 0))
+        conn = open_dbus_connection(bus='SESSION')
+        try:
+            conn.send_and_get_reply(msg, timeout=5)
+        finally:
+            conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def _tumbler_dbus_python(uri, mime):
+    """Call Thumbnailer1.Queue via dbus-python. Returns True if accepted."""
     try:
         import dbus  # type: ignore
         bus   = dbus.SessionBus()
@@ -388,7 +414,7 @@ def _tumbler_dbus_module(uri, mime):
 
 
 def _tumbler_dbus_send(uri, mime):
-    """Call Thumbnailer1.Queue via dbus-send subprocess. Returns True if the call was accepted."""
+    """Call Thumbnailer1.Queue via dbus-send subprocess. Returns True if accepted."""
     try:
         r = subprocess.run(
             ['dbus-send', '--session', '--print-reply',
