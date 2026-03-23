@@ -11,24 +11,37 @@ const IMAGE_EXTS = new Set([
   'jpg','jpeg','png','gif','webp','avif','bmp','tiff','tif','svg','ico'
 ]);
 
+// Scale steps for s/S keys (xzgv-style integer-ratio stepping)
+const SCALE_STEPS = [0.1, 0.125, 0.167, 0.25, 0.333, 0.5, 0.667, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
+
 // ── Mutable state ──────────────────────────────────────────────────────────
 
 var currentDir   = null;   // current directory as a file:// URL
 var currentFile  = null;   // selected filename within currentDir (or null)
 var listing      = [];     // sorted array of entry objects from latest dir load
 
-// UI state — persisted in history.state
+// UI state — most persisted in history.state
 var ui = {
   zoomFit:         true,
+  zoomReduceOnly:  true,   // in fit mode: shrink large images but don't enlarge small ones
   recursive:       true,
   selectorVisible: true,
   showHidden:      false,
-  sortBy:          'name',  // 'name' | 'mtime' | 'size'
-  flip:            false,
+  sortBy:          'name', // 'name' | 'mtime' | 'size'
+  // Image transform
+  rotation:        0,      // 0 | 90 | 180 | 270 (degrees)
+  mirror:          false,  // horizontal mirror
+  scale:           1.0,    // scale factor when zoomFit=false
 };
 
-// Fullscreen bookkeeping — NOT persisted (ephemeral)
-var selectorStateBeforeFS = true;   // ui.selectorVisible before entering browser FS
+// Focus mode — NOT persisted (resets to selector on page load)
+var focusMode = 'selector'; // 'selector' | 'viewer'
+
+// Drag-to-scroll state
+var drag = { active: false, startX: 0, startY: 0, scrollX: 0, scrollY: 0, wasDrag: false };
+
+// Fullscreen bookkeeping — NOT persisted
+var selectorStateBeforeFS = true;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
@@ -41,6 +54,7 @@ var dirPathEl       = document.getElementById('dir-path');
 var fileListEl      = document.getElementById('file-list');
 var selectorPaneEl  = document.getElementById('selector-pane');
 var imagePaneEl     = document.getElementById('image-pane');
+var transformHostEl = document.getElementById('transform-host');
 var mainImageEl     = document.getElementById('main-image');
 var imgSpinnerEl    = document.getElementById('img-spinner');
 var infoOverlayEl   = document.getElementById('info-overlay');
@@ -50,8 +64,6 @@ var noImageHintEl   = document.getElementById('no-image-hint');
 var btnRecursive = document.getElementById('btn-recursive');
 var btnHidden    = document.getElementById('btn-hidden');
 var btnSort      = document.getElementById('btn-sort');
-var btnZoom      = document.getElementById('btn-zoom');
-var btnSelector  = document.getElementById('btn-selector');
 
 // ── Screen helpers ─────────────────────────────────────────────────────────
 
@@ -76,17 +88,19 @@ function buildPageUrl(dir, file) {
   return url;
 }
 
-// Persist ui state + (optionally updated) dir/file into history.
 function persistState(push, newDir, newFile) {
   var dir  = (newDir  !== undefined) ? newDir  : currentDir;
   var file = (newFile !== undefined) ? newFile : currentFile;
   var state = {
     zoomFit:         ui.zoomFit,
+    zoomReduceOnly:  ui.zoomReduceOnly,
     recursive:       ui.recursive,
     selectorVisible: ui.selectorVisible,
     showHidden:      ui.showHidden,
     sortBy:          ui.sortBy,
-    flip:            ui.flip,
+    rotation:        ui.rotation,
+    mirror:          ui.mirror,
+    scale:           ui.scale,
   };
   var url = buildPageUrl(dir, file);
   if (push) {
@@ -99,19 +113,19 @@ function persistState(push, newDir, newFile) {
 function applyHistoryState(state) {
   if (!state || typeof state !== 'object') return;
   if (typeof state.zoomFit         === 'boolean') ui.zoomFit         = state.zoomFit;
+  if (typeof state.zoomReduceOnly  === 'boolean') ui.zoomReduceOnly  = state.zoomReduceOnly;
   if (typeof state.recursive       === 'boolean') ui.recursive       = state.recursive;
   if (typeof state.selectorVisible === 'boolean') ui.selectorVisible = state.selectorVisible;
   if (typeof state.showHidden      === 'boolean') ui.showHidden      = state.showHidden;
-  if (typeof state.flip            === 'boolean') ui.flip            = state.flip;
+  if (typeof state.mirror          === 'boolean') ui.mirror          = state.mirror;
   if (['name','mtime','size'].indexOf(state.sortBy) !== -1) ui.sortBy = state.sortBy;
+  if (state.rotation === 0 || state.rotation === 90 ||
+      state.rotation === 180 || state.rotation === 270) ui.rotation = state.rotation;
+  if (typeof state.scale === 'number' && state.scale > 0) ui.scale  = state.scale;
 }
 
 // ── Proxy URL helpers ──────────────────────────────────────────────────────
 
-// Convert a file:// URL → proxy URL for fetching via the background.
-// e.g. "file:///home/user/pic.jpg" → "http://127.7.203.98/media-file//home/user/pic.jpg"
-// The double-slash after the prefix is intentional: the server strips the
-// token prefix via split('/', 3) which yields the leading '/' back.
 function toProxyFile(fileUrl) {
   var path    = fileUrl.replace(/^file:\/\//, '');
   var encoded = path.split('/').map(encodeURIComponent).join('/');
@@ -157,8 +171,6 @@ function sortItems(items) {
 function filterItems(items) {
   if (ui.showHidden) return items;
   return items.filter(function(i) {
-    // Show hidden files only when the path segment itself is hidden,
-    // not when a parent in a recursive path is hidden.
     var base = i.u.replace(/\/$/, '').split('/').pop();
     return base.charAt(0) !== '.';
   });
@@ -180,10 +192,9 @@ async function loadDir(dirUrl, push) {
   }
 
   var items = filterItems(data.files || []);
-  listing     = sortItems(items);
-  currentDir  = dirUrl;
+  listing    = sortItems(items);
+  currentDir = dirUrl;
 
-  // If the previously selected file is still present, keep it; otherwise clear.
   if (currentFile && !listing.some(function(i) { return i.u === currentFile; })) {
     currentFile = null;
   }
@@ -194,13 +205,11 @@ async function loadDir(dirUrl, push) {
   applyUiState();
   showScreen('viewer');
 
-  // Re-select / display current file if set.
   if (currentFile) {
     var selIdx = listing.findIndex(function(i) { return i.u === currentFile; });
-    if (selIdx >= 0) selectItem(selIdx, /*scroll=*/false);
+    if (selIdx >= 0) selectItem(selIdx, false);
     showImage(currentFile);
   } else {
-    // Highlight first selectable file (but don't auto-open).
     var firstFile = listing.findIndex(function(i) { return isSelectable(i) && i.t !== 'd'; });
     if (firstFile >= 0) selectItem(firstFile, false);
     else if (listing.length > 0) selectItem(0, false);
@@ -221,22 +230,20 @@ function renderSelector() {
     el.dataset.idx = String(idx);
 
     var sel = isSelectable(item);
-    if (!sel)        el.classList.add('dimmed');
+    if (!sel)         el.classList.add('dimmed');
     if (item.t==='d') el.classList.add('is-dir');
 
-    var iconEl  = document.createElement('span');
+    var iconEl = document.createElement('span');
     iconEl.className = 'file-icon';
-    iconEl.textContent = (item.t === 'd') ? '▸' : '·';
+    iconEl.textContent = (item.t === 'd') ? '>' : ' ';
 
-    var nameEl  = document.createElement('span');
+    var nameEl = document.createElement('span');
     nameEl.className = 'file-name';
     nameEl.textContent = item.u;
 
-    var metaEl  = document.createElement('span');
+    var metaEl = document.createElement('span');
     metaEl.className = 'file-meta';
-    if (item.s !== undefined) {
-      metaEl.textContent = fmtSize(item.s);
-    }
+    if (item.s !== undefined) metaEl.textContent = fmtSize(item.s);
 
     el.appendChild(iconEl);
     el.appendChild(nameEl);
@@ -244,6 +251,7 @@ function renderSelector() {
 
     if (sel) {
       el.addEventListener('click', function() {
+        setFocusMode('selector');
         selectItem(idx, false);
       });
       el.addEventListener('dblclick', function() {
@@ -274,14 +282,16 @@ function openItem(idx) {
   if (!isSelectable(item)) return;
 
   if (item.t === 'd') {
-    var sub = item.u.replace(/\/$/, '');
+    var sub    = item.u.replace(/\/$/, '');
     var newDir = currentDir.replace(/\/$/, '') + '/' + sub;
     currentFile = null;
-    loadDir(newDir, /*push=*/true);
+    loadDir(newDir, true);
+    setFocusMode('selector');
   } else {
     currentFile = item.u;
     persistState(false);
     showImage(item.u);
+    setFocusMode('viewer');
   }
 }
 
@@ -293,64 +303,214 @@ function showImage(filename) {
   var proxyUrl = toProxyFile(fileUrl);
 
   imgSpinnerEl.classList.remove('hidden');
-  mainImageEl.classList.add('loading');
-  noImageHintEl.style.display = 'none';
+  imagePaneEl.classList.remove('image-loaded');
   mainImageEl.src = proxyUrl;
 
   if (!infoOverlayEl.classList.contains('hidden')) {
     updateInfoOverlay(filename);
   }
+
+  document.title = filename + ' — Media Viewer';
 }
 
 mainImageEl.addEventListener('load', function() {
   imgSpinnerEl.classList.add('hidden');
-  mainImageEl.classList.remove('loading');
   imagePaneEl.classList.add('image-loaded');
-  applyFlip();
+  applyImageTransform();
 });
 
 mainImageEl.addEventListener('error', function() {
   imgSpinnerEl.classList.add('hidden');
-  mainImageEl.classList.remove('loading');
+});
+
+// ── Image transform ────────────────────────────────────────────────────────
+//
+// The transform-host div is sized to the image's visual bounding box.
+// The img element is absolutely positioned at the center of transform-host
+// with CSS transforms for rotation, mirror, and scale.
+//
+// For 90°/270° rotation, visual W and H are swapped relative to natural dims.
+
+function applyImageTransform() {
+  var img  = mainImageEl;
+  var host = transformHostEl;
+  var pane = imagePaneEl;
+
+  var nw = img.naturalWidth;
+  var nh = img.naturalHeight;
+  if (!nw || !nh) return;
+
+  var rot = ui.rotation;
+
+  // Visual dimensions at scale=1 (W/H swap for 90°/270° rotation)
+  var visW = (rot === 90 || rot === 270) ? nh : nw;
+  var visH = (rot === 90 || rot === 270) ? nw : nh;
+
+  // Compute display scale
+  var scale;
+  if (ui.zoomFit) {
+    var pW = pane.clientWidth;
+    var pH = pane.clientHeight;
+    if (!pW || !pH) return;
+    scale = Math.min(pW / visW, pH / visH);
+    if (ui.zoomReduceOnly) scale = Math.min(scale, 1.0);
+  } else {
+    scale = ui.scale;
+  }
+
+  var displayW = visW * scale;
+  var displayH = visH * scale;
+
+  // Size the transform-host to the image's visual bounding box
+  host.style.width  = Math.ceil(displayW) + 'px';
+  host.style.height = Math.ceil(displayH) + 'px';
+
+  // Center the img within transform-host, then rotate+mirror+scale
+  img.style.position      = 'absolute';
+  img.style.width         = nw + 'px';
+  img.style.height        = nh + 'px';
+  img.style.left          = '50%';
+  img.style.top           = '50%';
+  img.style.marginLeft    = (-nw / 2) + 'px';
+  img.style.marginTop     = (-nh / 2) + 'px';
+  img.style.transformOrigin = 'center center';
+
+  var parts = [];
+  if (rot)      parts.push('rotate(' + rot + 'deg)');
+  if (ui.mirror) parts.push('scaleX(-1)');
+  if (scale !== 1) parts.push('scale(' + scale + ')');
+  img.style.transform = parts.length ? parts.join(' ') : 'none';
+
+  // Set pane display mode
+  if (ui.zoomFit) {
+    pane.style.overflow        = 'hidden';
+    pane.style.display         = 'flex';
+    pane.style.alignItems      = 'center';
+    pane.style.justifyContent  = 'center';
+    pane.classList.remove('mode-scroll');
+  } else {
+    pane.style.overflow        = 'auto';
+    pane.style.display         = 'block';
+    pane.classList.add('mode-scroll');
+  }
+}
+
+// Reapply transform on window resize (fit mode depends on pane size)
+window.addEventListener('resize', function() {
+  if (mainImageEl.naturalWidth) applyImageTransform();
 });
 
 // ── Zoom ───────────────────────────────────────────────────────────────────
 
-function applyZoom() {
-  if (ui.zoomFit) {
-    imagePaneEl.classList.remove('zoom-full');
-  } else {
-    imagePaneEl.classList.add('zoom-full');
-  }
-  if (btnZoom) {
-    btnZoom.textContent = ui.zoomFit ? 'FIT' : '1:1';
-    btnZoom.classList.toggle('active', !ui.zoomFit);
-  }
-}
-
 function toggleZoom() {
   ui.zoomFit = !ui.zoomFit;
-  applyZoom();
+  if (!ui.zoomFit && ui.scale <= 0) ui.scale = 1.0;
+  applyImageTransform();
   persistState(false);
 }
 
-// ── Flip ───────────────────────────────────────────────────────────────────
+// ── Rotation ──────────────────────────────────────────────────────────────
 
-function applyFlip() {
-  mainImageEl.classList.toggle('flipped', ui.flip);
-}
-
-function toggleFlip() {
-  ui.flip = !ui.flip;
-  applyFlip();
+function rotateBy(deg) {
+  ui.rotation = (ui.rotation + deg + 360) % 360;
+  applyImageTransform();
   persistState(false);
 }
 
-// ── Selector visibility (Z) ────────────────────────────────────────────────
+// ── Mirror ────────────────────────────────────────────────────────────────
+
+function toggleMirror() {
+  ui.mirror = !ui.mirror;
+  applyImageTransform();
+  persistState(false);
+}
+
+// ── Orientation reset ─────────────────────────────────────────────────────
+
+function resetOrientation() {
+  ui.rotation = 0;
+  ui.mirror   = false;
+  applyImageTransform();
+  persistState(false);
+}
+
+// ── Scale ─────────────────────────────────────────────────────────────────
+
+function enterScaleMode() {
+  // Switch from fit mode to explicit scale mode
+  if (ui.zoomFit) {
+    ui.zoomFit = false;
+    // Compute the current effective fit scale and use it as starting point
+    if (mainImageEl.naturalWidth) {
+      var nw  = mainImageEl.naturalWidth;
+      var nh  = mainImageEl.naturalHeight;
+      var rot = ui.rotation;
+      var vw  = (rot === 90 || rot === 270) ? nh : nw;
+      var vh  = (rot === 90 || rot === 270) ? nw : nh;
+      var pW  = imagePaneEl.clientWidth;
+      var pH  = imagePaneEl.clientHeight;
+      var s   = Math.min(pW / vw, pH / vh);
+      if (ui.zoomReduceOnly) s = Math.min(s, 1.0);
+      ui.scale = s;
+    } else {
+      ui.scale = 1.0;
+    }
+  }
+}
+
+function scaleDouble() {
+  enterScaleMode();
+  ui.scale = Math.min(32, ui.scale * 2);
+  applyImageTransform();
+  persistState(false);
+}
+
+function scaleHalve() {
+  enterScaleMode();
+  ui.scale = Math.max(0.05, ui.scale / 2);
+  applyImageTransform();
+  persistState(false);
+}
+
+function scaleStep(dir) {
+  enterScaleMode();
+  var cur = ui.scale;
+  if (dir > 0) {
+    var next = null;
+    for (var i = 0; i < SCALE_STEPS.length; i++) {
+      if (SCALE_STEPS[i] > cur + 0.001) { next = SCALE_STEPS[i]; break; }
+    }
+    ui.scale = (next !== null) ? next : Math.min(32, cur * 1.5);
+  } else {
+    var prev = null;
+    for (var i = 0; i < SCALE_STEPS.length; i++) {
+      if (SCALE_STEPS[i] < cur - 0.001) prev = SCALE_STEPS[i];
+    }
+    ui.scale = (prev !== null) ? prev : Math.max(0.05, cur / 1.5);
+  }
+  applyImageTransform();
+  persistState(false);
+}
+
+function scaleTo1() {
+  ui.zoomFit = false;
+  ui.scale   = 1.0;
+  applyImageTransform();
+  persistState(false);
+}
+
+// ── Image scrolling ───────────────────────────────────────────────────────
+
+function scrollImage(dx, dy) {
+  imagePaneEl.scrollLeft += dx;
+  imagePaneEl.scrollTop  += dy;
+}
+
+// ── Selector visibility ───────────────────────────────────────────────────
 
 function applySelector() {
   viewerScreenEl.classList.toggle('no-selector', !ui.selectorVisible);
-  if (btnSelector) btnSelector.classList.toggle('active', !ui.selectorVisible);
+  if (btnRecursive) btnRecursive.classList.toggle('active', ui.recursive);
 }
 
 function toggleSelector() {
@@ -359,16 +519,14 @@ function toggleSelector() {
   persistState(false);
 }
 
-// ── Browser fullscreen (f) ─────────────────────────────────────────────────
+// ── Browser fullscreen ─────────────────────────────────────────────────────
 
 function toggleFullscreen() {
   if (!document.fullscreenElement) {
     selectorStateBeforeFS = ui.selectorVisible;
-    // Hide selector on entry regardless of Z state.
     ui.selectorVisible = false;
     applySelector();
-    document.documentElement.requestFullscreen().catch(function(err) {
-      // Restore if the API call fails.
+    document.documentElement.requestFullscreen().catch(function() {
       ui.selectorVisible = selectorStateBeforeFS;
       applySelector();
     });
@@ -379,7 +537,6 @@ function toggleFullscreen() {
 
 document.addEventListener('fullscreenchange', function() {
   if (!document.fullscreenElement) {
-    // Restore selector to whatever Z had set it to.
     ui.selectorVisible = selectorStateBeforeFS;
     applySelector();
   }
@@ -394,10 +551,10 @@ function displayableFiles() {
 function nextImage() {
   var files = displayableFiles();
   if (files.length === 0) return;
-  var idx = files.findIndex(function(i) { return i.u === currentFile; });
+  var idx  = files.findIndex(function(i) { return i.u === currentFile; });
   var next = files[(idx + 1) % files.length];
-  var listIdx = listing.findIndex(function(i) { return i.u === next.u; });
-  selectItem(listIdx, /*scroll=*/true);
+  var li   = listing.findIndex(function(i) { return i.u === next.u; });
+  selectItem(li, true);
   currentFile = next.u;
   persistState(false);
   showImage(next.u);
@@ -406,21 +563,20 @@ function nextImage() {
 function prevImage() {
   var files = displayableFiles();
   if (files.length === 0) return;
-  var idx = files.findIndex(function(i) { return i.u === currentFile; });
+  var idx  = files.findIndex(function(i) { return i.u === currentFile; });
   var prev = files[(idx - 1 + files.length) % files.length];
-  var listIdx = listing.findIndex(function(i) { return i.u === prev.u; });
-  selectItem(listIdx, /*scroll=*/true);
+  var li   = listing.findIndex(function(i) { return i.u === prev.u; });
+  selectItem(li, true);
   currentFile = prev.u;
   persistState(false);
   showImage(prev.u);
 }
 
 function goToParent() {
-  var path = currentDir.replace(/^file:\/\//, '').replace(/\/$/, '');
+  var path       = currentDir.replace(/^file:\/\//, '').replace(/\/$/, '');
   var parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
-  var parentUrl  = 'file://' + parentPath;
-  currentFile = null;
-  loadDir(parentUrl, /*push=*/true);
+  currentFile    = null;
+  loadDir('file://' + parentPath, true);
 }
 
 // ── Toggle helpers ─────────────────────────────────────────────────────────
@@ -441,10 +597,10 @@ function toggleHidden() {
 
 function cycleSortBy() {
   var orders = ['name', 'mtime', 'size'];
-  var idx = orders.indexOf(ui.sortBy);
-  ui.sortBy = orders[(idx + 1) % orders.length];
+  var idx    = orders.indexOf(ui.sortBy);
+  ui.sortBy  = orders[(idx + 1) % orders.length];
   persistState(false);
-  listing = sortItems(listing);
+  listing    = sortItems(listing);
   renderSelector();
   var labels = { name: 'NAME', mtime: 'DATE', size: 'SIZE' };
   if (btnSort) btnSort.textContent = labels[ui.sortBy] || 'NAME';
@@ -467,27 +623,31 @@ function toggleInfoOverlay() {
 }
 
 function updateInfoOverlay(filename) {
-  if (!filename) { infoContentEl.innerHTML = ''; return; }
-  var item = listing.find(function(i) { return i.u === filename; });
+  if (!filename) { infoContentEl.textContent = ''; return; }
+  var item  = listing.find(function(i) { return i.u === filename; });
   var lines = [filename];
   if (item) {
     if (item.s !== undefined) lines.push(fmtSize(item.s));
-    if (item.m) lines.push(fmtDate(item.m, /*full=*/true));
+    if (item.m)               lines.push(fmtDate(item.m, true));
   }
   if (mainImageEl.naturalWidth) {
     lines.push(mainImageEl.naturalWidth + '\u00d7' + mainImageEl.naturalHeight + ' px');
   }
-  infoContentEl.innerHTML = lines.map(function(l) {
-    return '<div>' + escHtml(l) + '</div>';
-  }).join('');
+  infoContentEl.textContent = lines.join('\n');
+}
+
+// ── Focus mode ─────────────────────────────────────────────────────────────
+
+function setFocusMode(mode) {
+  focusMode = mode;
+  viewerScreenEl.dataset.focus = mode;
 }
 
 // ── Apply full UI state ────────────────────────────────────────────────────
 
 function applyUiState() {
-  applyZoom();
-  applyFlip();
   applySelector();
+  if (mainImageEl.naturalWidth) applyImageTransform();
 
   if (btnRecursive) btnRecursive.classList.toggle('active', ui.recursive);
   if (btnHidden)    btnHidden.classList.toggle('active', ui.showHidden);
@@ -499,29 +659,65 @@ function updateDirPath() {
   if (!dirPathEl || !currentDir) return;
   var path = currentDir.replace(/^file:\/\//, '');
   dirPathEl.textContent = path;
-  dirPathEl.title = path;
+  dirPathEl.title       = path;
+  document.title        = path + ' — Media Viewer';
 }
 
 // ── Keyboard shortcuts ─────────────────────────────────────────────────────
 
 document.addEventListener('keydown', function(e) {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-  if (e.ctrlKey || e.altKey || e.metaKey) return;
 
-  switch (e.key) {
-    case 'ArrowDown':
+  var key  = e.key;
+  var ctrl = e.ctrlKey && !e.altKey && !e.metaKey;
+  var plain = !e.ctrlKey && !e.altKey && !e.metaKey;
+
+  if (plain) {
+    // Global keys regardless of focus mode
+    switch (key) {
+      case 'Z':
+        e.preventDefault(); toggleSelector(); return;
+      case 'f':
+        e.preventDefault(); toggleFullscreen(); return;
+      case 'i':
+        e.preventDefault(); toggleInfoOverlay(); return;
+      case '.':
+        e.preventDefault(); toggleHidden(); return;
+      case 'Tab':
+        e.preventDefault();
+        setFocusMode(focusMode === 'selector' ? 'viewer' : 'selector');
+        return;
+      case 'Escape':
+        if (focusMode === 'viewer') { e.preventDefault(); setFocusMode('selector'); }
+        return;
+    }
+  }
+
+  if (focusMode === 'selector') {
+    handleSelectorKey(e, key, ctrl, plain);
+  } else {
+    handleViewerKey(e, key, ctrl, plain);
+  }
+});
+
+function handleSelectorKey(e, key, ctrl, plain) {
+  if (ctrl) return; // don't intercept Ctrl shortcuts in selector
+  switch (key) {
+    case 'ArrowDown':  e.preventDefault(); moveSelectionBy(1);   break;
+    case 'ArrowUp':    e.preventDefault(); moveSelectionBy(-1);  break;
+    case 'j':          moveSelectionBy(1);   break;
+    case 'k':          moveSelectionBy(-1);  break;
+    case 'PageDown':   e.preventDefault(); moveSelectionBy(10);  break;
+    case 'PageUp':     e.preventDefault(); moveSelectionBy(-10); break;
+    case 'Home':       e.preventDefault(); jumpToEdge(1);        break;
+    case 'End':        e.preventDefault(); jumpToEdge(-1);       break;
+    case 'Enter':
       e.preventDefault();
-      moveSelectionBy(1);
+      if (selectedIdx >= 0) openItem(selectedIdx);
       break;
-    case 'ArrowUp':
+    case ' ':
       e.preventDefault();
-      moveSelectionBy(-1);
-      break;
-    case 'j':
-      moveSelectionBy(1);
-      break;
-    case 'k':
-      moveSelectionBy(-1);
+      if (selectedIdx >= 0) openItem(selectedIdx);
       break;
     case 'ArrowRight':
       e.preventDefault();
@@ -534,80 +730,92 @@ document.addEventListener('keydown', function(e) {
     case 'ArrowLeft':
     case 'Backspace':
     case 'u':
-      e.preventDefault();
-      goToParent();
-      break;
-    case 'Enter':
-      e.preventDefault();
-      if (selectedIdx >= 0) openItem(selectedIdx);
-      break;
-    case ' ':
-      e.preventDefault();
-      if (selectedIdx >= 0 && listing[selectedIdx] && listing[selectedIdx].t !== 'd') {
-        openItem(selectedIdx);
-      } else {
-        nextImage();
-      }
-      break;
-    case 'n':
-      nextImage();
-      break;
-    case 'p':
-      prevImage();
-      break;
-    case 'Home':
-      e.preventDefault();
-      jumpToEdge(1);
-      break;
-    case 'End':
-      e.preventDefault();
-      jumpToEdge(-1);
-      break;
-    case 'PageDown':
-      e.preventDefault();
-      moveSelectionBy(10);
-      break;
-    case 'PageUp':
-      e.preventDefault();
-      moveSelectionBy(-10);
-      break;
-    case 'z':
-      toggleZoom();
-      break;
-    case 'Z':
-      toggleSelector();
-      break;
-    case 'f':
-      toggleFullscreen();
-      break;
-    case 'F':
-      toggleFlip();
-      break;
-    case 'r':
-      toggleRecursive();
-      break;
-    case '.':
-      toggleHidden();
-      break;
-    case 's':
-      cycleSortBy();
-      break;
-    case 'i':
-      toggleInfoOverlay();
-      break;
-    case 'q':
-      window.close();
-      break;
+      e.preventDefault(); goToParent(); break;
+    case 'n': nextImage(); break;
+    case 'b':
+    case 'p': prevImage(); break;
+    case 's': cycleSortBy(); break;
+    case 'z': toggleZoom(); break;
   }
-});
+}
+
+function handleViewerKey(e, key, ctrl, plain) {
+  if (plain) {
+    switch (key) {
+      // Scrolling — 100 px steps
+      case 'ArrowUp':    e.preventDefault(); scrollImage(0, -100); break;
+      case 'ArrowDown':  e.preventDefault(); scrollImage(0, +100); break;
+      case 'ArrowLeft':  e.preventDefault(); scrollImage(-100, 0); break;
+      case 'ArrowRight': e.preventDefault(); scrollImage(+100, 0); break;
+      // Large scrolling — ~90% of pane
+      case 'PageUp':
+        e.preventDefault();
+        scrollImage(0, -(imagePaneEl.clientHeight * 0.9));
+        break;
+      case 'PageDown':
+        e.preventDefault();
+        scrollImage(0, +(imagePaneEl.clientHeight * 0.9));
+        break;
+      case '-':
+        e.preventDefault();
+        scrollImage(-(imagePaneEl.clientWidth * 0.9), 0);
+        break;
+      case '=':
+        e.preventDefault();
+        scrollImage(+(imagePaneEl.clientWidth * 0.9), 0);
+        break;
+      // Jump to corners
+      case 'Home':
+        e.preventDefault();
+        imagePaneEl.scrollLeft = 0;
+        imagePaneEl.scrollTop  = 0;
+        break;
+      case 'End':
+        e.preventDefault();
+        imagePaneEl.scrollLeft = imagePaneEl.scrollWidth;
+        imagePaneEl.scrollTop  = imagePaneEl.scrollHeight;
+        break;
+      // Image navigation
+      case ' ': e.preventDefault(); nextImage(); break;
+      case 'b':
+      case 'p': prevImage(); break;
+      // Rotation
+      case 'r': rotateBy(90);   break;
+      case 'R': rotateBy(-90);  break;
+      case 'N': resetOrientation(); break;
+      // Mirror
+      case 'F': toggleMirror(); break;
+      // Scale
+      case 'd': scaleDouble(); break;
+      case 'D': scaleHalve();  break;
+      case 's': scaleStep(+1); break;
+      case 'S': scaleStep(-1); break;
+      case 'n': scaleTo1();    break;
+      // Zoom toggle
+      case 'z': toggleZoom();  break;
+      // Info
+      case ':':
+      case ';': e.preventDefault(); toggleInfoOverlay(); break;
+    }
+  } else if (ctrl) {
+    // Fine scrolling — 10 px steps
+    switch (key) {
+      case 'ArrowUp':    e.preventDefault(); scrollImage(0, -10);  break;
+      case 'ArrowDown':  e.preventDefault(); scrollImage(0, +10);  break;
+      case 'ArrowLeft':  e.preventDefault(); scrollImage(-10,  0); break;
+      case 'ArrowRight': e.preventDefault(); scrollImage(+10,  0); break;
+    }
+  }
+}
+
+// ── Selector navigation helpers ────────────────────────────────────────────
 
 function moveSelectionBy(delta) {
   if (listing.length === 0) return;
   var start = selectedIdx < 0 ? (delta > 0 ? -1 : listing.length) : selectedIdx;
   var step  = delta > 0 ? 1 : -1;
   var count = Math.abs(delta);
-
-  var cur = start;
+  var cur   = start;
   for (var moved = 0; moved < count; ) {
     var next = cur + step;
     if (next < 0 || next >= listing.length) break;
@@ -615,12 +823,11 @@ function moveSelectionBy(delta) {
     if (isSelectable(listing[cur])) moved++;
   }
   if (cur !== start && cur >= 0 && cur < listing.length) {
-    selectItem(cur, /*scroll=*/true);
+    selectItem(cur, true);
   }
 }
 
 function jumpToEdge(dir) {
-  // dir=1: first; dir=-1: last
   if (dir > 0) {
     for (var i = 0; i < listing.length; i++) {
       if (isSelectable(listing[i])) { selectItem(i, true); return; }
@@ -632,13 +839,47 @@ function jumpToEdge(dir) {
   }
 }
 
+// ── Mouse drag-to-scroll (image pane) ─────────────────────────────────────
+
+imagePaneEl.addEventListener('mousedown', function(e) {
+  if (e.button !== 0) return;
+  drag.active  = true;
+  drag.wasDrag = false;
+  drag.startX  = e.clientX;
+  drag.startY  = e.clientY;
+  drag.scrollX = imagePaneEl.scrollLeft;
+  drag.scrollY = imagePaneEl.scrollTop;
+  e.preventDefault();
+});
+
+document.addEventListener('mousemove', function(e) {
+  if (!drag.active) return;
+  var dx = e.clientX - drag.startX;
+  var dy = e.clientY - drag.startY;
+  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.wasDrag = true;
+  imagePaneEl.scrollLeft = drag.scrollX - dx;
+  imagePaneEl.scrollTop  = drag.scrollY - dy;
+});
+
+document.addEventListener('mouseup', function(e) {
+  if (!drag.active) return;
+  drag.active = false;
+  if (!drag.wasDrag) {
+    // Plain click on image pane — switch to viewer focus
+    setFocusMode('viewer');
+  }
+});
+
+// Clicking on the selector switches to selector focus
+selectorPaneEl.addEventListener('mousedown', function() {
+  setFocusMode('selector');
+});
+
 // ── Button listeners ───────────────────────────────────────────────────────
 
 if (btnRecursive) btnRecursive.addEventListener('click', toggleRecursive);
 if (btnHidden)    btnHidden.addEventListener('click', toggleHidden);
 if (btnSort)      btnSort.addEventListener('click', cycleSortBy);
-if (btnZoom)      btnZoom.addEventListener('click', toggleZoom);
-if (btnSelector)  btnSelector.addEventListener('click', toggleSelector);
 
 // ── History (back/forward) ─────────────────────────────────────────────────
 
@@ -648,7 +889,7 @@ window.addEventListener('popstate', function(e) {
 
   if (params.dir !== currentDir) {
     currentFile = params.file;
-    loadDir(params.dir, /*push=*/false);
+    loadDir(params.dir, false);
   } else {
     currentFile = params.file;
     applyUiState();
@@ -663,9 +904,9 @@ window.addEventListener('popstate', function(e) {
 // ── Utility functions ──────────────────────────────────────────────────────
 
 function fmtSize(bytes) {
-  if (bytes < 1024)                return bytes + '\u00a0B';
-  if (bytes < 1024 * 1024)         return (bytes / 1024).toFixed(1) + '\u00a0KB';
-  if (bytes < 1024 * 1024 * 1024)  return (bytes / 1048576).toFixed(1) + '\u00a0MB';
+  if (bytes < 1024)               return bytes + '\u00a0B';
+  if (bytes < 1024 * 1024)        return (bytes / 1024).toFixed(1) + '\u00a0KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / 1048576).toFixed(1) + '\u00a0MB';
   return (bytes / 1073741824).toFixed(1) + '\u00a0GB';
 }
 
@@ -674,16 +915,9 @@ function fmtDate(unixSecs, full) {
   return full ? d.toLocaleString() : d.toLocaleDateString();
 }
 
-function escHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
 // ── Initialisation ─────────────────────────────────────────────────────────
 
 function init() {
-  // Restore UI state from current history entry (exists if page was refreshed
-  // mid-session, or on back/forward navigation).
   applyHistoryState(history.state);
 
   var params = getUrlParams();
@@ -694,7 +928,7 @@ function init() {
 
   currentDir  = params.dir;
   currentFile = params.file || null;
-  loadDir(params.dir, /*push=*/false);
+  loadDir(params.dir, false);
 }
 
 init();

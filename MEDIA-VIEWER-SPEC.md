@@ -129,12 +129,15 @@ the URL.
 
 ```jsonc
 {
-  "zoomFit":         true,   // z — fit image to window vs. 1:1
-  "recursive":       true,   // r — include files from subdirectories
-  "selectorVisible": true,   // Z — selector panel shown
-  "showHidden":      false,  // . — show dotfiles
-  "sortBy":          "name", // s — "name" | "mtime" | "size"
-  "flip":            false   // F — mirror image horizontally
+  "zoomFit":         true,    // z — fit image to window vs. explicit scale
+  "zoomReduceOnly":  true,    // -r flag: in fit mode, don't enlarge small images
+  "recursive":       true,    // include files from subdirectories
+  "selectorVisible": true,    // Z — selector panel shown
+  "showHidden":      false,   // . — show dotfiles
+  "sortBy":          "name",  // s (selector) — "name" | "mtime" | "size"
+  "rotation":        0,       // r/R/N (viewer) — 0 | 90 | 180 | 270 degrees
+  "mirror":          false,   // F (viewer) — mirror image horizontally
+  "scale":           1.0      // d/D/s/S/n (viewer) — scale factor when zoomFit=false
 }
 ```
 
@@ -148,7 +151,11 @@ is used for all other state changes (selection within same dir, zoom, flip, etc.
 The viewer starts as if launched with xzgv options **`-z -r`**:
 
 * `-z` → `zoomFit: true` (zoom-to-fit enabled by default)
-* `-r` → `recursive: true` (recursive directory listing enabled by default)
+* `-r` → `zoomReduceOnly: true` (in zoom-to-fit mode, shrink images larger than the
+  window but do **not** enlarge images smaller than the window — they are shown at 1:1)
+
+Recursive directory listing (`recursive: true`) is also enabled by default but is not
+associated with any xzgv command-line flag.
 
 ---
 
@@ -204,81 +211,121 @@ non-selectable** (same treatment as unreadable files).
 ## UI Layout
 
 ```
-┌───────────────────────────────────────────────────────┐
-│  [IMG]  /home/user/pictures    [REC][HID][NAME][FIT][Z]│  ← topbar
-├───────────────┬───────────────────────────────────────┤
-│  SELECTOR     │                                       │
-│               │          IMAGE DISPLAY                │
-│  ▸ vacation/  │                                       │
-│  · beach.jpg  │         [image here]                  │
-│  · sunset.jpg │                                       │
-│  · video.mp4  │                                       │  ← greyed
+┌───────────────┬───────────────────────────────────────┐
+│ /home/user/.. │                                       │
+├───────────────┤          IMAGE DISPLAY                │
+│  > vacation/  │                                       │
+│    beach.jpg  │         [image here]                  │
+│    sunset.jpg │                                       │
+│    video.mp4  │                                       │  ← greyed
 │               │                                       │
+├───────────────┤                                       │
+│ REC HID NAME  │                                       │
 └───────────────┴───────────────────────────────────────┘
 ```
 
-* **Selector pane** (left, ~260 px wide): scrollable list of directory entries.
-  Directories shown first (alphabetically), then files.  Unreadable or
-  non-image files are shown dimmed and cannot be selected.
-* **Image pane** (right, fills remaining space): displays the currently viewed image.
-* **Top bar**: directory path, mode toggle buttons, keyboard hint.
+There is **no top bar**.  The selector pane has:
 
-When `selectorVisible = false` (Z mode or browser fullscreen) the selector pane is
-hidden and the image pane fills the full width.
+* A narrow **header** showing the current directory path.
+* A scrollable **file list** (directories first, then files).
+* A narrow **footer** with the REC / HID / sort-order toggle buttons.
+
+The active pane (selector or image) is indicated by a coloured border on its
+edge.  Keyboard focus switches between panes with `Tab` or `Escape`.
+
+When `selectorVisible = false` (Z mode or browser fullscreen) the entire
+selector pane (header, list, footer) is hidden and the image pane fills the
+full width.
 
 ---
 
+## Keyboard Focus Modes
+
+The viewer has two keyboard focus modes, matching xzgv's modal design:
+
+* **Selector focus** — keyboard controls the file list.
+* **Viewer focus** — keyboard controls the displayed image.
+
+`Tab` switches between modes.  `Escape` in viewer focus returns to selector
+focus.  Clicking on a pane also switches focus to that pane.  Opening an image
+file from the selector (Enter / Space) switches focus to viewer automatically.
+
 ## Keyboard Shortcuts
 
-### Navigation
+### Global (both focus modes)
 
 | Key | Action |
 |-----|--------|
-| `↑` / `↓` | Move selection up / down in selector |
-| `↑` / `↓` (with `j`/`k` aliases) | Same |
-| `→` | Enter selected directory, or show next image |
-| `←` / `Backspace` / `u` | Go to parent directory |
-| `Enter` / `Space` | Open selected item (enter dir or view image) |
-| `n` | Next image |
-| `p` | Previous image |
-| `Home` | Select first item |
-| `End` | Select last item |
-| `PgUp` / `PgDn` | Scroll selector by one page |
-
-### View
-
-| Key | Action |
-|-----|--------|
-| `z` | Toggle zoom: fit-to-window ↔ 1:1 actual size |
-| `Z` | Toggle selector panel visibility (separate state from `f`) |
-| `f` | Toggle **browser-level fullscreen** + hide selector.  Exiting fullscreen restores the Z-mode selector state. |
-| `F` | Flip image horizontally (mirror) |
-| `i` | Toggle file info overlay (filename, size, mtime, dimensions) |
-
-### Directory / Sorting
-
-| Key | Action |
-|-----|--------|
-| `r` | Toggle recursive directory listing |
+| `Tab` | Switch focus between selector and image pane |
+| `Escape` | Return to selector focus (from viewer focus) |
+| `Z` | Toggle selector panel visibility |
+| `f` | Toggle browser-level fullscreen (also hides selector; restores on exit) |
+| `i` | Toggle file-info overlay (filename, size, mtime, dimensions) |
 | `.` | Toggle visibility of hidden (dot) files |
-| `s` | Cycle sort order: name → mtime → size → name |
 
-### Misc
+### Selector focus
 
 | Key | Action |
 |-----|--------|
-| `q` | Close tab |
+| `↑` / `↓`  (or `k` / `j`) | Move selection up / down |
+| `PgUp` / `PgDn` | Move selection by ~10 items |
+| `Home` / `End` | Jump to first / last selectable item |
+| `Enter` / `Space` | Open selected item (enter directory or view image) |
+| `→` | Enter selected directory, or advance to next image |
+| `←` / `Backspace` / `u` | Go to parent directory |
+| `n` | Advance to next image |
+| `b` / `p` | Go to previous image |
+| `s` | Cycle sort order: name → mtime → size → name |
+| `z` | Toggle zoom fit-to-window |
+
+### Viewer focus — scrolling / panning
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` `←` `→` | Scroll 100 px in that direction |
+| `Ctrl`+`↑` `↓` `←` `→` | Scroll 10 px (fine control) |
+| `PgUp` / `PgDn` | Scroll ~90 % of pane height |
+| `-` / `=` | Scroll ~90 % of pane width left / right |
+| `Home` | Jump to top-left of image |
+| `End` | Jump to bottom-right of image |
+
+### Viewer focus — image navigation
+
+| Key | Action |
+|-----|--------|
+| `Space` | Next image |
+| `b` / `p` | Previous image |
+
+### Viewer focus — orientation
+
+| Key | Action |
+|-----|--------|
+| `r` | Rotate 90° clockwise |
+| `R` | Rotate 90° counter-clockwise |
+| `N` | Restore normal orientation (reset rotation and mirror) |
+| `F` | Mirror image horizontally |
+
+### Viewer focus — zoom / scale
+
+| Key | Action |
+|-----|--------|
+| `z` | Toggle fit-to-window mode |
+| `d` | Double current scale |
+| `D` | Halve current scale |
+| `s` | Increase scale one step |
+| `S` | Decrease scale one step |
+| `n` | Return to 1:1 (actual size) |
 
 ### Notes
 
-* **Removed from xzgv**: copy (`c`), move (`m`), rename (`n`), delete (`d`/`D`),
-  dithering/interpolation controls.
-* **Removed from xzgv**: explicit zoom-in / zoom-out steps (`+`/`-`) — the browser
-  handles image rendering quality; only fit ↔ actual size toggle is provided.
 * **`f` vs `Z`**: `Z` hides/shows the selector within the normal browser window.
-  `f` requests *browser-level* fullscreen (equivalent to F11) and simultaneously
-  hides the selector.  When the user presses `f` again or `Escape` to exit
-  fullscreen, the selector is restored to whatever state `Z` had left it in.
+  `f` requests browser-level fullscreen and hides the selector; on exit the
+  selector is restored to the state `Z` had set.
+* **Removed from xzgv**: copy, move, rename, delete, tagging, thumbnail
+  management, dithering / interpolation controls.
+* **Removed**: `q` to quit — the browser provides adequate tab-close controls.
+* **Mouse**: Left-click on the image pane switches to viewer focus.  Drag to
+  pan (scroll) the image when not in fit-to-window mode.
 
 ---
 

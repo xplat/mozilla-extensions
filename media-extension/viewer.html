@@ -11,18 +11,6 @@
   <!-- PICK SCREEN (no dir param in URL) -->
   <div id="pick-screen" class="hidden">
     <div class="splash-inner">
-      <div class="splash-icon">
-        <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect x="4" y="10" width="56" height="44" rx="3" fill="#1a1a1a" stroke="#c8933a" stroke-width="2"/>
-          <rect x="4" y="10" width="56" height="12" rx="3" fill="#1c1c1c" stroke="#c8933a" stroke-width="2"/>
-          <circle cx="12" cy="16" r="2" fill="#c8933a" opacity="0.5"/>
-          <circle cx="20" cy="16" r="2" fill="#c8933a" opacity="0.5"/>
-          <!-- mountain + sun motif -->
-          <polygon points="14,46 26,28 38,46" fill="#2a2a2a" stroke="#555" stroke-width="1"/>
-          <polygon points="28,46 40,32 52,46" fill="#222" stroke="#555" stroke-width="1"/>
-          <circle cx="44" cy="26" r="5" fill="#c8933a" opacity="0.7"/>
-        </svg>
-      </div>
       <div class="splash-title">Media Viewer</div>
       <p class="splash-desc">
         Open a directory with <code>media-open&nbsp;/path/to/dir</code> from the
@@ -34,17 +22,6 @@
   <!-- LOADING SCREEN -->
   <div id="loading-screen" class="hidden">
     <div class="splash-inner">
-      <div class="splash-icon">
-        <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect x="4" y="10" width="56" height="44" rx="3" fill="#1a1a1a" stroke="#c8933a" stroke-width="2"/>
-          <rect x="4" y="10" width="56" height="12" rx="3" fill="#1c1c1c" stroke="#c8933a" stroke-width="2"/>
-          <circle cx="12" cy="16" r="2" fill="#c8933a" opacity="0.5"/>
-          <circle cx="20" cy="16" r="2" fill="#c8933a" opacity="0.5"/>
-          <polygon points="14,46 26,28 38,46" fill="#2a2a2a" stroke="#555" stroke-width="1"/>
-          <polygon points="28,46 40,32 52,46" fill="#222" stroke="#555" stroke-width="1"/>
-          <circle cx="44" cy="26" r="5" fill="#c8933a" opacity="0.7"/>
-        </svg>
-      </div>
       <div class="splash-title">Media Viewer</div>
       <div id="loading-status" class="loading-status">Loading…</div>
       <div class="loading-bar-track"><div class="loading-bar-fill"></div></div>
@@ -54,42 +31,35 @@
   <!-- ERROR SCREEN -->
   <div id="error-screen" class="hidden">
     <div class="splash-inner">
-      <div class="error-icon">✕</div>
-      <div class="splash-title" style="font-size:20px">Failed to load</div>
+      <div class="splash-title error-title">Error</div>
       <div id="error-message" class="error-message">Unknown error.</div>
     </div>
   </div>
 
   <!-- VIEWER SCREEN -->
-  <div id="viewer-screen" class="hidden">
+  <div id="viewer-screen" class="hidden" data-focus="selector">
 
-    <!-- TOP BAR -->
-    <header id="topbar">
-      <div class="topbar-left">
-        <div class="app-badge">IMG</div>
-        <span id="dir-path" class="dir-path" title=""></span>
-      </div>
-      <div class="topbar-right">
-        <button id="btn-recursive" class="mode-btn" title="Recursive listing (r)">REC</button>
-        <button id="btn-hidden"    class="mode-btn" title="Show hidden files (.)">HID</button>
-        <button id="btn-sort"      class="mode-btn" title="Cycle sort order (s)">NAME</button>
-        <button id="btn-zoom"      class="mode-btn" title="Toggle zoom fit/1:1 (z)">FIT</button>
-        <button id="btn-selector"  class="mode-btn" title="Toggle selector panel (Z)">SEL</button>
-        <span class="kb-hint">↑↓ n p z Z f F r . s i u q</span>
-      </div>
-    </header>
-
-    <!-- MAIN AREA: selector + image -->
+    <!-- MAIN AREA: selector + image (fills full height) -->
     <div id="main-area">
 
       <!-- LEFT: file selector -->
       <div id="selector-pane">
+        <div id="selector-header">
+          <span id="dir-path" title=""></span>
+        </div>
         <div id="file-list"></div>
+        <div id="selector-footer">
+          <button id="btn-recursive" title="Recursive listing">REC</button>
+          <button id="btn-hidden"    title="Show hidden files (.)">HID</button>
+          <button id="btn-sort"      title="Sort order">NAME</button>
+        </div>
       </div>
 
       <!-- RIGHT: image display -->
       <div id="image-pane">
-        <div id="image-wrapper">
+
+        <!-- Transform host: sized to image visual bounding box -->
+        <div id="transform-host">
           <img id="main-image" alt="" draggable="false" />
         </div>
 
@@ -105,7 +75,7 @@
 
         <!-- Empty-pane hint when no image is selected -->
         <div id="no-image-hint">
-          <span>Select an image with Enter or double-click</span>
+          <span>Select an image · Enter or double-click</span>
         </div>
       </div>
 
