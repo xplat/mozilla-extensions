@@ -13,9 +13,10 @@ const LOOPBACK = '127.7.203.98';
 // Proxy URL prefixes used by the viewer.  The background rewrites every
 // request to the real server URL (with port + token) on the fly, so neither
 // the port nor the token ever appear in the viewer page or its URL.
-const FILE_PROXY_PREFIX  = 'http://' + LOOPBACK + '/media-file/';
-const DIR_PROXY_PREFIX   = 'http://' + LOOPBACK + '/media-dir/';
-const THUMB_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-thumb/';
+const FILE_PROXY_PREFIX      = 'http://' + LOOPBACK + '/media-file/';
+const DIR_PROXY_PREFIX       = 'http://' + LOOPBACK + '/media-dir/';
+const THUMB_PROXY_PREFIX     = 'http://' + LOOPBACK + '/media-thumb/';
+const QUEUE_DIR_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-queue-dir/';
 
 var serverPort  = null;
 var serverToken = null;
@@ -61,10 +62,19 @@ chrome.webRequest.onBeforeRequest.addListener(
       };
     }
 
+    if (url.startsWith(QUEUE_DIR_PROXY_PREFIX)) {
+      encodedPath = url.slice(QUEUE_DIR_PROXY_PREFIX.length);
+      return {
+        redirectUrl: 'http://' + LOOPBACK + ':' + serverPort +
+                     '/' + serverToken + '/media-queue-dir/' + encodedPath
+      };
+    }
+
     return { cancel: true };
   },
   {
-    urls: [FILE_PROXY_PREFIX + '*', DIR_PROXY_PREFIX + '*', THUMB_PROXY_PREFIX + '*'],
+    urls: [FILE_PROXY_PREFIX + '*', DIR_PROXY_PREFIX + '*',
+           THUMB_PROXY_PREFIX + '*', QUEUE_DIR_PROXY_PREFIX + '*'],
     types: ['xmlhttprequest', 'image', 'other']
   },
   ['blocking']

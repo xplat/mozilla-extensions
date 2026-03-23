@@ -4,9 +4,10 @@
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const LOOPBACK          = '127.7.203.98';
-const FILE_PROXY_PREFIX  = 'http://' + LOOPBACK + '/media-file/';
-const DIR_PROXY_PREFIX   = 'http://' + LOOPBACK + '/media-dir/';
-const THUMB_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-thumb/';
+const FILE_PROXY_PREFIX      = 'http://' + LOOPBACK + '/media-file/';
+const DIR_PROXY_PREFIX       = 'http://' + LOOPBACK + '/media-dir/';
+const THUMB_PROXY_PREFIX     = 'http://' + LOOPBACK + '/media-thumb/';
+const QUEUE_DIR_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-queue-dir/';
 
 const IMAGE_EXTS = new Set([
   'jpg','jpeg','png','gif','webp','avif','bmp','tiff','tif','svg','ico'
@@ -163,6 +164,12 @@ function toProxyDir(dirUrl, recursive) {
   return url;
 }
 
+function toProxyQueueDir(dirUrl) {
+  var path    = dirUrl.replace(/^file:\/\//, '');
+  var encoded = path.split('/').map(encodeURIComponent).join('/');
+  return QUEUE_DIR_PROXY_PREFIX + encoded;
+}
+
 // ── Directory loading ──────────────────────────────────────────────────────
 
 function isDisplayable(filename) {
@@ -224,6 +231,7 @@ async function loadDir(dirUrl, push) {
 
   persistState(push, dirUrl, currentFile);
   renderSelector();
+  if (ui.thumbnails) fetch(toProxyQueueDir(dirUrl)).catch(function() {});
   updateDirPath();
   applyUiState();
   showScreen('viewer');
@@ -667,6 +675,7 @@ function toggleThumbnails() {
   ui.thumbnails = !ui.thumbnails;
   persistState(false);
   renderSelector();
+  if (ui.thumbnails && currentDir) fetch(toProxyQueueDir(currentDir)).catch(function() {});
   // Re-scroll to keep selected item visible after layout change.
   if (selectedIdx >= 0) {
     var el = fileListEl.children[selectedIdx];
