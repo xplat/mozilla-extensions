@@ -136,7 +136,7 @@ the URL.
   "showHidden":      false,   // . — show dotfiles
   "sortBy":          "name",  // s (selector) — "name" | "mtime" | "size"
   "rotation":        0,       // r/R/N (viewer) — 0 | 90 | 180 | 270 degrees
-  "mirror":          false,   // m (viewer) — mirror image horizontally (xzgv 'm')
+  "mirror":          false,   // M (viewer) — mirror image horizontally (xzgv 'm')
   "flip":            false,   // F (viewer) — flip image vertically    (xzgv 'f')
   "scale":           1.0      // d/D/s/S/n (viewer) — scale factor when zoomFit=false
 }
@@ -287,7 +287,7 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
 | `b` / `p` | Go to previous image |
 | `s` | Cycle sort order: name → mtime → size → name |
 | `z` | Toggle zoom fit-to-window |
-| `Ctrl-r` | Rescan current directory (xzgv `Ctrl-r`) |
+| `R` | Rescan current directory (xzgv `Ctrl-r`; `Ctrl-r` unavailable in browser) |
 
 ### Viewer focus — scrolling / panning
 
@@ -314,7 +314,7 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
 | `r` | Rotate 90° clockwise (xzgv `r`) |
 | `R` | Rotate 90° counter-clockwise (xzgv `R`) |
 | `N` | Restore normal orientation — reset rotation, mirror, and flip (xzgv `N`) |
-| `m` | Mirror image horizontally — flip left/right (xzgv `m`) |
+| `M` | Mirror image horizontally — flip left/right (xzgv `m`, uppercased for consistency with `F`) |
 | `F` | Flip image vertically — flip top/bottom (xzgv `f`, uppercased to avoid fullscreen conflict) |
 
 ### Viewer focus — zoom / scale
@@ -335,8 +335,8 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
 * **`f` vs `Z`**: `Z` hides/shows the selector within the normal browser window.
   `f` requests browser-level fullscreen and hides the selector; on exit the
   selector is restored to the state `Z` had set.
-* **`m` vs `F`**: xzgv's `m` = horizontal mirror; xzgv's `f` = vertical flip.
-  We map them to the same letters except `f`→`F` to avoid conflict with fullscreen.
+* **`M` vs `F`**: xzgv's `m` = horizontal mirror; xzgv's `f` = vertical flip.
+  Both are uppercased (`M`/`F`) for consistency; `f` would conflict with fullscreen.
 * **Alt+ replacements**: xzgv's `Alt-r` (reduce-only) is mapped to `` ` ``.  Other
   Alt+ shortcuts either have equivalents (`Alt-n/s/d` sort → `s` key cycle) or are
   omitted (tagging, thumbnail management, dithering).

@@ -739,13 +739,12 @@ document.addEventListener('keydown', function(e) {
 });
 
 function handleSelectorKey(e, key, ctrl, plain) {
-  // Ctrl-r: rescan directory (xzgv Ctrl-r)
-  if (ctrl && key === 'r') {
-    e.preventDefault();
+  // R: rescan directory (xzgv Ctrl-r; Ctrl-r unavailable in browser)
+  if (!ctrl && key === 'R') {
     if (currentDir) loadDir(currentDir, false);
     return;
   }
-  if (ctrl) return; // don't intercept other Ctrl shortcuts
+  if (ctrl) return; // don't intercept Ctrl shortcuts
   switch (key) {
     case 'ArrowDown':  e.preventDefault(); moveSelectionBy(1);   break;
     case 'ArrowUp':    e.preventDefault(); moveSelectionBy(-1);  break;
@@ -827,9 +826,9 @@ function handleViewerKey(e, key, ctrl, plain) {
       case 'r': rotateBy(90);        break;
       case 'R': rotateBy(-90);       break;
       case 'N': resetOrientation();  break;
-      // Mirror / flip (xzgv m/f, F avoids fullscreen conflict)
-      case 'm': toggleMirror(); break;  // horizontal mirror
-      case 'F': toggleFlip();   break;  // vertical flip
+      // Mirror / flip (M/F for consistency; F avoids fullscreen conflict)
+      case 'M': toggleMirror(); break;  // horizontal mirror (xzgv m)
+      case 'F': toggleFlip();   break;  // vertical flip    (xzgv f)
       // Scale (xzgv d/D/s/S/n)
       case 'd': scaleDouble(); break;
       case 'D': scaleHalve();  break;
