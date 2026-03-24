@@ -322,6 +322,7 @@ function _renderThumbItem(el, item) {
     imgEl.alt = '';
     imgEl.draggable = false;
     imgEl.loading = 'lazy';
+    imgEl.addEventListener('load',  function() { imgEl.classList.add('thumb-loaded'); });
     imgEl.addEventListener('error', function() { imgEl.classList.add('thumb-missing'); });
     var labelEl = document.createElement('span');
     labelEl.className = 'thumb-label';
@@ -816,8 +817,14 @@ function handleSelectorKey(e, key, ctrl, plain) {
   }
   if (ctrl) return; // don't intercept Ctrl shortcuts
   switch (key) {
-    case 'ArrowDown':  e.preventDefault(); moveSelectionBy(1);   break;
-    case 'ArrowUp':    e.preventDefault(); moveSelectionBy(-1);  break;
+    case 'ArrowDown':
+      e.preventDefault();
+      if (ui.thumbnails) moveSelectionByRows(1); else moveSelectionBy(1);
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      if (ui.thumbnails) moveSelectionByRows(-1); else moveSelectionBy(-1);
+      break;
     case 'j':          moveSelectionBy(1);   break;
     case 'k':          moveSelectionBy(-1);  break;
     case 'PageDown':   e.preventDefault(); moveSelectionBy(10);  break;
@@ -933,6 +940,25 @@ function handleViewerKey(e, key, ctrl, plain) {
 }
 
 // ── Selector navigation helpers ────────────────────────────────────────────
+
+function getGridColumnCount() {
+  if (fileListEl.children.length < 2) return 1;
+  var y0 = fileListEl.children[0].getBoundingClientRect().top;
+  var n = 1;
+  while (n < fileListEl.children.length &&
+         fileListEl.children[n].getBoundingClientRect().top <= y0 + 1) {
+    n++;
+  }
+  return Math.max(1, n);
+}
+
+function moveSelectionByRows(rows) {
+  if (listing.length === 0) return;
+  var cols   = getGridColumnCount();
+  var start  = selectedIdx < 0 ? 0 : selectedIdx;
+  var target = Math.max(0, Math.min(listing.length - 1, start + rows * cols));
+  selectItem(target, true);
+}
 
 function moveSelectionBy(delta) {
   if (listing.length === 0) return;

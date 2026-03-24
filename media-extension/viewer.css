@@ -470,6 +470,15 @@ html, body {
   flex-shrink: 0;
 }
 
+/* Pulse while the thumbnail is still loading */
+@keyframes thumb-pulse {
+  0%, 100% { background-color: #1a1a1a; }
+  50%       { background-color: #2e2e2e; }
+}
+.thumb-img:not(.thumb-loaded):not(.thumb-missing) {
+  animation: thumb-pulse 1.2s ease-in-out infinite;
+}
+
 /* Placeholder shown when thumbnail fails to load */
 .thumb-img.thumb-missing {
   visibility: hidden;
