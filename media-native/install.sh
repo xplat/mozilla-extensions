@@ -25,14 +25,35 @@ esac
 # This installs media_native_host and media-open as console scripts and pulls
 # in jeepney (D-Bus client) as a dependency on Linux.
 # Prefer pipx (isolated venv, works on all systems); fall back to pip3 --user.
+#
+# Usage: ./install.sh [--break-system-packages]
+#   --break-system-packages  passed through to pip3 on PEP 668 systems
+#                            (Debian/Ubuntu 23+); required only when pipx is
+#                            unavailable and pip3 --user refuses to install.
+
+BREAK_SYSTEM=0
+for arg in "$@"; do
+  [ "$arg" = "--break-system-packages" ] && BREAK_SYSTEM=1
+done
+
+PKG_SPEC="media-viewer-host @ file://$SCRIPT_DIR"
 
 if command -v pipx >/dev/null 2>&1; then
-  pipx install --force "$SCRIPT_DIR"
+  pipx install --force "$PKG_SPEC"
   echo "Installed package via pipx"
-else
-  pip3 install --user "$SCRIPT_DIR" || \
-  pip3 install --user --break-system-packages "$SCRIPT_DIR"
+elif pip3 install --user "$SCRIPT_DIR"; then
   echo "Installed package via pip"
+elif [ "$BREAK_SYSTEM" -eq 1 ]; then
+  pip3 install --user --break-system-packages "$SCRIPT_DIR"
+  echo "Installed package via pip (--break-system-packages)"
+else
+  echo "" >&2
+  echo "pip3 install --user failed.  If this system uses an externally-managed" >&2
+  echo "Python environment (PEP 668 / Debian / Ubuntu 23+), re-run with:" >&2
+  echo "" >&2
+  echo "  $0 --break-system-packages" >&2
+  echo "" >&2
+  exit 1
 fi
 
 # ── Locate the installed host binary ─────────────────────────────────────────
@@ -44,7 +65,7 @@ SCRIPTS_DIR="$(python3 -c \
 HOST_BIN="$SCRIPTS_DIR/media_native_host"
 
 if [ ! -f "$HOST_BIN" ]; then
-  # Fallback: common default
+  # Fallback: common default (also where pipx places its wrappers)
   HOST_BIN="$HOME/.local/bin/media_native_host"
 fi
 echo "Host binary → $HOST_BIN"
