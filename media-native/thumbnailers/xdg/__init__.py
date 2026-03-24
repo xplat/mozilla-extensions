@@ -72,9 +72,32 @@ _MINIMAL_PNG = (
 )
 
 
+# ── Backend ─────────────────────────────────────────────────────────────────────
+
+class Backend:
+    """Minimal interface shared by all thumbnail backends.
+
+    Concrete implementations either subclass XDGBackend (for backends that
+    use an on-disk thumbnail cache) or implement request() directly (e.g.
+    WindowsBackend, which delegates entirely to the Shell cache via COM).
+    """
+
+    available                    = True
+    supports_preemptive_queueing = False
+
+    def request(self, file_path, timeout=30.0):
+        """Return PNG bytes for file_path, or None on failure."""
+        raise NotImplementedError
+
+    def queue_dir(self, dir_path):
+        """Scan dir_path and schedule unresolved images for background generation.
+        Default is a no-op; override in backends that support preemptive queueing.
+        """
+
+
 # ── XDGBackend ──────────────────────────────────────────────────────────────────
 
-class XDGBackend:
+class XDGBackend(Backend):
     """Base class for thumbnail backends that use an XDG-style on-disk cache.
 
     Subclasses must implement _generate().  Class-level overrides:
@@ -91,10 +114,8 @@ class XDGBackend:
 
     _APP_NAME = 'media-viewer'   # fail-cache subdirectory name
 
-    available                    = True
-    supports_preemptive_queueing = False
-    cache_root                   = None   # override as a class attribute in subclass
-    _check_xdg_metadata          = True
+    cache_root          = None   # override as a class attribute in subclass
+    _check_xdg_metadata = True
 
     def __init__(self):
         if self._check_xdg_metadata:
@@ -162,7 +183,7 @@ class XDGBackend:
         to skip files that do not need background processing.
         """
         thumb = self._thumb_path(file_path)
-        if thumb is not None and thumb.exists() and self._is_valid(thumb, file_path):
+        if thumb.exists() and self._is_valid(thumb, file_path):
             return True
         return self._is_failed(file_path)
 
@@ -201,18 +222,11 @@ class XDGBackend:
         can be produced.
         """
         thumb = self._thumb_path(file_path)
-        if thumb is not None and thumb.exists() and self._is_valid(thumb, file_path):
+        if thumb.exists() and self._is_valid(thumb, file_path):
             return self._slurp(thumb)
         if self._is_failed(file_path):
             return None
         return self._generate(file_path, thumb, self._fail_path(file_path), timeout)
-
-    def queue_dir(self, dir_path):
-        """Scan dir_path and schedule unresolved thumbnails for background generation.
-
-        The default implementation is a no-op.  Override in backends that
-        support preemptive queueing (e.g. XfceBackend via Tumbler).
-        """
 
     # ── Protected abstract ────────────────────────────────────────────────
 

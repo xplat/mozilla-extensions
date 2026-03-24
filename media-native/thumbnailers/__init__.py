@@ -25,7 +25,7 @@ import importlib
 import re
 import sys
 
-from .xdg import XDGBackend, MIME_TYPES
+from .xdg import Backend, XDGBackend, MIME_TYPES
 
 
 # ── NullBackend ─────────────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ class _NullBackend(XDGBackend):
 
 # ── Module state ────────────────────────────────────────────────────────────────
 
-_backend: XDGBackend = _NullBackend()
+_backend: Backend = _NullBackend()
 
 
 # ── Initialisation ──────────────────────────────────────────────────────────────

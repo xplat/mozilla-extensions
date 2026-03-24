@@ -21,7 +21,7 @@ import os
 
 from PIL import Image
 
-from .xdg import XDGBackend, MIME_TYPES
+from .xdg import Backend, MIME_TYPES
 
 _THUMB_SIZE = 128
 
@@ -173,7 +173,7 @@ def _hbitmap_to_pil(hbm):
 
 # ── Backend ───────────────────────────────────────────────────────────────────
 
-class WindowsBackend(XDGBackend):
+class WindowsBackend(Backend):
     """Thumbnail backend for Windows using IShellItemImageFactory + GDI.
 
     Thumbnails are fetched from (or generated into) the Windows Shell cache
@@ -181,18 +181,7 @@ class WindowsBackend(XDGBackend):
     private file cache is written; the Shell manages its own thumbcache.db.
     """
 
-    supports_preemptive_queueing = False
-    _check_xdg_metadata          = False
-
-    def _thumb_path(self, file_path):
-        """Windows thumbnails are served from memory; no file cache is used."""
-        return None
-
-    def _is_failed(self, file_path):
-        """No fail cache on Windows."""
-        return False
-
-    def _generate(self, file_path, thumb, fail, timeout=30.0):
+    def request(self, file_path, timeout=30.0):
         """Fetch the thumbnail from the Windows Shell cache.
         Returns PNG bytes on success, None on failure."""
         ext = os.path.splitext(file_path)[1].lower()
