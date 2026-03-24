@@ -40,7 +40,7 @@ knows where to direct proxy requests.
 Native messaging wire format: 4-byte LE length prefix + UTF-8 JSON.
 """
 
-import sys, os, json, struct, secrets, threading, pathlib, select, stat
+import sys, os, json, logging, struct, secrets, threading, pathlib, select, stat
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
@@ -342,9 +342,26 @@ def validate_open_request(req):
             file_name = ''
     return {'dir': dir_path, 'file': file_name}
 
+# ── Logging ────────────────────────────────────────────────────────────────────
+
+# stdout carries the native messaging wire protocol (4-byte-length-prefixed JSON)
+# so logging must never go there.  stderr is silently discarded by Firefox for
+# native messaging hosts.  Log to a file instead.
+def _init_logging():
+    log_path = _XDG_CACHE_HOME / 'media-viewer' / 'media_native_host.log'
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        filename=str(log_path),
+        level=logging.DEBUG,
+        format='%(asctime)s %(levelname)-8s %(name)s: %(message)s',
+        datefmt='%H:%M:%S',
+    )
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
+    _init_logging()
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     thumbnailers.init()
     port = start_http_server()
