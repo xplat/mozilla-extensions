@@ -26,6 +26,7 @@ subprocesses speculatively is too expensive without a proper scheduler.
 
 import configparser
 import ctypes
+import logging
 import os
 import re
 import select
@@ -36,6 +37,8 @@ import subprocess
 import threading
 
 from . import XDGBackend, MIME_TYPES, file_uri
+
+_log = logging.getLogger(__name__)
 
 _THUMBNAILERS_DIR   = '/usr/share/thumbnailers'
 _THUMB_SIZE         = 128   # XDG 'normal' thumbnail size in pixels
@@ -73,16 +76,21 @@ class MateBackend(XDGBackend):
         ext  = os.path.splitext(file_path)[1].lower()
         mime = MIME_TYPES.get(ext)
         if mime is None:
+            _log.debug('mate: no MIME type for extension %r, skipping', ext)
             return None
 
         with self._lock:
             exec_str = self._handlers.get(mime) or self._wildcard_exec(mime)
         if exec_str is None:
+            _log.debug('mate: no handler for %s (%s), skipping', mime, file_path)
             return None
 
+        _log.debug('mate: generating thumbnail for %s (mime=%s)', file_path, mime)
         thumb.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         if _run_thumbnailer(exec_str, _THUMB_SIZE, file_path, thumb, timeout):
+            _log.debug('mate: thumbnail written to %s', thumb)
             return self._slurp(thumb)
+        _log.debug('mate: thumbnailer failed for %s', file_path)
         return None
 
     # queue_dir: inherited no-op from XDGBackend
@@ -112,9 +120,12 @@ class MateBackend(XDGBackend):
                     elif m not in _SUPPORTED_MIMES:
                         continue
                     # Last-wins if multiple files claim the same MIME type.
+                    _log.debug('mate: %s → %s', m, exec_str)
                     handlers[m] = exec_str
         except OSError:
-            pass
+            _log.warning('mate: could not scan %s', _THUMBNAILERS_DIR, exc_info=True)
+        _log.info('mate: loaded %d handler(s) for %s',
+                  len(handlers), sorted(handlers))
         with self._lock:
             self._handlers = handlers
 
@@ -150,9 +161,10 @@ class MateBackend(XDGBackend):
                         if name.endswith(b'.thumbnailer'):
                             changed = True
                     if changed:
+                        _log.debug('mate: thumbnailers dir changed, reloading')
                         backend._load_thumbnailers()
             except Exception:
-                pass
+                _log.warning('mate: inotify watcher exiting', exc_info=True)
 
         threading.Thread(target=_watcher, daemon=True,
                          name='mate-thumbnailer-watcher').start()
@@ -171,17 +183,22 @@ def _parse_thumbnailer_file(path):
         cfg.read(path, encoding='utf-8')
         sec = 'Thumbnailer Entry'
         if not cfg.has_section(sec):
+            _log.debug('mate: %s: no [Thumbnailer Entry] section, skipping', path)
             return None
         exec_str   = cfg.get(sec, 'Exec',     fallback='').strip()
         try_exec   = cfg.get(sec, 'TryExec',  fallback='').strip()
         mime_field = cfg.get(sec, 'MimeType', fallback='').strip()
         if not exec_str:
+            _log.debug('mate: %s: empty Exec field, skipping', path)
             return None
         if try_exec and not shutil.which(try_exec):
+            _log.debug('mate: %s: TryExec binary %r not found, skipping', path, try_exec)
             return None
         mimes = [m.strip() for m in mime_field.split(';') if m.strip()]
+        _log.debug('mate: %s: Exec=%r MimeType=%r', path, exec_str, mimes)
         return exec_str, mimes
     except Exception:
+        _log.warning('mate: failed to parse %s', path, exc_info=True)
         return None
 
 
@@ -200,17 +217,28 @@ def _build_command(exec_str, size, input_uri, input_path, output_path):
 
 def _run_thumbnailer(exec_str, size, input_path, thumb_path, timeout):
     """Run the thumbnailer command. Returns True if the output PNG was written."""
+    cmd = None
     try:
         uri = file_uri(input_path)
         cmd = _build_command(exec_str, size, uri, input_path, str(thumb_path))
+        _log.debug('mate: running %s', cmd)
         result = subprocess.run(
             cmd,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=timeout,
         )
-        return result.returncode == 0 and thumb_path.exists()
+        ok = result.returncode == 0 and thumb_path.exists()
+        if ok:
+            _log.debug('mate: exit 0, output exists')
+        else:
+            _log.debug('mate: exit %d, output exists=%s\n  stdout: %s\n  stderr: %s',
+                       result.returncode, thumb_path.exists(),
+                       result.stdout.decode(errors='replace').strip(),
+                       result.stderr.decode(errors='replace').strip())
+        return ok
     except Exception:
+        _log.warning('mate: failed to run thumbnailer %s', cmd or exec_str, exc_info=True)
         return False
 
 
