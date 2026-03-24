@@ -24,9 +24,10 @@ port or secret token:
 
 | Prefix | Purpose |
 |--------|---------|
-| `http://127.7.203.98/media-file/`  | Fetch an image file |
-| `http://127.7.203.98/media-dir/`   | Fetch a directory listing (JSON) |
-| `http://127.7.203.98/media-thumb/` | Fetch a 128px thumbnail PNG |
+| `http://127.7.203.98/media-file/`      | Fetch an image file |
+| `http://127.7.203.98/media-dir/`       | Fetch a directory listing (JSON) |
+| `http://127.7.203.98/media-thumb/`     | Fetch a 128px thumbnail PNG |
+| `http://127.7.203.98/media-queue-dir/` | Trigger background thumbnail pre-generation for a directory |
 
 The background script intercepts `webRequest.onBeforeRequest` for both prefixes and
 rewrites them to the real native-host HTTP server URL:
@@ -74,9 +75,12 @@ Binds to `127.7.203.98:0` (OS-assigned random port).  Handles:
 * `GET /<token>/media-thumb/<encoded-absolute-path>` — return a 128×128 thumbnail PNG.
   Checks the XDG thumbnail cache (`~/.cache/thumbnails/normal/<md5>.png`) first.
   On a cache miss, generates via the platform thumbnail service and caches the result:
-  Linux: Tumbler (`org.freedesktop.thumbnails.Thumbnailer1` D-Bus) tried via
-  `jeepney` (pip dependency), then `dbus-python`, then `dbus-send` subprocess;
-  macOS: `qlmanage -t`.  Pillow is a last resort on any platform.
+  Linux: delegates to the `thumbnailers` package which detects the desktop
+  environment and uses the appropriate backend — **XFCE**: Tumbler D-Bus service
+  (`org.freedesktop.thumbnails.Thumbnailer1`) via `jeepney`; **MATE**: reads
+  `/usr/share/thumbnailers/*.thumbnailer` INI files and invokes command-line
+  thumbnailers directly.  macOS: `qlmanage -t`.  Pillow is a last resort on any
+  platform.
   Returns `404` if no thumbnail can be produced.
 * `OPTIONS` — CORS preflight.
 
@@ -102,11 +106,16 @@ media-extension/
   viewer.css             Styling
   icons/                 16 / 48 / 128 px PNGs
 media-native/
-  pyproject.toml         pip package definition (declares jeepney dependency)
+  pyproject.toml         pip package definition (declares jeepney dependency on Linux)
   media_native_host.py   Native messaging host (console script: media_native_host)
   media_open.py          CLI tool to open a directory/file (console script: media-open)
   media_viewer_host.json Native messaging manifest template (reference only)
   install.sh             Installation script
+  thumbnailers/          Thumbnail generation package
+    __init__.py          Platform detection + unified API
+    xdg.py              XDG cache helpers (file_uri, thumb paths, MIME types)
+    xfce.py             XFCE/Tumbler D-Bus backend
+    mate.py             MATE/Caja command-line thumbnailer backend
 ```
 
 Extension ID: `media-viewer@xplat.github.io`
@@ -352,8 +361,9 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
   Alt+ shortcuts either have equivalents (`Alt-n/s/d` sort → `s` key cycle) or are
   omitted (tagging, thumbnail management, dithering).
 * **`v` (thumbnail toggle)**: xzgv's `v` cycled between large and small thumbnail
-  sizes.  Here it toggles between a thumbnail grid (128px images, lazy-loaded
-  via `media-thumb`) and the plain filename list.  State is persisted in history.
+  sizes.  Here it toggles between a thumbnail list view (48px thumbnails with
+  filename alongside, lazy-loaded via `media-thumb`) and the plain filename list.
+  State is persisted in history.
 * **Removed from xzgv**: copy, move, rename, delete, tagging, thumbnail
   management, dithering / interpolation controls.
 * **Removed**: `q` to quit — the browser provides adequate tab-close controls.
@@ -390,7 +400,7 @@ The script:
    `jeepney` (pure-Python D-Bus client) on Linux.
 2. Locates the installed `media_native_host` binary via `sysconfig`.
 3. Writes the native messaging manifest to the correct OS location.
-4. Creates `~/.media-viewer/queue/`.
+4. Creates `$XDG_CACHE_HOME/media-viewer/queue/` (defaults to `~/.cache/media-viewer/queue/`).
 
 ### CLI Usage
 
