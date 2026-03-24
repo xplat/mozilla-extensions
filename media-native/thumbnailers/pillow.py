@@ -25,9 +25,8 @@ _THUMB_SIZE = 128
 
 
 class PillowBackend(XDGBackend):
-    supports_preemptive_queueing = False
-    _check_xdg_metadata          = False  # we write our own PNGs without XDG metadata
-    cache_root                   = _cache_home() / 'thumbnails-pillow'
+    _check_xdg_metadata = False  # we write our own PNGs without XDG metadata
+    cache_root          = _cache_home() / 'thumbnails-pillow'
 
     def _generate(self, file_path, thumb, fail, timeout=30.0):
         """Generate a thumbnail with Pillow.

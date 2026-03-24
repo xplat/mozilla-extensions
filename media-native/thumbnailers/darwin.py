@@ -18,8 +18,7 @@ _THUMB_SIZE = 128
 
 
 class DarwinBackend(XDGBackend):
-    supports_preemptive_queueing = False
-    _check_xdg_metadata          = False  # qlmanage doesn't embed XDG metadata blocks
+    _check_xdg_metadata = False  # qlmanage doesn't embed XDG metadata blocks
 
     def _generate(self, file_path, thumb, fail, timeout=30.0):
         """Generate a thumbnail via qlmanage.

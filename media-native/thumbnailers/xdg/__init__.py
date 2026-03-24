@@ -23,29 +23,14 @@ import pathlib
 import re
 import urllib.parse
 
+from .._base import Backend, MIME_TYPES
+
 
 # ── Cache root helpers ──────────────────────────────────────────────────────────
 
 def _cache_home():
     raw = os.environ.get('XDG_CACHE_HOME', '').strip()
     return pathlib.Path(raw) if raw else pathlib.Path.home() / '.cache'
-
-
-# ── MIME types for thumbnail-eligible files ─────────────────────────────────────
-
-MIME_TYPES = {
-    '.jpg':  'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.png':  'image/png',
-    '.gif':  'image/gif',
-    '.webp': 'image/webp',
-    '.avif': 'image/avif',
-    '.bmp':  'image/bmp',
-    '.tiff': 'image/tiff',
-    '.tif':  'image/tiff',
-    '.svg':  'image/svg+xml',
-    '.ico':  'image/x-icon',
-}
 
 
 # ── URI / path helpers ──────────────────────────────────────────────────────────
@@ -72,29 +57,6 @@ _MINIMAL_PNG = (
 )
 
 
-# ── Backend ─────────────────────────────────────────────────────────────────────
-
-class Backend:
-    """Minimal interface shared by all thumbnail backends.
-
-    Concrete implementations either subclass XDGBackend (for backends that
-    use an on-disk thumbnail cache) or implement request() directly (e.g.
-    WindowsBackend, which delegates entirely to the Shell cache via COM).
-    """
-
-    available                    = True
-    supports_preemptive_queueing = False
-
-    def request(self, file_path, timeout=30.0):
-        """Return PNG bytes for file_path, or None on failure."""
-        raise NotImplementedError
-
-    def queue_dir(self, dir_path):
-        """Scan dir_path and schedule unresolved images for background generation.
-        Default is a no-op; override in backends that support preemptive queueing.
-        """
-
-
 # ── XDGBackend ──────────────────────────────────────────────────────────────────
 
 class XDGBackend(Backend):
@@ -112,9 +74,8 @@ class XDGBackend(Backend):
                             (e.g. Darwin's qlmanage).
     """
 
-    _APP_NAME = 'media-viewer'   # fail-cache subdirectory name
-
-    cache_root          = None   # override as a class attribute in subclass
+    _APP_NAME           = 'media-viewer'   # fail-cache subdirectory name
+    cache_root          = None             # override as a class attribute in subclass
     _check_xdg_metadata = True
 
     def __init__(self):

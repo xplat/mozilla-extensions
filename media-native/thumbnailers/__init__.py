@@ -25,7 +25,8 @@ import importlib
 import re
 import sys
 
-from .xdg import Backend, XDGBackend, MIME_TYPES
+from ._base import Backend, MIME_TYPES
+from .xdg import XDGBackend
 
 
 # ── NullBackend ─────────────────────────────────────────────────────────────────
@@ -37,8 +38,7 @@ class _NullBackend(XDGBackend):
     in the XDG cache (written by another tool) will still be served.
     _generate() always returns None, so no new thumbnails are produced.
     """
-    available                    = False
-    supports_preemptive_queueing = False
+    available = False
 
     def _generate(self, file_path, thumb, fail, timeout=30.0):
         return None

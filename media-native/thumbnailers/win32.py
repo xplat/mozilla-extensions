@@ -21,7 +21,7 @@ import os
 
 from PIL import Image
 
-from .xdg import Backend, MIME_TYPES
+from ._base import Backend, MIME_TYPES
 
 _THUMB_SIZE = 128
 

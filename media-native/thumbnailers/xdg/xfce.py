@@ -36,9 +36,8 @@ class _WaitSlot:
 
 
 class XfceBackend(XDGBackend):
-    BATCH_WINDOW             = 0.05   # seconds to collect requests before flushing
-    HANDLE_TIMEOUT           = 60.0   # seconds of signal inactivity before handle GC
-    supports_preemptive_queueing = True
+    BATCH_WINDOW   = 0.05   # seconds to collect requests before flushing
+    HANDLE_TIMEOUT = 60.0   # seconds of signal inactivity before handle GC
 
     # Limits for queue_dir scans.
     _QUEUE_DIR_TIME_BUDGET  = 0.15    # seconds
