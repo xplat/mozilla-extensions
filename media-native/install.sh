@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-QUEUE_DIR="$HOME/.media-viewer/queue"
+QUEUE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/media-viewer/queue"
 
 # ── Detect OS ────────────────────────────────────────────────────────────────
 

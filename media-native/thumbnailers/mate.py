@@ -1,0 +1,199 @@
+"""Caja-based thumbnail backend for MATE.
+
+MATE's file manager (Caja) defines a thumbnailer registry through small
+INI-style .thumbnailer files in /usr/share/thumbnailers.  Each file lists
+one or more MIME types and a command template to invoke.
+
+Format:
+    [Thumbnailer Entry]
+    TryExec=/usr/bin/some-thumbnailer   # optional: skip if binary not found
+    Exec=/usr/bin/some-thumbnailer %s %u %o
+    MimeType=image/jpeg;image/png;video/*;
+
+Format codes in Exec:
+    %s  largest side in pixels (128 for the XDG 'normal' size)
+    %u  URI of the input file
+    %i  file path of the input file (alternative to %u used by some tools)
+    %o  output file path (where to write the PNG thumbnail)
+    %%  literal percent sign
+
+An inotify watch on /usr/share/thumbnailers triggers a reload whenever a
+.thumbnailer file is installed or removed.
+
+Prefetch (queue_preemptive) is a no-op: running multiple thumbnailer
+subprocesses speculatively is too expensive without a proper scheduler.
+"""
+
+import configparser
+import ctypes
+import os
+import select
+import shlex
+import shutil
+import struct
+import subprocess
+import threading
+
+from .xdg import MIME_TYPES, THUMB_DIR, file_uri, xdg_thumb_path
+
+_THUMBNAILERS_DIR = '/usr/share/thumbnailers'
+_THUMB_SIZE       = 128   # XDG 'normal' thumbnail size in pixels
+
+# inotify event masks
+_IN_CLOSE_WRITE = 0x00000008
+_IN_CREATE      = 0x00000100
+_IN_DELETE      = 0x00000200
+_IN_MOVED_FROM  = 0x00000040
+_IN_MOVED_TO    = 0x00000080
+_WATCH_MASK     = (_IN_CLOSE_WRITE | _IN_CREATE | _IN_DELETE |
+                   _IN_MOVED_FROM  | _IN_MOVED_TO)
+
+_libc = ctypes.CDLL(None, use_errno=True)   # default C library (glibc on Linux)
+
+
+class MateBackend:
+
+    def __init__(self):
+        self._lock     = threading.Lock()
+        self._handlers = {}   # mime_type / mime_prefix -> exec_str
+        self._load_thumbnailers()
+        self._start_watcher()
+
+    # ── Public API ─────────────────────────────────────────────────────────
+
+    def request(self, file_path, timeout=30.0):
+        """Run the appropriate thumbnailer for file_path. Returns True on success."""
+        ext  = os.path.splitext(file_path)[1].lower()
+        mime = MIME_TYPES.get(ext)
+        if mime is None:
+            return False
+
+        with self._lock:
+            exec_str = self._handlers.get(mime) or self._wildcard_exec(mime)
+        if exec_str is None:
+            return False
+
+        thumb_path = xdg_thumb_path(file_path)
+        THUMB_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return _run_thumbnailer(exec_str, _THUMB_SIZE, file_path, thumb_path, timeout)
+
+    def queue_preemptive(self, uris, mimes):
+        """No-op: speculative prefetch is not implemented for MATE."""
+
+    # ── Internal ───────────────────────────────────────────────────────────
+
+    def _wildcard_exec(self, mime):
+        """Return exec_str for a wildcard pattern like 'image/*'. Lock held."""
+        prefix = mime.split('/')[0] + '/*'
+        return self._handlers.get(prefix)
+
+    def _load_thumbnailers(self):
+        handlers = {}
+        try:
+            for entry in os.scandir(_THUMBNAILERS_DIR):
+                if not entry.name.endswith('.thumbnailer'):
+                    continue
+                result = _parse_thumbnailer_file(entry.path)
+                if result is None:
+                    continue
+                exec_str, mimes = result
+                for m in mimes:
+                    # Last-wins if multiple files claim the same MIME type.
+                    handlers[m] = exec_str
+        except OSError:
+            pass
+        with self._lock:
+            self._handlers = handlers
+
+    def _start_watcher(self):
+        """Watch _THUMBNAILERS_DIR with inotify and reload on any change."""
+        backend = self
+
+        def _watcher():
+            try:
+                fd = _libc.inotify_init()
+                if fd < 0:
+                    return
+                wd = _libc.inotify_add_watch(
+                    fd,
+                    _THUMBNAILERS_DIR.encode(),
+                    ctypes.c_uint32(_WATCH_MASK),
+                )
+                if wd < 0:
+                    os.close(fd)
+                    return
+                while True:
+                    r, _, _ = select.select([fd], [], [], 300.0)
+                    if not r:
+                        continue
+                    buf     = os.read(fd, 4096)
+                    changed = False
+                    offset  = 0
+                    while offset + 16 <= len(buf):
+                        _, _, _, name_len = struct.unpack_from('iIII', buf, offset)
+                        offset += 16
+                        name    = buf[offset:offset + name_len].rstrip(b'\x00')
+                        offset += name_len
+                        if name.endswith(b'.thumbnailer'):
+                            changed = True
+                    if changed:
+                        backend._load_thumbnailers()
+            except Exception:
+                pass
+
+        threading.Thread(target=_watcher, daemon=True,
+                         name='mate-thumbnailer-watcher').start()
+
+
+# ── Module-level helpers ───────────────────────────────────────────────────────
+
+def _parse_thumbnailer_file(path):
+    """Parse a .thumbnailer INI file.
+
+    Returns (exec_str, [mime_type, ...]) or None if the file is invalid,
+    missing mandatory fields, or TryExec points to a non-existent binary.
+    """
+    try:
+        cfg = configparser.RawConfigParser()
+        cfg.read(path, encoding='utf-8')
+        sec = 'Thumbnailer Entry'
+        if not cfg.has_section(sec):
+            return None
+        exec_str   = cfg.get(sec, 'Exec',     fallback='').strip()
+        try_exec   = cfg.get(sec, 'TryExec',  fallback='').strip()
+        mime_field = cfg.get(sec, 'MimeType', fallback='').strip()
+        if not exec_str:
+            return None
+        if try_exec and not shutil.which(try_exec):
+            return None
+        mimes = [m.strip() for m in mime_field.split(';') if m.strip()]
+        return exec_str, mimes
+    except Exception:
+        return None
+
+
+def _build_command(exec_str, size, input_uri, input_path, output_path):
+    """Substitute format codes in exec_str and return a command list."""
+    s = exec_str.replace('%%', '\x00')   # protect literal %
+    s = s.replace('%s', str(size))
+    s = s.replace('%u', input_uri)
+    s = s.replace('%i', input_path)
+    s = s.replace('%o', output_path)
+    s = s.replace('\x00', '%')
+    return shlex.split(s)
+
+
+def _run_thumbnailer(exec_str, size, input_path, thumb_path, timeout):
+    """Run the thumbnailer command. Returns True if the output PNG was created."""
+    try:
+        uri = file_uri(input_path)
+        cmd = _build_command(exec_str, size, uri, input_path, str(thumb_path))
+        result = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=timeout,
+        )
+        return result.returncode == 0 and thumb_path.exists()
+    except Exception:
+        return False
