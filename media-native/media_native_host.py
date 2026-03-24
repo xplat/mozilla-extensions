@@ -266,15 +266,17 @@ class MediaHandler(BaseHTTPRequestHandler):
             self._error(404, 'File not found')
             return
 
-        thumb_path = thumbnailers.thumb_path(file_path)
-
-        if thumb_path.exists() and thumbnailers.is_valid(thumb_path, file_path):
-            self._send_png(thumb_path, head_only)
+        # Fast path: valid entry already in the backend's on-disk cache.
+        thumb = thumbnailers.thumb_path(file_path)
+        if thumb is not None and thumb.exists() and thumbnailers.is_valid(thumb, file_path):
+            self._send_png(thumb, head_only)
             return
 
-        if not thumbnailers.is_failed(file_path) and thumbnailers.request(file_path):
-            if thumb_path.exists():
-                self._send_png(thumb_path, head_only)
+        # Generate / fetch from system cache.
+        if not thumbnailers.is_failed(file_path):
+            data = thumbnailers.request(file_path)
+            if data is not None:
+                self._send_png_data(data, head_only)
                 return
 
         self._error(404, 'No thumbnail available')
@@ -290,6 +292,16 @@ class MediaHandler(BaseHTTPRequestHandler):
         self.send_cors()
         self.send_header('Content-Type',   'image/png')
         self.send_header('Content-Length', str(size))
+        self.send_header('Cache-Control',  'max-age=3600')
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(data)
+
+    def _send_png_data(self, data, head_only):
+        self.send_response(200)
+        self.send_cors()
+        self.send_header('Content-Type',   'image/png')
+        self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control',  'max-age=3600')
         self.end_headers()
         if not head_only:
@@ -352,10 +364,10 @@ def _prequeue_dir(dir_path):
         if mime is None:
             continue
 
-        file_path  = entry.path
-        thumb_path = thumbnailers.thumb_path(file_path)
+        file_path = entry.path
+        thumb     = thumbnailers.thumb_path(file_path)
 
-        if thumb_path.exists() and thumbnailers.is_valid(thumb_path, file_path):
+        if thumb is not None and thumb.exists() and thumbnailers.is_valid(thumb, file_path):
             continue
         if thumbnailers.is_failed(file_path):
             continue

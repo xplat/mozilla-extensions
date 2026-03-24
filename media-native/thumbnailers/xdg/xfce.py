@@ -55,7 +55,8 @@ class XfceBackend(XDGBackend):
     # ── Public API ──────────────────────────────────────────────────────────
 
     def request(self, file_path, timeout=30.0):
-        """Queue file_path with Tumbler; block until Ready/Error/timeout."""
+        """Queue file_path with Tumbler; block until Ready/Error/timeout.
+        Returns PNG bytes on success, None on failure."""
         uri = file_uri(file_path)
         with self._lock:
             slot = _WaitSlot()
@@ -68,7 +69,12 @@ class XfceBackend(XDGBackend):
                     self._timer.daemon = True
                     self._timer.start()
         slot.event.wait(timeout)
-        return slot.success
+        if not slot.success:
+            return None
+        try:
+            return self.thumb_path(file_path).read_bytes()
+        except OSError:
+            return None
 
     def queue_preemptive(self, uris, mimes):
         """Fire-and-forget: send uris to Tumbler with scheduler='background'."""

@@ -6,10 +6,9 @@ client API that handles cache population internally without requiring direct
 access to the thumbcache .db files.
 
 The HBITMAP returned by GetImage is extracted to raw pixels with GDI
-(GetDIBits) and converted to PNG by Pillow, then written to a private file
-cache so the rest of the daemon can serve it as a normal static file:
-
-    %LOCALAPPDATA%\\thumbnail-cache\\thumbnails\\normal\\<md5>.png
+(GetDIBits) and converted to PNG bytes by Pillow, which are returned directly
+to the caller.  No private file cache is created; the Windows Shell cache is
+the sole persistent store.
 
 COM is accessed through ctypes.windll only; no comtypes package is required.
 Pillow is the sole external dependency.
@@ -17,21 +16,19 @@ Pillow is the sole external dependency.
 
 import ctypes
 import ctypes.wintypes
+import io
 import os
-import pathlib
-import tempfile
 
 from PIL import Image
 
-from .xdg import XDGBackend, MIME_TYPES, _cache_home
+from .xdg import XDGBackend, MIME_TYPES
 
 _THUMB_SIZE = 128
 
-# SIIGBF flags: scale to fit + accept a bigger cached entry rather than
-# regenerating.  We resize the result with Pillow after retrieval.
-_SIIGBF_RESIZETOFIT  = 0x00000000
-_SIIGBF_BIGGERSIZEOK = 0x00000001
-_SIIGBF_FLAGS        = _SIIGBF_RESIZETOFIT | _SIIGBF_BIGGERSIZEOK
+# SIIGBF_RESIZETOFIT (0): scale the result to fit within the requested size.
+# We do not set SIIGBF_BIGGERSIZEOK, so Windows will not hand back a larger
+# cached entry that we would then have to resize ourselves.
+_SIIGBF_RESIZETOFIT = 0x00000000
 
 _S_OK = 0
 _COINIT_APARTMENTTHREADED = 0x2
@@ -174,50 +171,47 @@ def _hbitmap_to_pil(hbm):
         _gdi32.DeleteDC(hdc)
 
 
-# ── Cache location ────────────────────────────────────────────────────────────
-
-def _win_cache_root():
-    local = os.environ.get('LOCALAPPDATA', '')
-    return (pathlib.Path(local) / 'thumbnail-cache'
-            if local else _cache_home() / 'thumbnails-win32')
-
-
 # ── Backend ───────────────────────────────────────────────────────────────────
 
 class WindowsBackend(XDGBackend):
     """Thumbnail backend for Windows using IShellItemImageFactory + GDI.
 
     Thumbnails are fetched from (or generated into) the Windows Shell cache
-    via COM, converted to PNG by Pillow, and written to a private file cache
-    so the daemon can serve them as static files — the same model used by
-    DarwinBackend and PillowBackend on their respective platforms.
+    via COM, converted to PNG bytes by Pillow, and returned directly.  No
+    private file cache is written; the Shell manages its own thumbcache.db.
     """
 
     supports_preemptive_queueing = False
-    _check_xdg_metadata          = False   # we write plain PNGs, no XDG blocks
-    cache_root                   = _win_cache_root()
+    _check_xdg_metadata          = False
+
+    def thumb_path(self, file_path):
+        """Windows thumbnails are served from memory; no file cache is used."""
+        return None
+
+    def is_failed(self, file_path):
+        """No fail cache on Windows."""
+        return False
 
     def request(self, file_path, timeout=30.0):
+        """Fetch the thumbnail from the Windows Shell cache.
+        Returns PNG bytes on success, None on failure."""
         ext = os.path.splitext(file_path)[1].lower()
         if ext not in MIME_TYPES:
-            return False
-
-        thumb = self.thumb_path(file_path)
-        thumb.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            return None
 
         # COM must be initialised on every thread before use.
         # S_FALSE (1) means already initialised on this thread — also fine.
         hr_init = _ole32.CoInitializeEx(None, _COINIT_APARTMENTTHREADED)
         if hr_init < 0:
-            return False
+            return None
         try:
-            return self._generate(file_path, thumb)
+            return self._fetch_png(file_path)
         except Exception:
-            return False
+            return None
         finally:
             _ole32.CoUninitialize()
 
-    def _generate(self, file_path, thumb):
+    def _fetch_png(self, file_path):
         # 1. Create an IShellItem for the file.
         ppv = ctypes.c_void_p()
         hr  = _shell32.SHCreateItemFromParsingName(
@@ -225,46 +219,32 @@ class WindowsBackend(XDGBackend):
             ctypes.byref(_IID_IShellItem), ctypes.byref(ppv),
         )
         if hr != _S_OK or not ppv.value:
-            return False
+            return None
         shell_item = ppv.value
         try:
             # 2. Query IShellItemImageFactory from the shell item.
             hr, factory = _qi(shell_item, _IID_IShellItemImageFactory)
             if hr != _S_OK or not factory:
-                return False
+                return None
             try:
-                # 3. Request the thumbnail (uses system cache when available).
-                hr, hbm = _get_image(factory, _THUMB_SIZE, _THUMB_SIZE, _SIIGBF_FLAGS)
+                # 3. Request the thumbnail scaled to fit _THUMB_SIZE × _THUMB_SIZE.
+                hr, hbm = _get_image(factory, _THUMB_SIZE, _THUMB_SIZE,
+                                     _SIIGBF_RESIZETOFIT)
                 if hr != _S_OK or not hbm:
-                    return False
+                    return None
                 try:
-                    return self._save(hbm, thumb)
+                    img = _hbitmap_to_pil(hbm)
+                    if img is None:
+                        return None
+                    buf = io.BytesIO()
+                    img.save(buf, 'PNG')
+                    return buf.getvalue()
                 finally:
                     _gdi32.DeleteObject(hbm)
             finally:
                 _release(factory)
         finally:
             _release(shell_item)
-
-    def _save(self, hbm, thumb):
-        """Convert HBITMAP to PNG and write atomically. Returns True on success."""
-        img = _hbitmap_to_pil(hbm)
-        if img is None:
-            return False
-        # Scale down to fit 128×128 if GetImage returned a larger cached entry.
-        img.thumbnail((_THUMB_SIZE, _THUMB_SIZE), Image.LANCZOS)
-        fd, tmp = tempfile.mkstemp(dir=str(thumb.parent), suffix='.png')
-        os.close(fd)
-        try:
-            img.save(tmp, 'PNG')
-            os.replace(tmp, str(thumb))
-        except Exception:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            return False
-        return True
 
 
 def get_backend():

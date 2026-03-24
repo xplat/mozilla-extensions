@@ -14,6 +14,7 @@ to the caller's importlib.import_module() call, making the fallback logic in
 the root get_backend() straightforward.
 """
 
+import io
 import os
 
 from PIL import Image
@@ -29,18 +30,26 @@ class PillowBackend(XDGBackend):
     cache_root                   = _cache_home() / 'thumbnails-pillow'
 
     def request(self, file_path, timeout=30.0):
+        """Generate a thumbnail with Pillow.
+        Returns PNG bytes on success, None on failure."""
         ext = os.path.splitext(file_path)[1].lower()
         if ext not in MIME_TYPES:
-            return False
+            return None
         thumb = self.thumb_path(file_path)
         thumb.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
+            buf = io.BytesIO()
             with Image.open(file_path) as img:
                 img.thumbnail((_THUMB_SIZE, _THUMB_SIZE))
-                img.save(str(thumb), 'PNG')
-            return True
+                img.save(buf, 'PNG')
         except Exception:
-            return False
+            return None
+        data = buf.getvalue()
+        try:
+            thumb.write_bytes(data)
+        except Exception:
+            pass   # file cache write failed; bytes are still usable
+        return data
 
 
 def get_backend():
