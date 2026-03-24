@@ -39,12 +39,12 @@ done
 PKG_SPEC="media-viewer-host @ file://$SCRIPT_DIR"
 
 if command -v pipx >/dev/null 2>&1; then
-  pipx install --force "$PKG_SPEC"
+  pipx install --force --pip-args="--no-cache-dir" "$PKG_SPEC"
   echo "Installed package via pipx"
-elif pip3 install --user "$SCRIPT_DIR"; then
+elif pip3 install --user --no-cache-dir "$SCRIPT_DIR"; then
   echo "Installed package via pip"
 elif [ "$BREAK_SYSTEM" -eq 1 ]; then
-  pip3 install --user --break-system-packages "$SCRIPT_DIR"
+  pip3 install --user --no-cache-dir --break-system-packages "$SCRIPT_DIR"
   echo "Installed package via pip (--break-system-packages)"
 else
   echo "" >&2
