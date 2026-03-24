@@ -25,14 +25,14 @@ JOB 2 — HTTP file/directory server (background thread):
         file "u" values are relative paths (e.g. "subdir/photo.jpg").
 
     GET /<token>/media-thumb/<url-encoded-absolute-path>
-        Returns a 128px XDG thumbnail PNG.  On Linux, generated on demand via
-        a batched, signal-driven Tumbler D-Bus call.  Falls back to qlmanage
-        (macOS) or Pillow (any platform).
+        Returns a 128px thumbnail PNG.  Generation is delegated to the
+        platform-appropriate backend (Tumbler on XFCE, qlmanage on macOS,
+        Pillow as last resort).
 
     GET /<token>/media-queue-dir/<url-encoded-absolute-path>
         Pre-queues all images in the directory for background thumbnailing
-        (Linux/Tumbler only).  Returns 204 immediately; the Tumbler Queue
-        call runs in a daemon thread.
+        on backends that support it (e.g. Tumbler on XFCE).  Returns 204
+        immediately; the queue call runs in a daemon thread.
 
 On startup, sends {"event":"server","port":N,"token":"T"} so the extension
 knows where to direct proxy requests.
@@ -41,22 +41,12 @@ Native messaging wire format: 4-byte LE length prefix + UTF-8 JSON.
 """
 
 import sys, os, json, struct, secrets, threading, time, pathlib, select, stat
-import hashlib, tempfile, platform, subprocess
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 
-# Optional Pillow — last-resort thumbnail generator only.
-try:
-    from PIL import Image as _PILImage, PngImagePlugin as _PngInfo
-    PIL_AVAILABLE = True
-except ImportError:
-    PIL_AVAILABLE = False
-
-PLATFORM = platform.system()   # 'Linux' | 'Darwin' | …
-
-import thumbnailers                           # platform-neutral; init() is Linux-only
-from thumbnailers.xdg import MIME_TYPES, file_uri as _file_uri
+import thumbnailers
+from thumbnailers import MIME_TYPES, file_uri as _file_uri
 
 _XDG_CACHE_HOME = pathlib.Path(
     os.environ.get('XDG_CACHE_HOME', '').strip() or
@@ -282,9 +272,10 @@ class MediaHandler(BaseHTTPRequestHandler):
             self._send_png(thumb_path, head_only)
             return
 
-        if _try_generate_thumbnail(file_path, thumb_path):
-            self._send_png(thumb_path, head_only)
-            return
+        if not thumbnailers.is_failed(file_path) and thumbnailers.request(file_path):
+            if thumb_path.exists():
+                self._send_png(thumb_path, head_only)
+                return
 
         self._error(404, 'No thumbnail available')
 
@@ -310,7 +301,7 @@ class MediaHandler(BaseHTTPRequestHandler):
         if not os.path.isdir(dir_path):
             self._error(404, 'Not a directory')
             return
-        if PLATFORM == 'Linux' and thumbnailers.is_available():
+        if thumbnailers.supports_preemptive_queueing:
             threading.Thread(target=_prequeue_dir, args=(dir_path,),
                              daemon=True).start()
         self.send_response(204)
@@ -329,34 +320,12 @@ class MediaHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-# ── Thumbnail helpers ──────────────────────────────────────────────────────────
-#
-# XDG cache path calculation, validation, and fail-cache checking all live in
-# thumbnailers/xdg.py and are accessed via the thumbnailers package.  The
-# package is imported unconditionally so that its XDG helpers are available on
-# all platforms (macOS uses them too); thumbnailers.init() is called only on
-# Linux.
-
-def _try_generate_thumbnail(file_path, thumb_path):
-    """Generate a thumbnail using platform-appropriate tools. Returns True on success."""
-    if PLATFORM == 'Linux':
-        if thumbnailers.is_available() and not thumbnailers.is_failed(file_path):
-            if thumbnailers.request(file_path):
-                # Verify the file actually landed in the cache.
-                return thumb_path.exists() and thumbnailers.is_valid(thumb_path, file_path)
-        # Fall through to Pillow if no backend, or generation failed.
-    elif PLATFORM == 'Darwin':
-        if _generate_via_qlmanage(file_path, thumb_path):
-            return True
-    # Last resort: Pillow (any platform).
-    if PIL_AVAILABLE:
-        return _generate_via_pillow(file_path, thumb_path)
-    return False
+# ── Thumbnail helpers ───────────────────────────────────────────────────────────
 
 
 def _prequeue_dir(dir_path):
     """Scan dir_path and submit a background prefetch for uncached images."""
-    if not thumbnailers.is_available():
+    if not thumbnailers.supports_preemptive_queueing:
         return
 
     uris        = []
@@ -404,67 +373,6 @@ def _prequeue_dir(dir_path):
         thumbnailers.queue_preemptive(uris, mimes)
 
 
-# ── macOS: QuickLook via qlmanage ─────────────────────────────────────────────
-
-def _generate_via_qlmanage(file_path, thumb_path):
-    """Use qlmanage to generate a 128px thumbnail and cache it. Returns True on success."""
-    try:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            r = subprocess.run(
-                ['qlmanage', '-t', '-s', '128', '-o', tmp_dir, file_path],
-                capture_output=True, timeout=15,
-            )
-            if r.returncode != 0:
-                return False
-            candidates = [f for f in os.listdir(tmp_dir) if f.lower().endswith('.png')]
-            if not candidates:
-                return False
-            src = os.path.join(tmp_dir, candidates[0])
-            thumb_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=str(thumb_path.parent), suffix='.png')
-            os.close(fd)
-            try:
-                import shutil
-                shutil.copy2(src, tmp)
-                os.replace(tmp, str(thumb_path))
-            except Exception:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
-                raise
-        return True
-    except Exception:
-        return False
-
-
-# ── Fallback: Pillow ──────────────────────────────────────────────────────────
-
-def _generate_via_pillow(file_path, thumb_path):
-    """Generate a 128px XDG thumbnail via Pillow. Returns True on success."""
-    try:
-        with _PILImage.open(file_path) as img:
-            img.thumbnail((128, 128))
-            info = _PngInfo.PngInfo()
-            info.add_text('Thumb::URI',   _file_uri(file_path))
-            info.add_text('Thumb::MTime', str(int(os.path.getmtime(file_path))))
-            thumb_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=str(thumb_path.parent), suffix='.png')
-            os.close(fd)
-            try:
-                img.save(tmp, 'PNG', pnginfo=info)
-                os.replace(tmp, str(thumb_path))
-            except Exception:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
-                raise
-        return True
-    except Exception:
-        return False
-
-
 # ── HTTP server ────────────────────────────────────────────────────────────────
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -509,8 +417,7 @@ def validate_open_request(req):
 
 def main():
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
-    if PLATFORM == 'Linux':
-        thumbnailers.init()
+    thumbnailers.init()
     port = start_http_server()
     send_message({'event': 'server', 'port': port, 'token': TOKEN})
 
