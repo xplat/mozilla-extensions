@@ -16,7 +16,10 @@ Public API used by media_native_host:
     MIME_TYPES                    dict mapping file extension to MIME type string
 
 Backend selection order (auto-detection):
-  1. OS-specific module (linux.py → xdg desktop, darwin.py → qlmanage, …)
+  1. OS-specific module keyed on sys.platform:
+       linux   → linux.py  → XDG desktop detection (Tumbler on XFCE, …)
+       darwin  → darwin.py → qlmanage (Quick Look)
+       win32   → win32.py  → IShellItemImageFactory via COM + GDI
   2. Pillow fallback, if no native backend found or available
   3. NullBackend – always succeeds so the daemon never needs to check for None
 """
