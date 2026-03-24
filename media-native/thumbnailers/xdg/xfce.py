@@ -40,6 +40,11 @@ class XfceBackend(XDGBackend):
     HANDLE_TIMEOUT           = 60.0   # seconds of signal inactivity before handle GC
     supports_preemptive_queueing = True
 
+    # Limits for queue_dir scans.
+    _QUEUE_DIR_TIME_BUDGET  = 0.15    # seconds
+    _QUEUE_DIR_MAX_FILES    = 2000
+    _QUEUE_DIR_MAX_BYTES    = 65536   # total URI + MIME string bytes
+
     def __init__(self):
         super().__init__()
         self._lock             = threading.Lock()
@@ -52,11 +57,11 @@ class XfceBackend(XDGBackend):
         self._conn_lock        = threading.Lock()
         _start_signal_listener(self)
 
-    # ── Public API ──────────────────────────────────────────────────────────
+    # ── XDGBackend interface ─────────────────────────────────────────────────
 
-    def request(self, file_path, timeout=30.0):
+    def _generate(self, file_path, thumb, fail, timeout=30.0):
         """Queue file_path with Tumbler; block until Ready/Error/timeout.
-        Returns PNG bytes on success, None on failure."""
+        Returns cached PNG bytes on success, None on failure."""
         uri = file_uri(file_path)
         with self._lock:
             slot = _WaitSlot()
@@ -71,14 +76,44 @@ class XfceBackend(XDGBackend):
         slot.event.wait(timeout)
         if not slot.success:
             return None
-        try:
-            return self.thumb_path(file_path).read_bytes()
-        except OSError:
-            return None
+        return self._slurp(thumb)
 
-    def queue_preemptive(self, uris, mimes):
-        """Fire-and-forget: send uris to Tumbler with scheduler='background'."""
-        self._tumbler_queue(uris, mimes, 'background')
+    def queue_dir(self, dir_path):
+        """Scan dir_path and submit unresolved images to Tumbler for background
+        thumbnailing.  Respects time, file-count, and payload-size budgets."""
+        uris        = []
+        mimes       = []
+        total_bytes = 0
+        scanned     = 0
+        deadline    = time.monotonic() + self._QUEUE_DIR_TIME_BUDGET
+
+        try:
+            entries = sorted(os.scandir(dir_path), key=lambda e: e.name.lower())
+        except OSError:
+            return
+
+        for entry in entries:
+            if time.monotonic() > deadline or scanned >= self._QUEUE_DIR_MAX_FILES:
+                break
+            scanned += 1
+            if entry.is_dir(follow_symlinks=False):
+                continue
+            ext  = os.path.splitext(entry.name)[1].lower()
+            mime = MIME_TYPES.get(ext)
+            if mime is None:
+                continue
+            if self.is_resolved(entry.path):
+                continue
+            uri  = file_uri(entry.path)
+            cost = len(uri) + len(mime)
+            if total_bytes + cost > self._QUEUE_DIR_MAX_BYTES:
+                break
+            uris.append(uri)
+            mimes.append(mime)
+            total_bytes += cost
+
+        if uris:
+            self._tumbler_queue(uris, mimes, 'background')
 
     # ── Signal callbacks (called from listener thread) ──────────────────────
 

@@ -40,13 +40,13 @@ knows where to direct proxy requests.
 Native messaging wire format: 4-byte LE length prefix + UTF-8 JSON.
 """
 
-import sys, os, json, struct, secrets, threading, time, pathlib, select, stat
+import sys, os, json, struct, secrets, threading, pathlib, select, stat
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 
 import thumbnailers
-from thumbnailers import MIME_TYPES, file_uri as _file_uri
+from thumbnailers import MIME_TYPES
 
 _XDG_CACHE_HOME = pathlib.Path(
     os.environ.get('XDG_CACHE_HOME', '').strip() or
@@ -265,47 +265,18 @@ class MediaHandler(BaseHTTPRequestHandler):
         if not os.path.isfile(file_path):
             self._error(404, 'File not found')
             return
-
-        # Fast path: valid entry already in the backend's on-disk cache.
-        thumb = thumbnailers.thumb_path(file_path)
-        if thumb is not None and thumb.exists() and thumbnailers.is_valid(thumb, file_path):
-            self._send_png(thumb, head_only)
+        data = thumbnailers.request(file_path)
+        if data is not None:
+            self.send_response(200)
+            self.send_cors()
+            self.send_header('Content-Type',   'image/png')
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Cache-Control',  'max-age=3600')
+            self.end_headers()
+            if not head_only:
+                self.wfile.write(data)
             return
-
-        # Generate / fetch from system cache.
-        if not thumbnailers.is_failed(file_path):
-            data = thumbnailers.request(file_path)
-            if data is not None:
-                self._send_png_data(data, head_only)
-                return
-
         self._error(404, 'No thumbnail available')
-
-    def _send_png(self, png_path, head_only):
-        try:
-            data = b'' if head_only else png_path.read_bytes()
-            size = png_path.stat().st_size
-        except OSError as exc:
-            self._error(500, str(exc))
-            return
-        self.send_response(200)
-        self.send_cors()
-        self.send_header('Content-Type',   'image/png')
-        self.send_header('Content-Length', str(size))
-        self.send_header('Cache-Control',  'max-age=3600')
-        self.end_headers()
-        if not head_only:
-            self.wfile.write(data)
-
-    def _send_png_data(self, data, head_only):
-        self.send_response(200)
-        self.send_cors()
-        self.send_header('Content-Type',   'image/png')
-        self.send_header('Content-Length', str(len(data)))
-        self.send_header('Cache-Control',  'max-age=3600')
-        self.end_headers()
-        if not head_only:
-            self.wfile.write(data)
 
     # ── Directory pre-queue ────────────────────────────────────────────────
 
@@ -313,9 +284,8 @@ class MediaHandler(BaseHTTPRequestHandler):
         if not os.path.isdir(dir_path):
             self._error(404, 'Not a directory')
             return
-        if thumbnailers.supports_preemptive_queueing:
-            threading.Thread(target=_prequeue_dir, args=(dir_path,),
-                             daemon=True).start()
+        threading.Thread(target=thumbnailers.queue_dir, args=(dir_path,),
+                         daemon=True).start()
         self.send_response(204)
         self.send_cors()
         self.send_header('Content-Length', '0')
@@ -330,59 +300,6 @@ class MediaHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
-
-
-# ── Thumbnail helpers ───────────────────────────────────────────────────────────
-
-
-def _prequeue_dir(dir_path):
-    """Scan dir_path and submit a background prefetch for uncached images."""
-    if not thumbnailers.supports_preemptive_queueing:
-        return
-
-    uris        = []
-    mimes       = []
-    total_bytes = 0
-    scanned     = 0
-    deadline    = time.monotonic() + 0.15   # 150 ms effort cap
-
-    try:
-        entries = list(os.scandir(dir_path))
-    except OSError:
-        return
-
-    for entry in entries:
-        if time.monotonic() > deadline or scanned >= 2000:
-            break
-        scanned += 1
-
-        if entry.is_dir(follow_symlinks=False):
-            continue
-
-        ext  = os.path.splitext(entry.name)[1].lower()
-        mime = MIME_TYPES.get(ext)
-        if mime is None:
-            continue
-
-        file_path = entry.path
-        thumb     = thumbnailers.thumb_path(file_path)
-
-        if thumb is not None and thumb.exists() and thumbnailers.is_valid(thumb, file_path):
-            continue
-        if thumbnailers.is_failed(file_path):
-            continue
-
-        uri  = _file_uri(file_path)
-        cost = len(uri) + len(mime)
-        if total_bytes + cost > 65536:
-            break
-
-        uris.append(uri)
-        mimes.append(mime)
-        total_bytes += cost
-
-    if uris:
-        thumbnailers.queue_preemptive(uris, mimes)
 
 
 # ── HTTP server ────────────────────────────────────────────────────────────────

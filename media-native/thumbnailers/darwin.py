@@ -21,10 +21,9 @@ class DarwinBackend(XDGBackend):
     supports_preemptive_queueing = False
     _check_xdg_metadata          = False  # qlmanage doesn't embed XDG metadata blocks
 
-    def request(self, file_path, timeout=30.0):
+    def _generate(self, file_path, thumb, fail, timeout=30.0):
         """Generate a thumbnail via qlmanage.
         Returns PNG bytes on success, None on failure."""
-        thumb = self.thumb_path(file_path)
         thumb.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -47,7 +46,7 @@ class DarwinBackend(XDGBackend):
                 if src.exists():
                     try:
                         shutil.move(str(src), str(thumb))
-                        return thumb.read_bytes()
+                        return self._slurp(thumb)
                     except OSError:
                         return None
         return None

@@ -62,7 +62,7 @@ class MateBackend(XDGBackend):
 
     # ── Public API ──────────────────────────────────────────────────────────
 
-    def request(self, file_path, timeout=30.0):
+    def _generate(self, file_path, thumb, fail, timeout=30.0):
         """Run the appropriate thumbnailer for file_path.
         Returns PNG bytes on success, None on failure."""
         ext  = os.path.splitext(file_path)[1].lower()
@@ -75,11 +75,12 @@ class MateBackend(XDGBackend):
         if exec_str is None:
             return None
 
-        thumb = self.thumb_path(file_path)
         thumb.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        return _run_thumbnailer(exec_str, _THUMB_SIZE, file_path, thumb, timeout)
+        if _run_thumbnailer(exec_str, _THUMB_SIZE, file_path, thumb, timeout):
+            return self._slurp(thumb)
+        return None
 
-    # queue_preemptive: inherited no-op from XDGBackend
+    # queue_dir: inherited no-op from XDGBackend
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -185,7 +186,7 @@ def _build_command(exec_str, size, input_uri, input_path, output_path):
 
 
 def _run_thumbnailer(exec_str, size, input_path, thumb_path, timeout):
-    """Run the thumbnailer command. Returns PNG bytes on success, None on failure."""
+    """Run the thumbnailer command. Returns True if the output PNG was written."""
     try:
         uri = file_uri(input_path)
         cmd = _build_command(exec_str, size, uri, input_path, str(thumb_path))
@@ -195,11 +196,9 @@ def _run_thumbnailer(exec_str, size, input_path, thumb_path, timeout):
             capture_output=True,
             timeout=timeout,
         )
-        if result.returncode == 0 and thumb_path.exists():
-            return thumb_path.read_bytes()
-        return None
+        return result.returncode == 0 and thumb_path.exists()
     except Exception:
-        return None
+        return False
 
 
 def get_backend():

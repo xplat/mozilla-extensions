@@ -29,14 +29,12 @@ class PillowBackend(XDGBackend):
     _check_xdg_metadata          = False  # we write our own PNGs without XDG metadata
     cache_root                   = _cache_home() / 'thumbnails-pillow'
 
-    def request(self, file_path, timeout=30.0):
+    def _generate(self, file_path, thumb, fail, timeout=30.0):
         """Generate a thumbnail with Pillow.
         Returns PNG bytes on success, None on failure."""
         ext = os.path.splitext(file_path)[1].lower()
         if ext not in MIME_TYPES:
             return None
-        thumb = self.thumb_path(file_path)
-        thumb.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
             buf = io.BytesIO()
             with Image.open(file_path) as img:
@@ -45,10 +43,7 @@ class PillowBackend(XDGBackend):
         except Exception:
             return None
         data = buf.getvalue()
-        try:
-            thumb.write_bytes(data)
-        except Exception:
-            pass   # file cache write failed; bytes are still usable
+        self._cache_png(data, thumb)   # writes to file and creates parent dirs
         return data
 
 

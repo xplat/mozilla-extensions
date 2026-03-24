@@ -184,15 +184,15 @@ class WindowsBackend(XDGBackend):
     supports_preemptive_queueing = False
     _check_xdg_metadata          = False
 
-    def thumb_path(self, file_path):
+    def _thumb_path(self, file_path):
         """Windows thumbnails are served from memory; no file cache is used."""
         return None
 
-    def is_failed(self, file_path):
+    def _is_failed(self, file_path):
         """No fail cache on Windows."""
         return False
 
-    def request(self, file_path, timeout=30.0):
+    def _generate(self, file_path, thumb, fail, timeout=30.0):
         """Fetch the thumbnail from the Windows Shell cache.
         Returns PNG bytes on success, None on failure."""
         ext = os.path.splitext(file_path)[1].lower()
