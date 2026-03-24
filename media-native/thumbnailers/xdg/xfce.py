@@ -20,7 +20,11 @@ import threading
 import time
 import urllib.parse
 
-from .xdg import file_uri, MIME_TYPES
+import jeepney
+from jeepney import DBusAddress, new_method_call, HeaderFields, MessageType
+from jeepney.io.blocking import open_dbus_connection
+
+from . import XDGBackend, MIME_TYPES, file_uri
 
 
 class _WaitSlot:
@@ -31,11 +35,13 @@ class _WaitSlot:
         self.success = False
 
 
-class XfceBackend:
-    BATCH_WINDOW   = 0.05   # seconds to collect requests before flushing
-    HANDLE_TIMEOUT = 60.0   # seconds of signal inactivity before handle GC
+class XfceBackend(XDGBackend):
+    BATCH_WINDOW             = 0.05   # seconds to collect requests before flushing
+    HANDLE_TIMEOUT           = 60.0   # seconds of signal inactivity before handle GC
+    supports_preemptive_queueing = True
 
     def __init__(self):
+        super().__init__()
         self._lock             = threading.Lock()
         self._pending          = {}  # uri -> [_WaitSlot, ...]
         self._handle_uris      = {}  # handle -> set(uri)   [live batches only]
@@ -46,7 +52,7 @@ class XfceBackend:
         self._conn_lock        = threading.Lock()
         _start_signal_listener(self)
 
-    # ── Public API ─────────────────────────────────────────────────────────
+    # ── Public API ──────────────────────────────────────────────────────────
 
     def request(self, file_path, timeout=30.0):
         """Queue file_path with Tumbler; block until Ready/Error/timeout."""
@@ -68,7 +74,7 @@ class XfceBackend:
         """Fire-and-forget: send uris to Tumbler with scheduler='background'."""
         self._tumbler_queue(uris, mimes, 'background')
 
-    # ── Signal callbacks (called from listener thread) ─────────────────────
+    # ── Signal callbacks (called from listener thread) ──────────────────────
 
     def on_ready(self, handle, uris):
         with self._lock:
@@ -98,7 +104,7 @@ class XfceBackend:
                 self._resolve_uri(uri, False)
             self._handle_last_seen.pop(handle, None)
 
-    # ── Internal ───────────────────────────────────────────────────────────
+    # ── Internal ────────────────────────────────────────────────────────────
 
     def _flush(self):
         with self._lock:
@@ -133,8 +139,6 @@ class XfceBackend:
         Returns the uint32 handle on success, or None on failure."""
         with self._conn_lock:
             try:
-                from jeepney import DBusAddress, new_method_call  # type: ignore
-                from jeepney.io.blocking import open_dbus_connection  # type: ignore
                 if self._conn is None:
                     self._conn = open_dbus_connection(bus='SESSION')
                 addr  = DBusAddress(
@@ -172,10 +176,6 @@ def _start_signal_listener(backend):
     """Start a daemon thread that receives Tumbler D-Bus signals."""
     def _listener():
         try:
-            from jeepney import DBusAddress, new_method_call   # type: ignore
-            from jeepney import HeaderFields, MessageType       # type: ignore
-            from jeepney.io.blocking import open_dbus_connection  # type: ignore
-
             conn = open_dbus_connection(bus='SESSION')
 
             # No sender= filter: Tumbler is D-Bus-activated on demand.  If
@@ -216,3 +216,7 @@ def _start_signal_listener(backend):
             pass
 
     threading.Thread(target=_listener, daemon=True, name='tumbler-signals').start()
+
+
+def get_backend():
+    return XfceBackend()

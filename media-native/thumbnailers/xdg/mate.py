@@ -34,7 +34,7 @@ import struct
 import subprocess
 import threading
 
-from .xdg import MIME_TYPES, THUMB_DIR, file_uri, xdg_thumb_path
+from . import XDGBackend, MIME_TYPES, file_uri
 
 _THUMBNAILERS_DIR = '/usr/share/thumbnailers'
 _THUMB_SIZE       = 128   # XDG 'normal' thumbnail size in pixels
@@ -51,15 +51,16 @@ _WATCH_MASK     = (_IN_CLOSE_WRITE | _IN_CREATE | _IN_DELETE |
 _libc = ctypes.CDLL(None, use_errno=True)   # default C library (glibc on Linux)
 
 
-class MateBackend:
+class MateBackend(XDGBackend):
 
     def __init__(self):
+        super().__init__()
         self._lock     = threading.Lock()
         self._handlers = {}   # mime_type / mime_prefix -> exec_str
         self._load_thumbnailers()
         self._start_watcher()
 
-    # ── Public API ─────────────────────────────────────────────────────────
+    # ── Public API ──────────────────────────────────────────────────────────
 
     def request(self, file_path, timeout=30.0):
         """Run the appropriate thumbnailer for file_path. Returns True on success."""
@@ -73,14 +74,13 @@ class MateBackend:
         if exec_str is None:
             return False
 
-        thumb_path = xdg_thumb_path(file_path)
-        THUMB_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-        return _run_thumbnailer(exec_str, _THUMB_SIZE, file_path, thumb_path, timeout)
+        thumb = self.thumb_path(file_path)
+        thumb.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return _run_thumbnailer(exec_str, _THUMB_SIZE, file_path, thumb, timeout)
 
-    def queue_preemptive(self, uris, mimes):
-        """No-op: speculative prefetch is not implemented for MATE."""
+    # queue_preemptive: inherited no-op from XDGBackend
 
-    # ── Internal ───────────────────────────────────────────────────────────
+    # ── Internal ────────────────────────────────────────────────────────────
 
     def _wildcard_exec(self, mime):
         """Return exec_str for a wildcard pattern like 'image/*'. Lock held."""
@@ -145,7 +145,7 @@ class MateBackend:
                          name='mate-thumbnailer-watcher').start()
 
 
-# ── Module-level helpers ───────────────────────────────────────────────────────
+# ── Module-level helpers ────────────────────────────────────────────────────────
 
 def _parse_thumbnailer_file(path):
     """Parse a .thumbnailer INI file.
@@ -197,3 +197,7 @@ def _run_thumbnailer(exec_str, size, input_path, thumb_path, timeout):
         return result.returncode == 0 and thumb_path.exists()
     except Exception:
         return False
+
+
+def get_backend():
+    return MateBackend()
