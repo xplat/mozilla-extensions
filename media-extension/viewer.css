@@ -435,36 +435,26 @@ html, body {
 
 #file-list.thumbnails {
   display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  padding: 4px;
-  gap: 3px;
+  flex-direction: column;
+  padding: 2px;
+  gap: 0;
 }
 
 #file-list.thumbnails .file-item {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  justify-content: flex-start;
-  width: 90px;
-  height: 108px;
-  padding: 3px;
-  gap: 3px;
+  width: auto;
+  height: auto;
+  padding: 2px 4px;
+  gap: 6px;
   overflow: hidden;
   min-height: unset;
 }
 
-/* Directories / non-image tiles are narrower and vertically centred */
-#file-list.thumbnails .file-item.is-dir,
-#file-list.thumbnails .file-item.dimmed {
-  justify-content: center;
-  height: auto;
-  min-height: 28px;
-}
-
 .thumb-img {
-  width: 84px;
-  height: 84px;
+  width: 48px;
+  height: 48px;
   object-fit: contain;
   background: #111;
   flex-shrink: 0;
@@ -475,7 +465,7 @@ html, body {
   0%, 100% { background-color: #1a1a1a; }
   50%       { background-color: #2e2e2e; }
 }
-.thumb-img:not(.thumb-loaded):not(.thumb-missing) {
+.thumb-img.thumb-loading {
   animation: thumb-pulse 1.2s ease-in-out infinite;
 }
 
@@ -491,7 +481,8 @@ html, body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   text-align: center;
   line-height: 1.3;
 }
