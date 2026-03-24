@@ -27,6 +27,7 @@ subprocesses speculatively is too expensive without a proper scheduler.
 import configparser
 import ctypes
 import os
+import re
 import select
 import shlex
 import shutil
@@ -36,8 +37,12 @@ import threading
 
 from . import XDGBackend, MIME_TYPES, file_uri
 
-_THUMBNAILERS_DIR = '/usr/share/thumbnailers'
-_THUMB_SIZE       = 128   # XDG 'normal' thumbnail size in pixels
+_THUMBNAILERS_DIR   = '/usr/share/thumbnailers'
+_THUMB_SIZE         = 128   # XDG 'normal' thumbnail size in pixels
+
+# Only register handlers for MIME types we can actually request.
+_SUPPORTED_MIMES    = frozenset(MIME_TYPES.values())
+_SUPPORTED_PREFIXES = frozenset(m.split('/')[0] for m in MIME_TYPES.values())
 
 # inotify event masks
 _IN_CLOSE_WRITE = 0x00000008
@@ -100,6 +105,12 @@ class MateBackend(XDGBackend):
                     continue
                 exec_str, mimes = result
                 for m in mimes:
+                    # Skip MIME types we can never request.
+                    if m.endswith('/*'):
+                        if m[:-2] not in _SUPPORTED_PREFIXES:
+                            continue
+                    elif m not in _SUPPORTED_MIMES:
+                        continue
                     # Last-wins if multiple files claim the same MIME type.
                     handlers[m] = exec_str
         except OSError:
@@ -175,14 +186,16 @@ def _parse_thumbnailer_file(path):
 
 
 def _build_command(exec_str, size, input_uri, input_path, output_path):
-    """Substitute format codes in exec_str and return a command list."""
-    s = exec_str.replace('%%', '\x00')   # protect literal %
-    s = s.replace('%s', str(size))
-    s = s.replace('%u', input_uri)
-    s = s.replace('%i', input_path)
-    s = s.replace('%o', output_path)
-    s = s.replace('\x00', '%')
-    return shlex.split(s)
+    """Split exec_str into tokens, then substitute format codes within each word.
+
+    Splitting before substitution means paths with spaces are never broken
+    across multiple arguments.  re.sub with a lambda handles all codes in
+    one pass, including %% → % within a longer token.
+    """
+    codes = {'%%': '%', '%s': str(size), '%u': input_uri,
+             '%i': input_path, '%o': output_path}
+    return [re.sub(r'%%|%[suio]', lambda m: codes[m.group()], token)
+            for token in shlex.split(exec_str)]
 
 
 def _run_thumbnailer(exec_str, size, input_path, thumb_path, timeout):
