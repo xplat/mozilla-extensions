@@ -30,6 +30,27 @@ function mediaType(filename) {
   return MEDIA_TYPES[filename.slice(dot + 1).toLowerCase()] || 'unknown';
 }
 
+// Known standard video dimensions (width × height as "WxH" strings) that
+// should trigger auto-fullscreen when played from the beginning.
+// Covers HD/4K/8K broadcast, DVD (NTSC + PAL, fullscreen + widescreen output),
+// and the VGA/SVGA/XGA fullscreen formats common on old computers.
+const FULLSCREEN_DIMS = new Set([
+  // HD / broadcast
+  '1920x1080', '1280x720',
+  // 480p — widescreen (anamorphic output) and 4:3
+  '854x480', '852x480', '640x480',
+  // 4K UHD / DCI 4K / 8K
+  '3840x2160', '4096x2160', '7680x4320',
+  // 1440p (QHD) and 2K DCI
+  '2560x1440', '2048x1080',
+  // DVD fullscreen: NTSC 720×480, PAL 720×576
+  '720x480', '720x576',
+  // DVD widescreen PAL output
+  '1024x576',
+  // Old computer fullscreen: VGA, SVGA, XGA
+  '800x600', '1024x768',
+]);
+
 // Scale steps for s/S keys (xzgv-style integer-ratio stepping)
 const SCALE_STEPS = [0.1, 0.125, 0.167, 0.25, 0.333, 0.5, 0.667, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
 
@@ -1302,8 +1323,7 @@ function _onMediaLoadedMetadata() {
       !imagePaneEl.classList.contains('media-gif') &&
       !document.fullscreenElement &&
       !(saved > 0) &&
-      videoEl.videoWidth > 0 &&
-      videoEl.videoWidth / videoEl.videoHeight >= 1.5) {
+      FULLSCREEN_DIMS.has(videoEl.videoWidth + 'x' + videoEl.videoHeight)) {
     selectorStateBeforeFS = ui.selectorVisible;
     ui.selectorVisible = false;
     applySelector();
