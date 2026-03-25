@@ -176,38 +176,37 @@ class _QueueWatcher:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def wait(self, timeout) -> bool:
-        """Block until a directory-change event fires or *timeout* seconds pass.
+    def wait(self):
+        """Block until a directory-change event fires.
 
-        Returns True if a kernel event fired (caller should scan the queue
-        directory) or if no kernel API is available (caller must poll).
-        Returns False on a clean timeout when a kernel watcher is active
-        (no scan needed — nothing has changed).
+        With a kernel API (inotify / kqueue / RDCW) this blocks indefinitely
+        and returns only when the OS delivers a notification, so the calling
+        thread consumes no CPU and negligible RSS while idle.
+
+        Without a kernel API the call sleeps for POLL_INTERVAL and returns,
+        allowing the caller to scan the directory periodically.
         """
         if self._event is not None:
-            # Windows RDCW: Event.wait() returns True if set, False on timeout.
-            fired = self._event.wait(timeout)
+            # Windows RDCW: block until the watcher thread sets the event.
+            self._event.wait()
             self._event.clear()
-            return fired
         elif self._kq is not None:
-            # macOS kqueue: non-empty result means an event fired.
+            # macOS kqueue: omitting the timeout blocks indefinitely.
             try:
-                return bool(self._kq.control([], 8, timeout))
+                self._kq.control([], 8)
             except OSError:
-                return False
+                pass
         elif self._fd >= 0:
-            # Linux inotify: readable fd means an event fired; drain it.
+            # Linux inotify: None timeout blocks indefinitely; drain on wake.
             try:
-                r, _, _ = select.select([self._fd], [], [], timeout)
+                r, _, _ = select.select([self._fd], [], [], None)
                 if r:
                     os.read(self._fd, 4096)
-                return bool(r)
             except OSError:
-                return False
+                pass
         else:
-            # No kernel API — sleep and tell the caller to poll every time.
-            time.sleep(timeout)
-            return True
+            # No kernel API: sleep one poll interval, then let the caller scan.
+            time.sleep(POLL_INTERVAL)
 
     def close(self):
         """Release OS resources (kqueue and inotify fds; RDCW cleans itself up)."""
@@ -374,41 +373,38 @@ def _handle_req(req):
 
 def main():
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
-    watcher = _QueueWatcher(QUEUE_DIR)
     port = start_http_server()
     send_message({"event": "server", "port": port, "token": TOKEN})
 
-    # Read stdin in a background thread on all platforms.
-    # (select() on pipes is unreliable on Windows; a thread works everywhere.)
-    msgs = _q.Queue()
+    work_q = _q.Queue()
+
+    def _watcher():
+        """Scan queue dir on kernel events (or periodically when polling)."""
+        watcher = _QueueWatcher(QUEUE_DIR)
+        for req in check_queue():          # startup scan
+            work_q.put(('open', req))
+        while True:
+            watcher.wait()                 # blocks until event (or POLL_INTERVAL)
+            for req in check_queue():
+                work_q.put(('open', req))
+
     def _stdin_reader():
+        """Forward native messages from stdin to the work queue."""
         while True:
             m = _read_message()
             if m is None:
                 return
-            msgs.put(m)
+            work_q.put(('msg', m))
+
+    threading.Thread(target=_watcher,      daemon=True, name='queue-watcher').start()
     threading.Thread(target=_stdin_reader, daemon=True, name='stdin-reader').start()
 
-    # Startup scan: pick up any files already waiting in the queue.
-    for req in check_queue():
-        _handle_req(req)
-
     while True:
-        # Only scan the queue when the watcher signals a change (or when no
-        # kernel watcher is active and we fall back to periodic polling).
-        # Avoid reading the directory on a plain timeout so that a queue on a
-        # spinning disk is not woken up unnecessarily.
-        if watcher.wait(POLL_INTERVAL):
-            for req in check_queue():
-                _handle_req(req)
-
-        try:
-            while True:
-                msg = msgs.get_nowait()
-                if msg.get('cmd') == 'ping':
-                    send_message({"status": "pong"})
-        except _q.Empty:
-            pass
+        kind, item = work_q.get()   # blocks indefinitely; no periodic wakeups
+        if kind == 'open':
+            _handle_req(item)
+        elif kind == 'msg':
+            _handle_msg(item)
 
 if __name__ == '__main__':
     main()
