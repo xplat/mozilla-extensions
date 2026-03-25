@@ -558,26 +558,33 @@ html, body {
   pointer-events: none;
 }
 
-/* Progress / seek bar */
+/* Progress / seek bar — 18 px tall hit target, 3 px visual track via ::before */
 #video-progress {
   position: relative;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.22);
-  border-radius: 2px;
-  overflow: hidden;
+  height: 18px;
+  background: transparent;
   cursor: pointer;
   pointer-events: auto;
 }
 
-#video-progress:hover {
-  height: 5px;
-  margin-bottom: -2px; /* keep baseline stable */
+#video-progress::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 3px;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 2px;
+  pointer-events: none;
 }
 
 #video-seek-fill {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 3px;
   left: 0;
   width: 0%;
   background: var(--focus-ring);

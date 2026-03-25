@@ -819,7 +819,16 @@ document.addEventListener('keydown', function(e) {
       case 'i':
         e.preventDefault(); toggleInfoOverlay(); return;
       case '.':
-        e.preventDefault(); toggleHidden(); return;
+        e.preventDefault();
+        // In video/audio viewer focus: step forward one frame; elsewhere: toggle hidden files
+        if (focusMode === 'viewer' && activeMediaEl) {
+          activeMediaEl.currentTime =
+            Math.min(activeMediaEl.duration, activeMediaEl.currentTime + 1 / 30);
+          _updateVideoControls();
+        } else {
+          toggleHidden();
+        }
+        return;
       case 'v':
         e.preventDefault(); toggleThumbnails(); return;
       case 'Tab':
@@ -833,6 +842,11 @@ document.addEventListener('keydown', function(e) {
       case '[': e.preventDefault(); adjustSelectorWidth(-16); return;
       case ']': e.preventDefault(); adjustSelectorWidth(+16); return;
       case '~': e.preventDefault(); setSelectorWidth(SELECTOR_W_DEFAULT); return;
+      // Global media keys (active only when video/audio is loaded)
+      case 'm': if (activeMediaEl) { e.preventDefault(); toggleMute();          return; } break;
+      case 'p': if (activeMediaEl) { e.preventDefault(); togglePlayPause();     return; } break;
+      case '9': if (activeMediaEl) { e.preventDefault(); adjustVolume(-0.1);    return; } break;
+      case '0': if (activeMediaEl) { e.preventDefault(); adjustVolume(+0.1);    return; } break;
     }
   }
 
@@ -888,6 +902,43 @@ function handleSelectorKey(e, key, ctrl, plain) {
 }
 
 function handleViewerKey(e, key, ctrl, plain) {
+  // Media-mode overrides: applied when a video or audio file is active.
+  // These shadow the image-mode bindings for the same keys.
+  if (plain && activeMediaEl) {
+    switch (key) {
+      // Seek (mplayer defaults: ←/→ ±10 s, ↑/↓ ±1 min, PgUp/PgDn ±10 min)
+      case 'ArrowLeft':  e.preventDefault(); seekRelative(-10);  return;
+      case 'ArrowRight': e.preventDefault(); seekRelative(+10);  return;
+      case 'ArrowUp':    e.preventDefault(); seekRelative(+60);  return;
+      case 'ArrowDown':  e.preventDefault(); seekRelative(-60);  return;
+      case 'PageUp':     e.preventDefault(); seekRelative(+600); return;
+      case 'PageDown':   e.preventDefault(); seekRelative(-600); return;
+      case 'Backspace':  e.preventDefault();
+        activeMediaEl.currentTime = 0; _updateVideoControls(); return;
+      // Play / pause / advance
+      case ' ':
+        e.preventDefault();
+        activeMediaEl.ended ? nextImage() : togglePlayPause();
+        return;
+      // Playback rate  (</>: ±0.1 step, matching mplayer's [/] moved to angle brackets)
+      //                ({/}: halve/double, as in mplayer)
+      case '<': e.preventDefault();
+        activeMediaEl.playbackRate = Math.max(0.25, +(activeMediaEl.playbackRate - 0.1).toFixed(2));
+        return;
+      case '>': e.preventDefault();
+        activeMediaEl.playbackRate = Math.min(4.0,  +(activeMediaEl.playbackRate + 0.1).toFixed(2));
+        return;
+      case '{': e.preventDefault();
+        activeMediaEl.playbackRate = Math.max(0.25, activeMediaEl.playbackRate / 2);
+        return;
+      case '}': e.preventDefault();
+        activeMediaEl.playbackRate = Math.min(4.0,  activeMediaEl.playbackRate * 2);
+        return;
+      // OSD / info
+      case 'o': e.preventDefault(); toggleInfoOverlay(); return;
+    }
+  }
+
   if (plain) {
     switch (key) {
       // Scrolling — 100 px steps
@@ -1255,6 +1306,42 @@ videoEl.addEventListener('ended',          _onMediaEnded);
 audioEl.addEventListener('ended',          _onMediaEnded);
 videoEl.addEventListener('error',          _onMediaError);
 audioEl.addEventListener('error',          _onMediaError);
+
+// ── Media control helpers ────────────────────────────────────────────────────
+
+function togglePlayPause() {
+  if (!activeMediaEl) return;
+  if (activeMediaEl.ended) {
+    activeMediaEl.currentTime = 0;
+    activeMediaEl.play().catch(function() {});
+  } else if (activeMediaEl.paused) {
+    activeMediaEl.play().catch(function() {});
+  } else {
+    activeMediaEl.pause();
+  }
+  _updateVideoControls();
+}
+
+function toggleMute() {
+  if (!activeMediaEl) return;
+  activeMediaEl.muted = !activeMediaEl.muted;
+  _updateVideoControls();
+}
+
+function adjustVolume(delta) {
+  if (!activeMediaEl) return;
+  activeMediaEl.volume = Math.max(0, Math.min(1, activeMediaEl.volume + delta));
+  activeMediaEl.muted  = false;
+  _updateVideoControls();
+}
+
+// secs may be negative (seek back) or positive (seek forward)
+function seekRelative(secs) {
+  if (!activeMediaEl || !isFinite(activeMediaEl.duration)) return;
+  activeMediaEl.currentTime =
+    Math.max(0, Math.min(activeMediaEl.duration, activeMediaEl.currentTime + secs));
+  _updateVideoControls();
+}
 
 // Progress bar click-to-seek
 if (videoProgressEl) {
