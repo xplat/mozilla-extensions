@@ -920,6 +920,8 @@ function handleViewerKey(e, key, ctrl, plain) {
       case 'Backspace':  e.preventDefault();
         activeMediaEl.playbackRate = 1; return;
       // Play / pause / advance
+      case 'Enter':
+        e.preventDefault(); nextImage(); return;
       case ' ':
         e.preventDefault();
         activeMediaEl.ended ? nextImage() : togglePlayPause();
@@ -1291,6 +1293,25 @@ function _onMediaLoadedMetadata() {
                   !imagePaneEl.classList.contains('media-gif'));
   if (hasAudio) {
     _mediaChannel.postMessage({ cmd: 'pause' });
+  }
+
+  // Auto-fullscreen: widescreen video (≥ 3:2 aspect) played from the beginning.
+  // Skipped when restoring a saved position (the user already watched part of it)
+  // or when already fullscreen or when gif-loop mode.
+  if (mediaEl === videoEl &&
+      !imagePaneEl.classList.contains('media-gif') &&
+      !document.fullscreenElement &&
+      !(saved > 0) &&
+      videoEl.videoWidth > 0 &&
+      videoEl.videoWidth / videoEl.videoHeight >= 1.5) {
+    selectorStateBeforeFS = ui.selectorVisible;
+    ui.selectorVisible = false;
+    applySelector();
+    document.documentElement.requestFullscreen().catch(function() {
+      // Fullscreen denied (gesture expired or policy); restore selector state.
+      ui.selectorVisible = selectorStateBeforeFS;
+      applySelector();
+    });
   }
 
   _updateVideoControls();
