@@ -1378,9 +1378,15 @@ function _ensureAudioGraph(mediaEl) {
   }
   var already = (mediaEl === videoEl) ? _videoGraphed : _audioGraphed;
   if (!already) {
-    _audioCtx.createMediaElementSource(mediaEl).connect(_panNode);
+    // Mark as graphed first so a CORS-taint failure doesn't cause infinite retries.
     if (mediaEl === videoEl) _videoGraphed = true;
     else                     _audioGraphed = true;
+    try {
+      _audioCtx.createMediaElementSource(mediaEl).connect(_panNode);
+    } catch (err) {
+      console.warn('createMediaElementSource failed (CORS?):', err);
+      return;
+    }
   }
   if (_audioCtx.state === 'suspended') {
     _audioCtx.resume().catch(function() {});
