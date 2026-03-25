@@ -1002,6 +1002,9 @@ function jumpToEdge(dir) {
 
 imagePaneEl.addEventListener('mousedown', function(e) {
   if (e.button !== 0) return;
+  // Clicks inside the controls overlay (progress bar, HUD) are handled there;
+  // don't treat them as image-pane drag or play/pause clicks.
+  if (videoProgressEl && videoProgressEl.contains(e.target)) return;
   dragMode = 'image';
   dragState.wasDrag = false;
   dragState.startX  = e.clientX;
@@ -1037,6 +1040,17 @@ document.addEventListener('mousemove', function(e) {
 document.addEventListener('mouseup', function() {
   if (dragMode === 'image' && !dragState.wasDrag) {
     setFocusMode('viewer');
+    if (activeMediaEl) {
+      if (activeMediaEl.ended) {
+        activeMediaEl.currentTime = 0;
+        activeMediaEl.play().catch(function() {});
+      } else if (activeMediaEl.paused) {
+        activeMediaEl.play().catch(function() {});
+      } else {
+        activeMediaEl.pause();
+      }
+      _updateVideoControls();
+    }
   }
   if (dragMode === 'divider' && paneDividerEl) {
     paneDividerEl.classList.remove('dragging');
