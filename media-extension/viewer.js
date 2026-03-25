@@ -1305,6 +1305,9 @@ function _onMediaLoadedMetadata() {
       videoEl.loop  = true;
       videoEl.muted = true;
       imagePaneEl.classList.replace('media-video', 'media-gif');
+      // Treat gif-loop like a static image: clear activeMediaEl so that media
+      // keyboard overrides (seek, pause, etc.) don't fire.
+      activeMediaEl = null;
     }
   }
 
