@@ -17,6 +17,8 @@ host picks it up promptly and opens the viewer.
 
 import sys, os, json, time, pathlib
 
+from thumbnailers import MIME_TYPES
+
 
 def _platform_cache_dir(app_name):
     """Return the platform-appropriate user cache directory for app_name."""
@@ -31,14 +33,11 @@ def _platform_cache_dir(app_name):
 
 QUEUE_DIR = _platform_cache_dir('media-viewer') / 'queue'
 
-IMAGE_EXTS = frozenset([
-    '.jpg', '.jpeg', '.png', '.gif', '.webp',
-    '.avif', '.bmp', '.tiff', '.tif', '.svg', '.ico',
-])
+_SUPPORTED_EXTS = frozenset(MIME_TYPES)  # derived — MIME_TYPES is the single source of truth
 
 def usage():
-    print('Usage: media-open /path/to/directory', file=sys.stderr)
-    print('       media-open /path/to/image.jpg',  file=sys.stderr)
+    print('Usage: media-open /path/to/directory',     file=sys.stderr)
+    print('       media-open /path/to/media-file.mp4', file=sys.stderr)
     sys.exit(1)
 
 def main():
@@ -51,8 +50,8 @@ def main():
         req = {'dir': target, 'file': ''}
     elif os.path.isfile(target):
         ext = os.path.splitext(target)[1].lower()
-        if ext not in IMAGE_EXTS:
-            print(f'error: {target}: not a supported image type', file=sys.stderr)
+        if ext not in _SUPPORTED_EXTS:
+            print(f'error: {target}: not a supported media type', file=sys.stderr)
             sys.exit(1)
         req = {'dir': os.path.dirname(target), 'file': os.path.basename(target)}
     else:

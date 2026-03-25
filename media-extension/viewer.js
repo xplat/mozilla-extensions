@@ -9,9 +9,26 @@ const DIR_PROXY_PREFIX       = 'http://' + LOOPBACK + '/media-dir/';
 const THUMB_PROXY_PREFIX     = 'http://' + LOOPBACK + '/media-thumb/';
 const QUEUE_DIR_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-queue-dir/';
 
-const IMAGE_EXTS = new Set([
-  'jpg','jpeg','png','gif','webp','avif','bmp','tiff','tif','svg','ico'
-]);
+// Maps file extension (lowercase, no dot) → media category.
+// Only extensions that should be selectable/viewable belong here;
+// anything absent returns 'unknown'.
+const MEDIA_TYPES = {
+  // images (rendered natively by the browser)
+  jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image',
+  avif: 'image', bmp: 'image', tiff: 'image', tif: 'image', svg: 'image', ico: 'image',
+  // video
+  mp4: 'video', m4v: 'video', webm: 'video', ogv: 'video',
+  mov: 'video', avi: 'video', mkv: 'video', flv: 'video', wmv: 'video', '3gp': 'video',
+  // audio
+  mp3: 'audio', flac: 'audio', ogg: 'audio', oga: 'audio',
+  m4a: 'audio', aac: 'audio', opus: 'audio', wav: 'audio',
+};
+
+function mediaType(filename) {
+  var dot = filename.lastIndexOf('.');
+  if (dot < 0) return 'unknown';
+  return MEDIA_TYPES[filename.slice(dot + 1).toLowerCase()] || 'unknown';
+}
 
 // Scale steps for s/S keys (xzgv-style integer-ratio stepping)
 const SCALE_STEPS = [0.1, 0.125, 0.167, 0.25, 0.333, 0.5, 0.667, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
@@ -172,16 +189,10 @@ function toProxyQueueDir(dirUrl) {
 
 // ── Directory loading ──────────────────────────────────────────────────────
 
-function isDisplayable(filename) {
-  var dot = filename.lastIndexOf('.');
-  if (dot < 0) return false;
-  return IMAGE_EXTS.has(filename.slice(dot + 1).toLowerCase());
-}
-
 function isSelectable(item) {
   if (item.t === 'd') return true;
   if (item.r === 0)   return false;
-  return isDisplayable(item.u);
+  return mediaType(item.u) !== 'unknown';
 }
 
 function sortItems(items) {
@@ -239,7 +250,7 @@ async function loadDir(dirUrl, push) {
   if (currentFile) {
     var selIdx = listing.findIndex(function(i) { return i.u === currentFile; });
     if (selIdx >= 0) selectItem(selIdx, false);
-    showImage(currentFile);
+    showMediaFile(currentFile);
   } else {
     var firstFile = listing.findIndex(function(i) { return isSelectable(i) && i.t !== 'd'; });
     if (firstFile >= 0) selectItem(firstFile, false);
@@ -261,9 +272,12 @@ function renderSelector() {
     el.className = 'file-item';
     el.dataset.idx = String(idx);
 
-    var sel = isSelectable(item);
-    if (!sel)         el.classList.add('dimmed');
-    if (item.t==='d') el.classList.add('is-dir');
+    var sel  = isSelectable(item);
+    var mtype = mediaType(item.u);
+    if (!sel)              el.classList.add('dimmed');
+    if (item.t === 'd')    el.classList.add('is-dir');
+    if (mtype === 'video') el.classList.add('is-video');
+    if (mtype === 'audio') el.classList.add('is-audio');
 
     if (ui.thumbnails) {
       _renderThumbItem(el, item);
@@ -286,9 +300,10 @@ function renderSelector() {
 }
 
 function _renderListItem(el, item) {
+  var type   = mediaType(item.u);
   var iconEl = document.createElement('span');
   iconEl.className = 'file-icon';
-  iconEl.textContent = (item.t === 'd') ? '>' : ' ';
+  iconEl.textContent = item.t === 'd' ? '>' : type === 'video' ? '▶' : type === 'audio' ? '♪' : ' ';
 
   var nameEl = document.createElement('span');
   nameEl.className = 'file-name';
@@ -304,8 +319,9 @@ function _renderListItem(el, item) {
 }
 
 function _renderThumbItem(el, item) {
-  if (item.t === 'd' || !isDisplayable(item.u)) {
-    // Non-image: show icon + name as a compact tile
+  var type = mediaType(item.u);
+  if (item.t === 'd' || type === 'unknown') {
+    // Directory or unrecognised type: icon + name as a compact tile
     var iconEl = document.createElement('span');
     iconEl.className = 'file-icon';
     iconEl.textContent = (item.t === 'd') ? '>' : ' ';
@@ -315,6 +331,8 @@ function _renderThumbItem(el, item) {
     el.appendChild(iconEl);
     el.appendChild(labelEl);
   } else {
+    // Any known media type: attempt thumbnail; fall back to a text icon on error
+    var fallback = type === 'video' ? '▶' : type === 'audio' ? '♪' : null;
     var fileUrl  = currentDir.replace(/\/$/, '') + '/' + item.u;
     var imgEl = document.createElement('img');
     imgEl.className = 'thumb-img thumb-loading';
@@ -322,10 +340,18 @@ function _renderThumbItem(el, item) {
     imgEl.alt = '';
     imgEl.draggable = false;
     imgEl.loading = 'lazy';
-    imgEl.addEventListener('load',  function() { imgEl.classList.remove('thumb-loading'); });
+    imgEl.addEventListener('load', function() { imgEl.classList.remove('thumb-loading'); });
     imgEl.addEventListener('error', function() {
       imgEl.classList.remove('thumb-loading');
-      imgEl.classList.add('thumb-missing');
+      if (fallback) {
+        // Replace broken img with a text icon for video/audio
+        var fbEl = document.createElement('span');
+        fbEl.className = 'thumb-img-fallback';
+        fbEl.textContent = fallback;
+        el.replaceChild(fbEl, imgEl);
+      } else {
+        imgEl.classList.add('thumb-missing');
+      }
     });
     var labelEl = document.createElement('span');
     labelEl.className = 'thumb-label';
@@ -362,7 +388,7 @@ function openItem(idx) {
   } else {
     currentFile = item.u;
     persistState(false);
-    showImage(item.u);
+    showMediaFile(item.u);
     setFocusMode('viewer');
   }
 }
@@ -651,7 +677,7 @@ function nextImage() {
   selectItem(li, true);
   currentFile = next.u;
   persistState(false);
-  showImage(next.u);
+  showMediaFile(next.u);
 }
 
 function prevImage() {
@@ -663,7 +689,7 @@ function prevImage() {
   selectItem(li, true);
   currentFile = prev.u;
   persistState(false);
-  showImage(prev.u);
+  showMediaFile(prev.u);
 }
 
 function goToParent() {
@@ -736,7 +762,12 @@ function updateInfoOverlay(filename) {
     if (item.s !== undefined) lines.push(fmtSize(item.s));
     if (item.m)               lines.push(fmtDate(item.m, true));
   }
-  if (mainImageEl.naturalWidth) {
+  if (activeMediaEl && isFinite(activeMediaEl.duration)) {
+    lines.push(fmtTime(activeMediaEl.duration));
+    if (activeMediaEl === videoEl && videoEl.videoWidth) {
+      lines.push(videoEl.videoWidth + '\u00d7' + videoEl.videoHeight + ' px');
+    }
+  } else if (mainImageEl.naturalWidth) {
     lines.push(mainImageEl.naturalWidth + '\u00d7' + mainImageEl.naturalHeight + ' px');
   }
   infoContentEl.textContent = lines.join('\n');
@@ -1027,6 +1058,7 @@ if (btnSort)      btnSort.addEventListener('click', cycleSortBy);
 // ── History (back/forward) ─────────────────────────────────────────────────
 
 window.addEventListener('popstate', function(e) {
+  _stopActiveMedia();
   applyHistoryState(e.state);
   var params = getUrlParams();
 
@@ -1039,7 +1071,7 @@ window.addEventListener('popstate', function(e) {
     if (currentFile) {
       var idx = listing.findIndex(function(i) { return i.u === currentFile; });
       if (idx >= 0) selectItem(idx, true);
-      showImage(currentFile);
+      showMediaFile(currentFile);
     }
   }
 });
@@ -1056,6 +1088,205 @@ function fmtSize(bytes) {
 function fmtDate(unixSecs, full) {
   var d = new Date(unixSecs * 1000);
   return full ? d.toLocaleString() : d.toLocaleDateString();
+}
+
+// ── Media playback ─────────────────────────────────────────────────────────
+
+var videoEl         = document.getElementById('main-video');
+var audioEl         = document.getElementById('main-audio');
+var videoProgressEl = document.getElementById('video-progress');
+var videoSeekFillEl = document.getElementById('video-seek-fill');
+var videoTimeEl     = document.getElementById('video-time');
+var videoVolEl      = document.getElementById('video-vol');
+
+var activeMediaEl       = null;  // currently active <video> or <audio>, or null
+var _posCheckpointTimer = null;  // setTimeout handle for position-save throttle
+
+// ── BroadcastChannel: pause other viewer tabs when we start playing audio ──
+
+var _mediaChannel = new BroadcastChannel('media-viewer');
+_mediaChannel.onmessage = function(e) {
+  if (e.data && e.data.cmd === 'pause' && activeMediaEl) {
+    activeMediaEl.pause();
+  }
+};
+
+// ── Stop / tear-down ────────────────────────────────────────────────────────
+
+function _stopActiveMedia() {
+  _clearPosCheckpoint();
+  if (!activeMediaEl) return;
+  activeMediaEl.pause();
+  activeMediaEl.src = '';
+  activeMediaEl     = null;
+  imagePaneEl.classList.remove('media-video', 'media-audio', 'media-gif');
+}
+
+function _clearPosCheckpoint() {
+  if (_posCheckpointTimer !== null) {
+    clearTimeout(_posCheckpointTimer);
+    _posCheckpointTimer = null;
+  }
+}
+
+// ── Position persistence ────────────────────────────────────────────────────
+
+function _posKey(fileUrl) {
+  return 'media-pos:' + fileUrl.replace(/^file:\/\//, '');
+}
+
+function _savePosition(mediaEl) {
+  if (!currentFile || !currentDir || mediaEl.paused || mediaEl.ended) return;
+  var fileUrl = currentDir.replace(/\/$/, '') + '/' + currentFile;
+  localStorage.setItem(_posKey(fileUrl), String(mediaEl.currentTime));
+}
+
+function _getSavedPosition(fileUrl) {
+  var raw = localStorage.getItem(_posKey(fileUrl));
+  return raw ? parseFloat(raw) : 0;
+}
+
+function _clearSavedPosition(fileUrl) {
+  localStorage.removeItem(_posKey(fileUrl));
+}
+
+// ── Controls HUD ────────────────────────────────────────────────────────────
+
+function fmtTime(secs) {
+  var s = Math.floor(secs);
+  var m = Math.floor(s / 60);
+  var h = Math.floor(m / 60);
+  m = m % 60;
+  s = s % 60;
+  var pad = function(n) { return n < 10 ? '0' + n : String(n); };
+  return h > 0 ? h + ':' + pad(m) + ':' + pad(s) : m + ':' + pad(s);
+}
+
+function _updateVideoControls() {
+  if (!activeMediaEl) return;
+  var cur = activeMediaEl.currentTime || 0;
+  var dur = activeMediaEl.duration;
+  if (videoTimeEl) {
+    videoTimeEl.textContent = fmtTime(cur) + ' / ' + (isFinite(dur) ? fmtTime(dur) : '?');
+  }
+  if (videoSeekFillEl && isFinite(dur) && dur > 0) {
+    videoSeekFillEl.style.width = (cur / dur * 100).toFixed(2) + '%';
+  }
+  if (videoVolEl) {
+    var vol = Math.round(activeMediaEl.volume * 100);
+    videoVolEl.textContent = activeMediaEl.muted ? 'MUTED' : ('VOL\u00a0' + vol);
+  }
+}
+
+// ── Media element event listeners ───────────────────────────────────────────
+
+function _onMediaLoadedMetadata() {
+  imgSpinnerEl.classList.add('hidden');
+  var mediaEl = this;
+  var fileUrl = currentDir.replace(/\/$/, '') + '/' + currentFile;
+
+  // Restore saved position before playback starts
+  var saved = _getSavedPosition(fileUrl);
+  if (saved > 0 && isFinite(mediaEl.duration) && saved < mediaEl.duration) {
+    mediaEl.currentTime = saved;
+  }
+
+  // Detect gif-loop: short video with no audio → play silently in a loop
+  if (mediaEl === videoEl) {
+    if (isFinite(videoEl.duration) && videoEl.duration < 60 && !videoEl.mozHasAudio) {
+      videoEl.loop  = true;
+      videoEl.muted = true;
+      imagePaneEl.classList.replace('media-video', 'media-gif');
+    }
+  }
+
+  // Notify other tabs to pause before we start playing anything with audio
+  var hasAudio = mediaEl === audioEl ||
+                 (mediaEl === videoEl && videoEl.mozHasAudio &&
+                  !imagePaneEl.classList.contains('media-gif'));
+  if (hasAudio) {
+    _mediaChannel.postMessage({ cmd: 'pause' });
+  }
+
+  _updateVideoControls();
+  mediaEl.play().catch(function() {});
+}
+
+function _onTimeUpdate() {
+  _updateVideoControls();
+  if (_posCheckpointTimer !== null) return;
+  var el = this;
+  _posCheckpointTimer = setTimeout(function() {
+    _posCheckpointTimer = null;
+    _savePosition(el);
+  }, 5000);
+}
+
+function _onMediaEnded() {
+  if (currentFile && currentDir) {
+    _clearSavedPosition(currentDir.replace(/\/$/, '') + '/' + currentFile);
+  }
+  _updateVideoControls();
+}
+
+function _onMediaError() {
+  imgSpinnerEl.classList.add('hidden');
+}
+
+videoEl.addEventListener('loadedmetadata', _onMediaLoadedMetadata);
+audioEl.addEventListener('loadedmetadata', _onMediaLoadedMetadata);
+videoEl.addEventListener('timeupdate',     _onTimeUpdate);
+audioEl.addEventListener('timeupdate',     _onTimeUpdate);
+videoEl.addEventListener('ended',          _onMediaEnded);
+audioEl.addEventListener('ended',          _onMediaEnded);
+videoEl.addEventListener('error',          _onMediaError);
+audioEl.addEventListener('error',          _onMediaError);
+
+// Progress bar click-to-seek
+if (videoProgressEl) {
+  videoProgressEl.addEventListener('click', function(e) {
+    if (!activeMediaEl || !isFinite(activeMediaEl.duration)) return;
+    var rect = videoProgressEl.getBoundingClientRect();
+    var frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    activeMediaEl.currentTime = frac * activeMediaEl.duration;
+    _updateVideoControls();
+  });
+}
+
+// ── Show media file (dispatcher) ────────────────────────────────────────────
+
+function showMediaFile(filename) {
+  if (!filename || !currentDir) return;
+  var type = mediaType(filename);
+  _stopActiveMedia();
+  mainImageEl.src = '';
+  imagePaneEl.classList.remove('image-loaded');
+  if (type === 'image') {
+    showImage(filename);
+  } else if (type === 'video' || type === 'audio') {
+    showMedia(filename, type);
+  }
+  // 'unknown': leave pane empty — no-content hint will be visible
+}
+
+function showMedia(filename, type) {
+  var fileUrl  = currentDir.replace(/\/$/, '') + '/' + filename;
+  var proxyUrl = toProxyFile(fileUrl);
+
+  activeMediaEl      = (type === 'video') ? videoEl : audioEl;
+  activeMediaEl.loop  = false;
+  activeMediaEl.muted = false;
+
+  imgSpinnerEl.classList.remove('hidden');
+  imagePaneEl.classList.add(type === 'video' ? 'media-video' : 'media-audio');
+
+  activeMediaEl.src = proxyUrl;
+  // loadedmetadata fires next → _onMediaLoadedMetadata()
+
+  if (!infoOverlayEl.classList.contains('hidden')) {
+    updateInfoOverlay(filename);
+  }
+  document.title = filename + ' — Media Viewer';
 }
 
 // ── Initialisation ─────────────────────────────────────────────────────────

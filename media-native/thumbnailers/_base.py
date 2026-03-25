@@ -4,6 +4,7 @@
 # ── MIME types for thumbnail-eligible files ─────────────────────────────────────
 
 MIME_TYPES = {
+    # Images (browser-native rendering)
     '.jpg':  'image/jpeg',
     '.jpeg': 'image/jpeg',
     '.png':  'image/png',
@@ -15,6 +16,26 @@ MIME_TYPES = {
     '.tif':  'image/tiff',
     '.svg':  'image/svg+xml',
     '.ico':  'image/x-icon',
+    # Video
+    '.mp4':  'video/mp4',
+    '.m4v':  'video/mp4',
+    '.webm': 'video/webm',
+    '.ogv':  'video/ogg',
+    '.mov':  'video/quicktime',
+    '.avi':  'video/x-msvideo',
+    '.mkv':  'video/x-matroska',
+    '.flv':  'video/x-flv',
+    '.wmv':  'video/x-ms-wmv',
+    '.3gp':  'video/3gpp',
+    # Audio
+    '.mp3':  'audio/mpeg',
+    '.flac': 'audio/flac',
+    '.ogg':  'audio/ogg',
+    '.oga':  'audio/ogg',
+    '.m4a':  'audio/mp4',
+    '.aac':  'audio/aac',
+    '.opus': 'audio/ogg; codecs=opus',
+    '.wav':  'audio/wav',
 }
 
 
