@@ -352,7 +352,7 @@ def _init_logging():
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         filename=str(log_path),
-        level=logging.DEBUG,
+        level=logging.WARNING,
         format='%(asctime)s %(levelname)-8s %(name)s: %(message)s',
         datefmt='%H:%M:%S',
     )

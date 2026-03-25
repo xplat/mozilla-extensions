@@ -426,8 +426,9 @@ html, body {
   color: var(--text-muted);
 }
 
-/* Hide hint when an image is loaded */
-#image-pane.image-loaded #no-image-hint {
+/* Hide hint when an image is loaded or currently loading */
+#image-pane.image-loaded #no-image-hint,
+#img-spinner:not(.hidden) ~ #no-image-hint {
   display: none;
 }
 
