@@ -2,13 +2,15 @@
 """
 cbz_native_host.py — Native messaging host for the CBZ Viewer Firefox extension.
 
-Runs two concurrent jobs:
+Runs three daemon threads plus a main dispatch loop:
 
-JOB 1 — Queue watcher (main thread):
-  Polls ~/.cbz-viewer/queue/ for JSON files dropped by `cbz-open`.
-  Sends {"event":"open","path":"...","page":N,"name":"..."} to the extension.
+JOB 1 — Queue watcher (daemon thread):
+  Watches the platform queue directory for JSON files dropped by `cbz-open`.
+  Uses inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows,
+  and falls back to periodic polling when none is available.
+  Forwards open requests to the dispatch loop via a queue.Queue.
 
-JOB 2 — HTTP file server (background thread):
+JOB 2 — HTTP file server (daemon thread):
   Binds to 127.7.203.66 (a fixed random loopback address — all of 127.0.0.0/8
   is loopback on Linux/macOS, this specific address is unlikely to conflict
   with anything, and file paths won't leak off the machine even if something
@@ -19,6 +21,14 @@ JOB 2 — HTTP file server (background thread):
   Supports Range requests identically to HTTP/1.1.
   Sends CORS headers permitting requests from moz-extension:// origins.
 
+JOB 3 — Stdin reader (daemon thread):
+  Reads native messages from the browser and forwards them to the dispatch loop.
+
+Main loop:
+  Blocks on a queue.Queue shared with the other threads and dispatches events:
+  sends {"event":"open","path":"...","page":N,"name":"..."} to the extension
+  on open requests; responds to ping messages; exits when stdin closes.
+
 On startup, sends {"event":"server","port":N,"token":"T"} as the first
 native message so the extension knows where to direct the viewer.
 
@@ -26,20 +36,205 @@ Native messaging wire format: 4-byte LE length prefix + UTF-8 JSON.
 """
 
 import sys, os, json, struct, secrets, threading, time, pathlib, select
+import queue as _q
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-QUEUE_DIR     = pathlib.Path.home() / '.cbz-viewer' / 'queue'
+# ── Platform-appropriate directories ───────────────────────────────────────────
+
+def _platform_cache_dir(app_name):
+    """Return the platform-appropriate user cache directory for app_name."""
+    if sys.platform == 'darwin':
+        return pathlib.Path.home() / 'Library' / 'Caches' / app_name
+    if sys.platform == 'win32':
+        base = os.environ.get('LOCALAPPDATA') or os.environ.get('APPDATA', '')
+        return (pathlib.Path(base) if base else pathlib.Path.home()) / app_name
+    # Linux / other POSIX: honour XDG_CACHE_HOME
+    xdg = os.environ.get('XDG_CACHE_HOME', '').strip()
+    return (pathlib.Path(xdg) if xdg else pathlib.Path.home() / '.cache') / app_name
+
+QUEUE_DIR     = _platform_cache_dir('cbz-viewer') / 'queue'
 POLL_INTERVAL = 0.5
 BIND_HOST     = '127.7.203.66'
 TOKEN         = secrets.token_hex(64)   # 512 bits entropy
 
+# ── Queue watcher (inotify / kqueue / ReadDirectoryChangesW / polling) ─────────
+
+class _QueueWatcher:
+    """
+    Watch a directory for new files.  Call .wait() to block until an event
+    fires (kernel API) or one poll interval elapses (polling fallback), then
+    scan the directory for new entries.
+
+      Linux   → inotify via ctypes/libc
+      macOS   → kqueue  via Python's select module
+      Windows → ReadDirectoryChangesW via ctypes in a daemon thread
+      other   → periodic sleep (polling fallback)
+
+    All OS resources are released on .close().
+    """
+
+    def __init__(self, path: pathlib.Path):
+        self._fd      = -1    # inotify fd  (Linux)
+        self._dir_fd  = -1    # kqueue: open fd for the watched directory
+        self._kq      = None  # kqueue object (macOS)
+        self._event   = None  # threading.Event signalled by RDCW thread (Windows)
+
+        if sys.platform == 'linux':
+            self._setup_inotify(path)
+        elif sys.platform == 'darwin':
+            self._setup_kqueue(path)
+        elif sys.platform == 'win32':
+            self._setup_rdcw(path)
+        # other: all fields stay at defaults → pure sleep fallback
+
+    # ── Setup ──────────────────────────────────────────────────────────────────
+
+    def _setup_inotify(self, path):
+        try:
+            import ctypes
+            _libc = ctypes.CDLL(None, use_errno=True)
+            fd = _libc.inotify_init()
+            if fd < 0:
+                return
+            # IN_MOVED_TO fires when a rename lands in the directory — exactly
+            # what our atomic write (write .tmp then rename to .json) produces.
+            # IN_CREATE fires on the initial creation of the .tmp file, before
+            # any content is written, so we deliberately omit it.
+            IN_MOVED_TO = 0x00000080
+            wd = _libc.inotify_add_watch(
+                fd, str(path).encode(), ctypes.c_uint32(IN_MOVED_TO)
+            )
+            if wd < 0:
+                os.close(fd)
+                return
+            self._fd = fd
+        except Exception:
+            pass
+
+    def _setup_kqueue(self, path):
+        try:
+            kq     = select.kqueue()
+            dir_fd = os.open(str(path), os.O_RDONLY)
+            ev     = select.kevent(
+                dir_fd,
+                filter=select.KQ_FILTER_VNODE,
+                flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                fflags=select.KQ_NOTE_WRITE | select.KQ_NOTE_EXTEND,
+            )
+            kq.control([ev], 0)
+            self._kq     = kq
+            self._dir_fd = dir_fd
+            self._fd     = kq.fileno()
+        except Exception:
+            pass
+
+    def _setup_rdcw(self, path):
+        try:
+            import ctypes
+            import ctypes.wintypes as _wt
+            _k32 = ctypes.windll.kernel32
+
+            GENERIC_READ           = 0x80000000
+            FILE_SHARE_ALL         = 0x07
+            OPEN_EXISTING          = 3
+            FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+            FILE_NOTIFY_CHANGE_FILE_NAME = 0x0001
+            INVALID_HANDLE_VALUE   = ctypes.c_void_p(-1).value
+
+            hDir = _k32.CreateFileW(
+                str(path),
+                GENERIC_READ,
+                FILE_SHARE_ALL,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS,
+                None,
+            )
+            if hDir == INVALID_HANDLE_VALUE or hDir is None:
+                return
+
+            ev = threading.Event()
+            self._event = ev
+
+            buf      = ctypes.create_string_buffer(4096)
+            returned = _wt.DWORD(0)
+
+            def _watch():
+                try:
+                    while True:
+                        ok = _k32.ReadDirectoryChangesW(
+                            hDir, buf, len(buf),
+                            False,                          # bWatchSubtree
+                            FILE_NOTIFY_CHANGE_FILE_NAME,   # dwNotifyFilter
+                            ctypes.byref(returned),
+                            None,                           # lpOverlapped
+                            None,                           # lpCompletionRoutine
+                        )
+                        if ok:
+                            ev.set()
+                        else:
+                            break  # handle closed or error
+                finally:
+                    _k32.CloseHandle(hDir)
+
+            threading.Thread(target=_watch, daemon=True,
+                             name='rdcw-watcher').start()
+        except Exception:
+            pass
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def wait(self):
+        """Block until a directory-change event fires.
+
+        With a kernel API (inotify / kqueue / RDCW) this blocks indefinitely
+        and returns only when the OS delivers a notification, so the calling
+        thread consumes no CPU and negligible RSS while idle.
+
+        Without a kernel API the call sleeps for POLL_INTERVAL and returns,
+        allowing the caller to scan the directory periodically.
+        """
+        if self._event is not None:
+            # Windows RDCW: block until the watcher thread sets the event.
+            self._event.wait()
+            self._event.clear()
+        elif self._kq is not None:
+            # macOS kqueue: omitting the timeout blocks indefinitely.
+            try:
+                self._kq.control([], 8)
+            except OSError:
+                pass
+        elif self._fd >= 0:
+            # Linux inotify: None timeout blocks indefinitely; drain on wake.
+            try:
+                r, _, _ = select.select([self._fd], [], [], None)
+                if r:
+                    os.read(self._fd, 4096)
+            except OSError:
+                pass
+        else:
+            # No kernel API: sleep one poll interval, then let the caller scan.
+            time.sleep(POLL_INTERVAL)
+
+    def close(self):
+        """Release OS resources (kqueue and inotify fds; RDCW cleans itself up)."""
+        if self._kq is not None:
+            try: self._kq.close()
+            except OSError: pass
+        if self._dir_fd >= 0:
+            try: os.close(self._dir_fd)
+            except OSError: pass
+        elif self._fd >= 0:
+            try: os.close(self._fd)
+            except OSError: pass
+        self._fd = self._dir_fd = -1
+        self._kq = self._event = None
+
 # ── Wire protocol ──────────────────────────────────────────────────────────────
 
-def read_message_nonblocking(timeout=POLL_INTERVAL):
-    ready, _, _ = select.select([sys.stdin.buffer], [], [], timeout)
-    if not ready:
-        return None
+def _read_message():
+    """Read one native message from stdin (blocking)."""
     raw_len = sys.stdin.buffer.read(4)
     if len(raw_len) < 4:
         return None
@@ -174,28 +369,51 @@ def check_queue():
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+def _handle_req(req):
+    path = req.get('path', '')
+    page = int(req.get('page', 1))
+    if os.path.isfile(path) and (path.lower().endswith('.cbz') or path.lower().endswith('.zip')):
+        send_message({
+            "event": "open",
+            "path":  path,
+            "page":  page,
+            "name":  os.path.basename(path),
+        })
+
 def main():
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     port = start_http_server()
     send_message({"event": "server", "port": port, "token": TOKEN})
 
-    while True:
-        for req in check_queue():
-            path = req.get('path', '')
-            page = int(req.get('page', 1))
-            if os.path.isfile(path) and (path.lower().endswith('.cbz') or path.lower().endswith('.zip')):
-                send_message({
-                    "event": "open",
-                    "path":  path,
-                    "page":  page,
-                    "name":  os.path.basename(path),
-                })
+    work_q = _q.Queue()
 
-        msg = read_message_nonblocking()
-        if msg is None:
-            continue
-        if msg.get('cmd') == 'ping':
-            send_message({"status": "pong"})
+    def _watcher():
+        """Scan queue dir on kernel events (or periodically when polling)."""
+        watcher = _QueueWatcher(QUEUE_DIR)
+        for req in check_queue():          # startup scan
+            work_q.put(('open', req))
+        while True:
+            watcher.wait()                 # blocks until event (or POLL_INTERVAL)
+            for req in check_queue():
+                work_q.put(('open', req))
+
+    def _stdin_reader():
+        """Forward native messages from stdin to the work queue."""
+        while True:
+            m = _read_message()
+            if m is None:
+                return
+            work_q.put(('msg', m))
+
+    threading.Thread(target=_watcher,      daemon=True, name='queue-watcher').start()
+    threading.Thread(target=_stdin_reader, daemon=True, name='stdin-reader').start()
+
+    while True:
+        kind, item = work_q.get()   # blocks indefinitely; no periodic wakeups
+        if kind == 'open':
+            _handle_req(item)
+        elif kind == 'msg':
+            _handle_msg(item)
 
 if __name__ == '__main__':
     main()

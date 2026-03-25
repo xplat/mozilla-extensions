@@ -1,22 +1,40 @@
 #!/usr/bin/env bash
-# install.sh — Install the Media Viewer native messaging host.
+# install.sh — Install the Media Viewer native messaging host (Linux / macOS).
+#
+# Platform directories used:
+#   Linux :  package → ~/.local/  (via pip --user or pipx)
+#            queue   → $XDG_CACHE_HOME/media-viewer/queue/   (default ~/.cache/…)
+#            manifest → ~/.mozilla/native-messaging-hosts/
+#   macOS :  package → ~/Library/  (via pip --user or pipx)
+#            queue   → ~/Library/Caches/media-viewer/queue/
+#            manifest → ~/Library/Application Support/Mozilla/NativeMessagingHosts/
+#
+# For Windows, use install.ps1 instead.
+#
+# Usage: ./install.sh [--break-system-packages]
+#   --break-system-packages  passed through to pip3 on PEP 668 systems
+#                            (Debian/Ubuntu 23+); required only when pipx is
+#                            unavailable and pip3 --user refuses to install.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-QUEUE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/media-viewer/queue"
 
-# ── Detect OS ────────────────────────────────────────────────────────────────
+# ── Detect OS ─────────────────────────────────────────────────────────────────
 
 OS="$(uname -s)"
 case "$OS" in
   Linux)
     NM_HOSTS_DIR="$HOME/.mozilla/native-messaging-hosts"
+    XDG_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}"
+    QUEUE_DIR="$XDG_CACHE/media-viewer/queue"
     ;;
   Darwin)
     NM_HOSTS_DIR="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts"
+    QUEUE_DIR="$HOME/Library/Caches/media-viewer/queue"
     ;;
   *)
     echo "Unsupported OS: $OS" >&2
+    echo "For Windows, use install.ps1 instead." >&2
     exit 1
     ;;
 esac
@@ -25,11 +43,6 @@ esac
 # This installs media_native_host and media-open as console scripts and pulls
 # in jeepney (D-Bus client) as a dependency on Linux.
 # Prefer pipx (isolated venv, works on all systems); fall back to pip3 --user.
-#
-# Usage: ./install.sh [--break-system-packages]
-#   --break-system-packages  passed through to pip3 on PEP 668 systems
-#                            (Debian/Ubuntu 23+); required only when pipx is
-#                            unavailable and pip3 --user refuses to install.
 
 BREAK_SYSTEM=0
 for arg in "$@"; do

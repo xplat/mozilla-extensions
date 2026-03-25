@@ -5,9 +5,13 @@ cbz-open — open a local CBZ file in the CBZ Viewer Firefox extension.
 Usage:
     cbz-open <file.cbz> [page]
 
-Drops a small JSON request into ~/.cbz-viewer/queue/. The native messaging
-host (already running inside Firefox) picks it up within ~0.5s and tells the
-extension to open the file.
+Drops a small JSON request into the platform queue directory.  The native
+messaging host (already running inside Firefox) picks it up promptly and
+tells the extension to open the file.
+
+  Linux  : $XDG_CACHE_HOME/cbz-viewer/queue/   (default ~/.cache/cbz-viewer/queue/)
+  macOS  : ~/Library/Caches/cbz-viewer/queue/
+  Windows: %LOCALAPPDATA%\cbz-viewer\queue\
 
 Firefox must be running with the CBZ Viewer extension installed and active.
 """
@@ -18,7 +22,19 @@ import json
 import time
 import pathlib
 
-QUEUE_DIR = pathlib.Path.home() / '.cbz-viewer' / 'queue'
+
+def _platform_cache_dir(app_name):
+    """Return the platform-appropriate user cache directory for app_name."""
+    if sys.platform == 'darwin':
+        return pathlib.Path.home() / 'Library' / 'Caches' / app_name
+    if sys.platform == 'win32':
+        base = os.environ.get('LOCALAPPDATA') or os.environ.get('APPDATA', '')
+        return (pathlib.Path(base) if base else pathlib.Path.home()) / app_name
+    xdg = os.environ.get('XDG_CACHE_HOME', '').strip()
+    return (pathlib.Path(xdg) if xdg else pathlib.Path.home() / '.cache') / app_name
+
+
+QUEUE_DIR = _platform_cache_dir('cbz-viewer') / 'queue'
 
 def main():
     args = sys.argv[1:]
@@ -44,9 +60,13 @@ def main():
 
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     req = {'path': path, 'page': page, 'ts': time.time()}
-    # Unique name so concurrent calls don't collide
-    req_file = QUEUE_DIR / f'open_{int(time.time() * 1000)}_{os.getpid()}.json'
-    req_file.write_text(json.dumps(req))
+    stem = f'open_{int(time.time() * 1000)}_{os.getpid()}'
+    # Write to a .tmp file first, then rename atomically so the host never
+    # reads a partially-written request.
+    tmp_file  = QUEUE_DIR / f'{stem}.json.tmp'
+    req_file  = QUEUE_DIR / f'{stem}.json'
+    tmp_file.write_text(json.dumps(req))
+    tmp_file.replace(req_file)
     print(f'Opening {os.path.basename(path)} (page {page})…')
 
 if __name__ == '__main__':
