@@ -847,6 +847,8 @@ document.addEventListener('keydown', function(e) {
       case 'p': if (activeMediaEl) { e.preventDefault(); togglePlayPause();     return; } break;
       case '9': if (activeMediaEl) { e.preventDefault(); adjustVolume(-0.1);    return; } break;
       case '0': if (activeMediaEl) { e.preventDefault(); adjustVolume(+0.1);    return; } break;
+      case '(': if (activeMediaEl) { e.preventDefault(); adjustBalance(-0.1);   return; } break;
+      case ')': if (activeMediaEl) { e.preventDefault(); adjustBalance(+0.1);   return; } break;
     }
   }
 
@@ -913,8 +915,10 @@ function handleViewerKey(e, key, ctrl, plain) {
       case 'ArrowDown':  e.preventDefault(); seekRelative(-60);  return;
       case 'PageUp':     e.preventDefault(); seekRelative(+600); return;
       case 'PageDown':   e.preventDefault(); seekRelative(-600); return;
-      case 'Backspace':  e.preventDefault();
+      case 'Home':       e.preventDefault();
         activeMediaEl.currentTime = 0; _updateVideoControls(); return;
+      case 'Backspace':  e.preventDefault();
+        activeMediaEl.playbackRate = 1; return;
       // Play / pause / advance
       case ' ':
         e.preventDefault();
@@ -934,6 +938,10 @@ function handleViewerKey(e, key, ctrl, plain) {
       case '}': e.preventDefault();
         activeMediaEl.playbackRate = Math.min(4.0,  activeMediaEl.playbackRate * 2);
         return;
+      // Audio / video track cycling
+      case 'a':
+      case '#': e.preventDefault(); cycleAudioTrack(); return;
+      case '_': e.preventDefault(); cycleVideoTrack(); return;
       // OSD / info
       case 'o': e.preventDefault(); toggleInfoOverlay(); return;
     }
@@ -1167,6 +1175,13 @@ var videoVolEl      = document.getElementById('video-vol');
 var activeMediaEl       = null;  // currently active <video> or <audio>, or null
 var _posCheckpointTimer = null;  // setTimeout handle for position-save throttle
 
+// Stereo balance (Web Audio API); created lazily on first adjustBalance() call
+var _panValue      = 0;      // -1 (full left) … 0 (centre) … +1 (full right)
+var _audioCtx      = null;
+var _panNode       = null;
+var _videoGraphed  = false;  // whether videoEl has been wired into _audioCtx
+var _audioGraphed  = false;  // whether audioEl has been wired into _audioCtx
+
 // ── BroadcastChannel: pause other viewer tabs when we start playing audio ──
 
 var _mediaChannel = new BroadcastChannel('media-viewer');
@@ -1238,8 +1253,13 @@ function _updateVideoControls() {
     videoSeekFillEl.style.width = (cur / dur * 100).toFixed(2) + '%';
   }
   if (videoVolEl) {
-    var vol = Math.round(activeMediaEl.volume * 100);
-    videoVolEl.textContent = activeMediaEl.muted ? 'MUTED' : ('VOL\u00a0' + vol);
+    var vol  = Math.round(activeMediaEl.volume * 100);
+    var text = activeMediaEl.muted ? 'MUTED' : ('VOL\u00a0' + vol);
+    if (_panValue !== 0) {
+      var side = _panValue > 0 ? 'R' : 'L';
+      text += '\u2002' + side + Math.abs(_panValue).toFixed(1);
+    }
+    videoVolEl.textContent = text;
   }
 }
 
@@ -1341,6 +1361,60 @@ function seekRelative(secs) {
   activeMediaEl.currentTime =
     Math.max(0, Math.min(activeMediaEl.duration, activeMediaEl.currentTime + secs));
   _updateVideoControls();
+}
+
+// ── Stereo balance (Web Audio API) ──────────────────────────────────────────
+//
+// createMediaElementSource() permanently reroutes a media element's audio
+// through the AudioContext; calling it a second time on the same element
+// throws, so we track which elements have been connected.
+
+function _ensureAudioGraph(mediaEl) {
+  if (!_audioCtx) {
+    _audioCtx = new AudioContext();
+    _panNode  = _audioCtx.createStereoPanner();
+    _panNode.pan.value = _panValue;
+    _panNode.connect(_audioCtx.destination);
+  }
+  var already = (mediaEl === videoEl) ? _videoGraphed : _audioGraphed;
+  if (!already) {
+    _audioCtx.createMediaElementSource(mediaEl).connect(_panNode);
+    if (mediaEl === videoEl) _videoGraphed = true;
+    else                     _audioGraphed = true;
+  }
+  if (_audioCtx.state === 'suspended') {
+    _audioCtx.resume().catch(function() {});
+  }
+}
+
+function adjustBalance(delta) {
+  _panValue = +Math.max(-1, Math.min(1, _panValue + delta)).toFixed(1);
+  if (activeMediaEl) {
+    _ensureAudioGraph(activeMediaEl);
+    _panNode.pan.value = _panValue;
+  }
+  _updateVideoControls();
+}
+
+// ── Track switching ──────────────────────────────────────────────────────────
+
+function cycleAudioTrack() {
+  if (!activeMediaEl) return;
+  var tracks = activeMediaEl.audioTracks;
+  if (!tracks || tracks.length <= 1) return;
+  var cur = 0;
+  for (var i = 0; i < tracks.length; i++) { if (tracks[i].enabled) { cur = i; break; } }
+  var next = (cur + 1) % tracks.length;
+  for (var i = 0; i < tracks.length; i++) { tracks[i].enabled = (i === next); }
+}
+
+function cycleVideoTrack() {
+  var tracks = videoEl.videoTracks;
+  if (!tracks || tracks.length <= 1) return;
+  var cur = 0;
+  for (var i = 0; i < tracks.length; i++) { if (tracks[i].selected) { cur = i; break; } }
+  var next = (cur + 1) % tracks.length;
+  for (var i = 0; i < tracks.length; i++) { tracks[i].selected = (i === next); }
 }
 
 // Progress bar click-to-seek
