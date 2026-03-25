@@ -925,9 +925,9 @@ function handleSelectorKey(e, key, ctrl, plain) {
 }
 
 function handleViewerKey(e, key, ctrl, plain) {
-  // Media-mode overrides: applied when a video or audio file is active.
-  // These shadow the image-mode bindings for the same keys.
-  if (plain && activeMediaEl) {
+  // Media-mode overrides: applied when a controllable video or audio file is
+  // active (gif-loop videos are excluded — they behave like static images).
+  if (plain && activeMediaEl && !imagePaneEl.classList.contains('media-gif')) {
     switch (key) {
       // Seek (mplayer defaults: ←/→ ±10 s, ↑/↓ ±1 min, PgUp/PgDn ±10 min)
       case 'ArrowLeft':  e.preventDefault(); seekRelative(-10);  return;
@@ -1305,9 +1305,6 @@ function _onMediaLoadedMetadata() {
       videoEl.loop  = true;
       videoEl.muted = true;
       imagePaneEl.classList.replace('media-video', 'media-gif');
-      // Treat gif-loop like a static image: clear activeMediaEl so that media
-      // keyboard overrides (seek, pause, etc.) don't fire.
-      activeMediaEl = null;
     }
   }
 
