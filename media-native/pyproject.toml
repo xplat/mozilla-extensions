@@ -18,4 +18,4 @@ media-open        = "media_open:main"
 
 [tool.setuptools]
 py-modules = ["media_native_host", "media_open"]
-packages   = ["thumbnailers"]
+packages   = ["thumbnailers", "thumbnailers.xdg"]
