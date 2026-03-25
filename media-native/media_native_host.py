@@ -109,12 +109,13 @@ class _QueueWatcher:
             fd = _libc.inotify_init()
             if fd < 0:
                 return
-            IN_CLOSE_WRITE = 0x00000008
-            IN_MOVED_TO    = 0x00000080
-            IN_CREATE      = 0x00000100
-            mask = IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE
+            # IN_MOVED_TO fires when a rename lands in the directory — exactly
+            # what our atomic write (write .tmp then rename to .json) produces.
+            # IN_CREATE fires on the initial creation of the .tmp file, before
+            # any content is written, so we deliberately omit it.
+            IN_MOVED_TO = 0x00000080
             wd = _libc.inotify_add_watch(
-                fd, str(path).encode(), ctypes.c_uint32(mask)
+                fd, str(path).encode(), ctypes.c_uint32(IN_MOVED_TO)
             )
             if wd < 0:
                 os.close(fd)
@@ -196,29 +197,38 @@ class _QueueWatcher:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def wait(self, timeout):
-        """Block until a directory-change event fires or *timeout* seconds pass."""
+    def wait(self, timeout) -> bool:
+        """Block until a directory-change event fires or *timeout* seconds pass.
+
+        Returns True if a kernel event fired (caller should scan the queue
+        directory) or if no kernel API is available (caller must poll).
+        Returns False on a clean timeout when a kernel watcher is active
+        (no scan needed — nothing has changed).
+        """
         if self._event is not None:
-            # Windows: RDCW thread sets the event; clear it after waking.
-            self._event.wait(timeout)
+            # Windows RDCW: Event.wait() returns True if set, False on timeout.
+            fired = self._event.wait(timeout)
             self._event.clear()
+            return fired
         elif self._kq is not None:
-            # macOS kqueue: control() blocks until an event or timeout.
+            # macOS kqueue: non-empty result means an event fired.
             try:
-                self._kq.control([], 8, timeout)
+                return bool(self._kq.control([], 8, timeout))
             except OSError:
-                pass
+                return False
         elif self._fd >= 0:
-            # Linux inotify: select on the fd, then drain events.
+            # Linux inotify: readable fd means an event fired; drain it.
             try:
                 r, _, _ = select.select([self._fd], [], [], timeout)
                 if r:
                     os.read(self._fd, 4096)
+                return bool(r)
             except OSError:
-                pass
+                return False
         else:
-            # No kernel API available: plain sleep.
+            # No kernel API — sleep and tell the caller to poll every time.
             time.sleep(timeout)
+            return True
 
     def close(self):
         """Release OS resources (kqueue and inotify fds; RDCW cleans itself up)."""
@@ -564,11 +574,18 @@ def main():
             msgs.put(m)
     threading.Thread(target=_stdin_reader, daemon=True, name='stdin-reader').start()
 
-    while True:
-        watcher.wait(POLL_INTERVAL)
+    # Startup scan: pick up any files already waiting in the queue.
+    for req in check_queue():
+        _handle_req(req)
 
-        for req in check_queue():
-            _handle_req(req)
+    while True:
+        # Only scan the queue when the watcher signals a change (or when no
+        # kernel watcher is active and we fall back to periodic polling).
+        # Avoid reading the directory on a plain timeout so that a queue on a
+        # spinning disk is not woken up unnecessarily.
+        if watcher.wait(POLL_INTERVAL):
+            for req in check_queue():
+                _handle_req(req)
 
         try:
             while True:
