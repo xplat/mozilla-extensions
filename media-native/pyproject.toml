@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "media-viewer-host"
+version = "1.0"
+requires-python = ">=3.8"
+dependencies = [
+    # Pure-Python D-Bus client used to call Tumbler for thumbnail generation.
+    # Linux only — not needed on macOS (qlmanage) or other platforms.
+    "jeepney; sys_platform == 'linux'",
+]
+
+[project.scripts]
+media_native_host = "media_native_host:main"
+media-open        = "media_open:main"
+
+[tool.setuptools]
+py-modules = ["media_native_host", "media_open"]
+packages   = ["thumbnailers", "thumbnailers.xdg"]

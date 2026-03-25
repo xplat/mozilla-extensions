@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Media Viewer</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+
+  <!-- PICK SCREEN (no dir param in URL) -->
+  <div id="pick-screen" class="hidden">
+    <div class="splash-inner">
+      <div class="splash-title">Media Viewer</div>
+      <p class="splash-desc">
+        Open a directory with <code>media-open&nbsp;/path/to/dir</code> from the
+        command line, or paste a viewer URL into the address bar.
+      </p>
+    </div>
+  </div>
+
+  <!-- LOADING SCREEN -->
+  <div id="loading-screen" class="hidden">
+    <div class="splash-inner">
+      <div class="splash-title">Media Viewer</div>
+      <div id="loading-status" class="loading-status">Loading…</div>
+      <div class="loading-bar-track"><div class="loading-bar-fill"></div></div>
+    </div>
+  </div>
+
+  <!-- ERROR SCREEN -->
+  <div id="error-screen" class="hidden">
+    <div class="splash-inner">
+      <div class="splash-title error-title">Error</div>
+      <div id="error-message" class="error-message">Unknown error.</div>
+    </div>
+  </div>
+
+  <!-- VIEWER SCREEN -->
+  <div id="viewer-screen" class="hidden" data-focus="selector">
+
+    <!-- MAIN AREA: selector + image (fills full height) -->
+    <div id="main-area">
+
+      <!-- LEFT: file selector -->
+      <div id="selector-pane">
+        <div id="selector-header">
+          <span id="dir-path" title=""></span>
+        </div>
+        <div id="file-list"></div>
+        <div id="selector-footer">
+          <button id="btn-recursive" title="Recursive listing">REC</button>
+          <button id="btn-hidden"    title="Show hidden files (.)">HID</button>
+          <button id="btn-sort"      title="Sort order">NAME</button>
+        </div>
+      </div>
+
+      <!-- DIVIDER: drag to resize panes -->
+      <div id="pane-divider"></div>
+
+      <!-- RIGHT: image display -->
+      <div id="image-pane">
+
+        <!-- Transform host: sized to image visual bounding box -->
+        <div id="transform-host">
+          <img id="main-image" alt="" draggable="false" />
+        </div>
+
+        <!-- Spinner -->
+        <div id="img-spinner" class="img-spinner hidden">
+          <div class="spinner-ring"></div>
+        </div>
+
+        <!-- Info overlay -->
+        <div id="info-overlay" class="hidden">
+          <div id="info-content"></div>
+        </div>
+
+        <!-- Empty-pane hint when no image is selected -->
+        <div id="no-image-hint">
+          <span>Select an image · Enter or double-click</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="viewer.js"></script>
+</body>
+</html>
