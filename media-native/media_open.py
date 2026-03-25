@@ -7,13 +7,29 @@ Usage:
   media-open /path/to/directory
   media-open /path/to/image.jpg
 
-The native host polls ~/.media-viewer/queue/ every ~0.5 s and opens the
-viewer within that window.
+Drops a small JSON request into the platform queue directory.  The native
+host picks it up within ~0.5 s and opens the viewer.
+
+  Linux  : $XDG_CACHE_HOME/media-viewer/queue/   (default ~/.cache/media-viewer/queue/)
+  macOS  : ~/Library/Caches/media-viewer/queue/
+  Windows: %LOCALAPPDATA%\media-viewer\queue\
 """
 
 import sys, os, json, time, pathlib
 
-QUEUE_DIR = pathlib.Path.home() / '.media-viewer' / 'queue'
+
+def _platform_cache_dir(app_name):
+    """Return the platform-appropriate user cache directory for app_name."""
+    if sys.platform == 'darwin':
+        return pathlib.Path.home() / 'Library' / 'Caches' / app_name
+    if sys.platform == 'win32':
+        base = os.environ.get('LOCALAPPDATA') or os.environ.get('APPDATA', '')
+        return (pathlib.Path(base) if base else pathlib.Path.home()) / app_name
+    xdg = os.environ.get('XDG_CACHE_HOME', '').strip()
+    return (pathlib.Path(xdg) if xdg else pathlib.Path.home() / '.cache') / app_name
+
+
+QUEUE_DIR = _platform_cache_dir('media-viewer') / 'queue'
 
 IMAGE_EXTS = frozenset([
     '.jpg', '.jpeg', '.png', '.gif', '.webp',

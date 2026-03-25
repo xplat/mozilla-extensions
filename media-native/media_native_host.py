@@ -5,7 +5,8 @@ media_native_host.py — Native messaging host for the Media Viewer Firefox exte
 Runs two concurrent jobs:
 
 JOB 1 — Queue watcher (main thread):
-  Polls ~/.media-viewer/queue/ for JSON files dropped by `media-open`.
+  Watches the platform queue directory for JSON files dropped by `media-open`.
+  Uses inotify on Linux, kqueue on macOS, and falls back to polling elsewhere.
   Sends {"event":"open","dir":"...","file":"..."} to the extension.
 
 JOB 2 — HTTP file/directory server (background thread):
@@ -40,7 +41,7 @@ knows where to direct proxy requests.
 Native messaging wire format: 4-byte LE length prefix + UTF-8 JSON.
 """
 
-import sys, os, json, logging, struct, secrets, threading, pathlib, select, stat
+import sys, os, json, logging, struct, secrets, threading, time, pathlib, select, stat
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
@@ -48,23 +49,128 @@ from socketserver import ThreadingMixIn
 import thumbnailers
 from thumbnailers import MIME_TYPES
 
-_XDG_CACHE_HOME = pathlib.Path(
-    os.environ.get('XDG_CACHE_HOME', '').strip() or
-    pathlib.Path.home() / '.cache'
-)
-QUEUE_DIR     = _XDG_CACHE_HOME / 'media-viewer' / 'queue'
+# ── Platform-appropriate directories ───────────────────────────────────────────
+
+def _platform_cache_dir(app_name):
+    """Return the platform-appropriate user cache directory for app_name."""
+    if sys.platform == 'darwin':
+        return pathlib.Path.home() / 'Library' / 'Caches' / app_name
+    if sys.platform == 'win32':
+        base = os.environ.get('LOCALAPPDATA') or os.environ.get('APPDATA', '')
+        return (pathlib.Path(base) if base else pathlib.Path.home()) / app_name
+    # Linux / other POSIX: honour XDG_CACHE_HOME
+    xdg = os.environ.get('XDG_CACHE_HOME', '').strip()
+    return (pathlib.Path(xdg) if xdg else pathlib.Path.home() / '.cache') / app_name
+
+_CACHE_DIR    = _platform_cache_dir('media-viewer')
+QUEUE_DIR     = _CACHE_DIR / 'queue'
 POLL_INTERVAL = 0.5
 BIND_HOST     = '127.7.203.98'
 TOKEN         = secrets.token_hex(64)   # 512 bits of entropy
 
 IMAGE_EXTS = frozenset(MIME_TYPES)   # derived — MIME_TYPES is the single source of truth
 
+# ── Queue watcher (inotify / kqueue / polling fallback) ────────────────────────
+
+class _QueueWatcher:
+    """
+    Watch a directory for new files using the best available kernel API.
+
+      Linux  → inotify   (via ctypes / libc)
+      macOS  → kqueue    (via Python's select module)
+      other  → polling fallback (no fd)
+
+    If .available is True, .fileno() returns an fd that becomes readable in
+    select() when files appear in the watched directory.  Call .drain() after
+    select() fires to consume the pending kernel events.  Call .close() to
+    release OS resources when done.
+    """
+
+    def __init__(self, path: pathlib.Path):
+        self._fd     = -1
+        self._dir_fd = -1   # kqueue only: open fd for the watched directory
+        self._kq     = None # kqueue object (macOS)
+        if sys.platform == 'linux':
+            self._setup_inotify(path)
+        elif sys.platform == 'darwin':
+            self._setup_kqueue(path)
+        # Windows / other: leave _fd = -1, caller falls back to polling
+
+    def _setup_inotify(self, path):
+        try:
+            import ctypes
+            _libc = ctypes.CDLL(None, use_errno=True)
+            fd = _libc.inotify_init()
+            if fd < 0:
+                return
+            IN_CLOSE_WRITE = 0x00000008
+            IN_MOVED_TO    = 0x00000080
+            IN_CREATE      = 0x00000100
+            mask = IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE
+            wd = _libc.inotify_add_watch(
+                fd, str(path).encode(), ctypes.c_uint32(mask)
+            )
+            if wd < 0:
+                os.close(fd)
+                return
+            self._fd = fd
+        except Exception:
+            pass
+
+    def _setup_kqueue(self, path):
+        try:
+            kq     = select.kqueue()
+            dir_fd = os.open(str(path), os.O_RDONLY)
+            ev     = select.kevent(
+                dir_fd,
+                filter=select.KQ_FILTER_VNODE,
+                flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                fflags=select.KQ_NOTE_WRITE | select.KQ_NOTE_EXTEND,
+            )
+            kq.control([ev], 0)
+            self._kq     = kq
+            self._dir_fd = dir_fd
+            self._fd     = kq.fileno()
+        except Exception:
+            pass
+
+    @property
+    def available(self):
+        return self._fd >= 0
+
+    def fileno(self):
+        return self._fd
+
+    def drain(self):
+        """Consume pending kernel events so the fd does not stay readable."""
+        if self._kq is not None:
+            try:
+                self._kq.control([], 8, 0)
+            except OSError:
+                pass
+        elif self._fd >= 0:
+            try:
+                os.read(self._fd, 4096)
+            except OSError:
+                pass
+
+    def close(self):
+        if self._kq is not None:
+            try: self._kq.close()
+            except OSError: pass
+        if self._dir_fd >= 0:
+            try: os.close(self._dir_fd)
+            except OSError: pass
+        elif self._fd >= 0:
+            try: os.close(self._fd)
+            except OSError: pass
+        self._fd = self._dir_fd = -1
+        self._kq = None
+
 # ── Wire protocol ──────────────────────────────────────────────────────────────
 
-def read_message_nonblocking(timeout=POLL_INTERVAL):
-    ready, _, _ = select.select([sys.stdin.buffer], [], [], timeout)
-    if not ready:
-        return None
+def _read_message():
+    """Read one native message from stdin (caller must ensure stdin is readable)."""
     raw_len = sys.stdin.buffer.read(4)
     if len(raw_len) < 4:
         return None
@@ -313,7 +419,7 @@ def start_http_server():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server.server_address[1]   # actual port assigned by OS
 
-# ── Queue watcher ──────────────────────────────────────────────────────────────
+# ── Queue helpers ──────────────────────────────────────────────────────────────
 
 def check_queue():
     if not QUEUE_DIR.exists():
@@ -348,7 +454,7 @@ def validate_open_request(req):
 # so logging must never go there.  stderr is silently discarded by Firefox for
 # native messaging hosts.  Log to a file instead.
 def _init_logging():
-    log_path = _XDG_CACHE_HOME / 'media-viewer' / 'media_native_host.log'
+    log_path = _CACHE_DIR / 'media_native_host.log'
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         filename=str(log_path),
@@ -357,8 +463,20 @@ def _init_logging():
         datefmt='%H:%M:%S',
     )
 
-
 # ── Main ───────────────────────────────────────────────────────────────────────
+
+def _handle_req(req):
+    validated = validate_open_request(req)
+    if validated:
+        send_message({
+            'event': 'open',
+            'dir':   validated['dir'],
+            'file':  validated['file'],
+        })
+
+def _handle_msg(msg):
+    if msg is not None and msg.get('cmd') == 'ping':
+        send_message({'status': 'pong'})
 
 def main():
     _init_logging()
@@ -367,21 +485,53 @@ def main():
     port = start_http_server()
     send_message({'event': 'server', 'port': port, 'token': TOKEN})
 
-    while True:
-        for req in check_queue():
-            validated = validate_open_request(req)
-            if validated:
-                send_message({
-                    'event': 'open',
-                    'dir':   validated['dir'],
-                    'file':  validated['file'],
-                })
+    if sys.platform == 'win32':
+        # Windows: select() does not work on pipes, so use a reader thread.
+        import queue as _q
+        _msgs = _q.Queue()
 
-        msg = read_message_nonblocking()
-        if msg is None:
-            continue
-        if msg.get('cmd') == 'ping':
-            send_message({'status': 'pong'})
+        def _reader():
+            while True:
+                m = _read_message()
+                if m is None:
+                    return
+                _msgs.put(m)
+
+        threading.Thread(target=_reader, daemon=True).start()
+
+        while True:
+            for req in check_queue():
+                _handle_req(req)
+            time.sleep(POLL_INTERVAL)
+            try:
+                while True:
+                    _handle_msg(_msgs.get_nowait())
+            except _q.Empty:
+                pass
+
+    else:
+        # Unix: use select() on stdin + optional kernel file-watch fd.
+        watcher   = _QueueWatcher(QUEUE_DIR)
+        select_in = [sys.stdin.buffer]
+        if watcher.available:
+            select_in.append(watcher.fileno())
+
+        while True:
+            ready, _, _ = select.select(select_in, [], [], POLL_INTERVAL)
+            watch_fd    = watcher.fileno()
+
+            if watcher.available and watch_fd in ready:
+                # Kernel notified us: drain events and check queue immediately.
+                watcher.drain()
+                for req in check_queue():
+                    _handle_req(req)
+            elif not ready:
+                # Timeout: polling fallback (also catches missed events).
+                for req in check_queue():
+                    _handle_req(req)
+
+            if sys.stdin.buffer in ready:
+                _handle_msg(_read_message())
 
 if __name__ == '__main__':
     main()
