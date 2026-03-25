@@ -8,7 +8,7 @@ Usage:
   media-open /path/to/image.jpg
 
 Drops a small JSON request into the platform queue directory.  The native
-host picks it up within ~0.5 s and opens the viewer.
+host picks it up promptly and opens the viewer.
 
   Linux  : $XDG_CACHE_HOME/media-viewer/queue/   (default ~/.cache/media-viewer/queue/)
   macOS  : ~/Library/Caches/media-viewer/queue/

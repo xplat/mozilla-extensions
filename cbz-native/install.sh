@@ -3,7 +3,7 @@
 #
 # Installs:
 #   - cbz_native_host.py  → platform data dir
-#   - cbz-open            → ~/.local/bin/ or ~/bin/ (Linux) / /usr/local/bin/ (macOS)
+#   - cbz-open            → ~/.local/bin/ or ~/bin/ (Linux / macOS)
 #   - host manifest JSON  → Firefox native messaging hosts dir for this OS
 #   - queue directory     → platform cache dir
 #

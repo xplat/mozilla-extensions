@@ -2,14 +2,15 @@
 """
 media_native_host.py — Native messaging host for the Media Viewer Firefox extension.
 
-Runs two concurrent jobs:
+Runs three daemon threads plus a main dispatch loop:
 
-JOB 1 — Queue watcher (main thread):
+JOB 1 — Queue watcher (daemon thread):
   Watches the platform queue directory for JSON files dropped by `media-open`.
-  Uses inotify on Linux, kqueue on macOS, and falls back to polling elsewhere.
-  Sends {"event":"open","dir":"...","file":"..."} to the extension.
+  Uses inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows,
+  and falls back to periodic polling when none is available.
+  Forwards open requests to the dispatch loop via a queue.Queue.
 
-JOB 2 — HTTP file/directory server (background thread):
+JOB 2 — HTTP file/directory server (daemon thread):
   Binds to 127.7.203.98:0 (OS-assigned random port).
 
   URL format:
@@ -34,6 +35,14 @@ JOB 2 — HTTP file/directory server (background thread):
         Pre-queues all images in the directory for background thumbnailing
         on backends that support it (e.g. Tumbler on XFCE).  Returns 204
         immediately; the queue call runs in a daemon thread.
+
+JOB 3 — Stdin reader (daemon thread):
+  Reads native messages from the browser and forwards them to the dispatch loop.
+
+Main loop:
+  Blocks on a queue.Queue shared with the other threads and dispatches events:
+  sends {"event":"open","dir":"...","file":"..."} to the extension on open
+  requests; responds to ping messages; exits when stdin closes.
 
 On startup, sends {"event":"server","port":N,"token":"T"} so the extension
 knows where to direct proxy requests.
@@ -75,13 +84,14 @@ IMAGE_EXTS = frozenset(MIME_TYPES)   # derived — MIME_TYPES is the single sour
 
 class _QueueWatcher:
     """
-    Watch a directory for new files.  Call .wait(timeout) to block until an
-    event fires or the timeout expires, then scan the directory for new entries.
+    Watch a directory for new files.  Call .wait() to block until an event
+    fires (kernel API) or one poll interval elapses (polling fallback), then
+    scan the directory for new entries.
 
       Linux   → inotify via ctypes/libc
       macOS   → kqueue  via Python's select module
       Windows → ReadDirectoryChangesW via ctypes in a daemon thread
-      other   → pure timeout (polling fallback)
+      other   → periodic sleep (polling fallback)
 
     All OS resources are released on .close().
     """

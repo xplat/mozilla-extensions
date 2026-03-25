@@ -2,15 +2,15 @@
 """
 cbz_native_host.py — Native messaging host for the CBZ Viewer Firefox extension.
 
-Runs two concurrent jobs:
+Runs three daemon threads plus a main dispatch loop:
 
-JOB 1 — Queue watcher (main thread):
+JOB 1 — Queue watcher (daemon thread):
   Watches the platform queue directory for JSON files dropped by `cbz-open`.
   Uses inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows,
-  and falls back to polling when none is available.
-  Sends {"event":"open","path":"...","page":N,"name":"..."} to the extension.
+  and falls back to periodic polling when none is available.
+  Forwards open requests to the dispatch loop via a queue.Queue.
 
-JOB 2 — HTTP file server (background thread):
+JOB 2 — HTTP file server (daemon thread):
   Binds to 127.7.203.66 (a fixed random loopback address — all of 127.0.0.0/8
   is loopback on Linux/macOS, this specific address is unlikely to conflict
   with anything, and file paths won't leak off the machine even if something
@@ -20,6 +20,14 @@ JOB 2 — HTTP file server (background thread):
   URL format: http://127.7.203.66:PORT/TOKEN/url-encoded-absolute-path
   Supports Range requests identically to HTTP/1.1.
   Sends CORS headers permitting requests from moz-extension:// origins.
+
+JOB 3 — Stdin reader (daemon thread):
+  Reads native messages from the browser and forwards them to the dispatch loop.
+
+Main loop:
+  Blocks on a queue.Queue shared with the other threads and dispatches events:
+  sends {"event":"open","path":"...","page":N,"name":"..."} to the extension
+  on open requests; responds to ping messages; exits when stdin closes.
 
 On startup, sends {"event":"server","port":N,"token":"T"} as the first
 native message so the extension knows where to direct the viewer.
@@ -54,13 +62,14 @@ TOKEN         = secrets.token_hex(64)   # 512 bits entropy
 
 class _QueueWatcher:
     """
-    Watch a directory for new files.  Call .wait(timeout) to block until an
-    event fires or the timeout expires, then scan the directory for new entries.
+    Watch a directory for new files.  Call .wait() to block until an event
+    fires (kernel API) or one poll interval elapses (polling fallback), then
+    scan the directory for new entries.
 
       Linux   → inotify via ctypes/libc
       macOS   → kqueue  via Python's select module
       Windows → ReadDirectoryChangesW via ctypes in a daemon thread
-      other   → pure timeout (polling fallback)
+      other   → periodic sleep (polling fallback)
 
     All OS resources are released on .close().
     """
