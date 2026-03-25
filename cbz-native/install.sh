@@ -52,12 +52,12 @@ echo "Installed host: $INSTALL_DIR/cbz_native_host.py"
 
 # ── Install cbz-open ───────────────────────────────────────────────────────────
 if [[ "$OS" == "Darwin" ]]; then
-  # macOS: prefer /usr/local/bin (Homebrew standard), fall back to ~/bin
-  if [[ -d /usr/local/bin ]]; then
-    BIN_DIR="/usr/local/bin"
-  else
-    BIN_DIR="$HOME/bin"
-    mkdir -p "$BIN_DIR"
+  # macOS: use ~/.local/bin (same convention as Linux; no platform-specific
+  # equivalent exists, and /usr/local/bin requires sudo on stock macOS)
+  BIN_DIR="$HOME/.local/bin"
+  if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+    echo "Note: $BIN_DIR is not in your PATH. Add it to use cbz-open from anywhere."
+    echo "  Add to ~/.zshrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
   fi
 else
   # Linux: prefer ~/.local/bin (modern XDG), fall back to ~/bin

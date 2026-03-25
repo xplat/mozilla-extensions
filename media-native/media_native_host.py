@@ -42,6 +42,7 @@ Native messaging wire format: 4-byte LE length prefix + UTF-8 JSON.
 """
 
 import sys, os, json, logging, struct, secrets, threading, time, pathlib, select, stat
+import queue as _q
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
@@ -70,31 +71,36 @@ TOKEN         = secrets.token_hex(64)   # 512 bits of entropy
 
 IMAGE_EXTS = frozenset(MIME_TYPES)   # derived — MIME_TYPES is the single source of truth
 
-# ── Queue watcher (inotify / kqueue / polling fallback) ────────────────────────
+# ── Queue watcher (inotify / kqueue / ReadDirectoryChangesW / polling) ─────────
 
 class _QueueWatcher:
     """
-    Watch a directory for new files using the best available kernel API.
+    Watch a directory for new files.  Call .wait(timeout) to block until an
+    event fires or the timeout expires, then scan the directory for new entries.
 
-      Linux  → inotify   (via ctypes / libc)
-      macOS  → kqueue    (via Python's select module)
-      other  → polling fallback (no fd)
+      Linux   → inotify via ctypes/libc
+      macOS   → kqueue  via Python's select module
+      Windows → ReadDirectoryChangesW via ctypes in a daemon thread
+      other   → pure timeout (polling fallback)
 
-    If .available is True, .fileno() returns an fd that becomes readable in
-    select() when files appear in the watched directory.  Call .drain() after
-    select() fires to consume the pending kernel events.  Call .close() to
-    release OS resources when done.
+    All OS resources are released on .close().
     """
 
     def __init__(self, path: pathlib.Path):
-        self._fd     = -1
-        self._dir_fd = -1   # kqueue only: open fd for the watched directory
-        self._kq     = None # kqueue object (macOS)
+        self._fd      = -1    # inotify fd  (Linux)
+        self._dir_fd  = -1    # kqueue: open fd for the watched directory
+        self._kq      = None  # kqueue object (macOS)
+        self._event   = None  # threading.Event signalled by RDCW thread (Windows)
+
         if sys.platform == 'linux':
             self._setup_inotify(path)
         elif sys.platform == 'darwin':
             self._setup_kqueue(path)
-        # Windows / other: leave _fd = -1, caller falls back to polling
+        elif sys.platform == 'win32':
+            self._setup_rdcw(path)
+        # other: all fields stay at defaults → pure sleep fallback
+
+    # ── Setup ──────────────────────────────────────────────────────────────────
 
     def _setup_inotify(self, path):
         try:
@@ -134,27 +140,88 @@ class _QueueWatcher:
         except Exception:
             pass
 
-    @property
-    def available(self):
-        return self._fd >= 0
+    def _setup_rdcw(self, path):
+        try:
+            import ctypes
+            import ctypes.wintypes as _wt
+            _k32 = ctypes.windll.kernel32
 
-    def fileno(self):
-        return self._fd
+            GENERIC_READ               = 0x80000000
+            FILE_SHARE_ALL             = 0x07
+            OPEN_EXISTING              = 3
+            FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+            FILE_NOTIFY_CHANGE_FILE_NAME = 0x0001
+            INVALID_HANDLE_VALUE       = ctypes.c_void_p(-1).value
 
-    def drain(self):
-        """Consume pending kernel events so the fd does not stay readable."""
-        if self._kq is not None:
+            hDir = _k32.CreateFileW(
+                str(path),
+                GENERIC_READ,
+                FILE_SHARE_ALL,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS,
+                None,
+            )
+            if hDir == INVALID_HANDLE_VALUE or hDir is None:
+                return
+
+            ev = threading.Event()
+            self._event = ev
+
+            buf      = ctypes.create_string_buffer(4096)
+            returned = _wt.DWORD(0)
+
+            def _watch():
+                try:
+                    while True:
+                        ok = _k32.ReadDirectoryChangesW(
+                            hDir, buf, len(buf),
+                            False,                           # bWatchSubtree
+                            FILE_NOTIFY_CHANGE_FILE_NAME,    # dwNotifyFilter
+                            ctypes.byref(returned),
+                            None,                            # lpOverlapped
+                            None,                            # lpCompletionRoutine
+                        )
+                        if ok:
+                            ev.set()
+                        else:
+                            break  # handle closed or error
+                finally:
+                    _k32.CloseHandle(hDir)
+
+            threading.Thread(target=_watch, daemon=True,
+                             name='rdcw-watcher').start()
+        except Exception:
+            pass
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def wait(self, timeout):
+        """Block until a directory-change event fires or *timeout* seconds pass."""
+        if self._event is not None:
+            # Windows: RDCW thread sets the event; clear it after waking.
+            self._event.wait(timeout)
+            self._event.clear()
+        elif self._kq is not None:
+            # macOS kqueue: control() blocks until an event or timeout.
             try:
-                self._kq.control([], 8, 0)
+                self._kq.control([], 8, timeout)
             except OSError:
                 pass
         elif self._fd >= 0:
+            # Linux inotify: select on the fd, then drain events.
             try:
-                os.read(self._fd, 4096)
+                r, _, _ = select.select([self._fd], [], [], timeout)
+                if r:
+                    os.read(self._fd, 4096)
             except OSError:
                 pass
+        else:
+            # No kernel API available: plain sleep.
+            time.sleep(timeout)
 
     def close(self):
+        """Release OS resources (kqueue and inotify fds; RDCW cleans itself up)."""
         if self._kq is not None:
             try: self._kq.close()
             except OSError: pass
@@ -165,12 +232,12 @@ class _QueueWatcher:
             try: os.close(self._fd)
             except OSError: pass
         self._fd = self._dir_fd = -1
-        self._kq = None
+        self._kq = self._event = None
 
 # ── Wire protocol ──────────────────────────────────────────────────────────────
 
 def _read_message():
-    """Read one native message from stdin (caller must ensure stdin is readable)."""
+    """Read one native message from stdin (blocking)."""
     raw_len = sys.stdin.buffer.read(4)
     if len(raw_len) < 4:
         return None
@@ -481,57 +548,33 @@ def _handle_msg(msg):
 def main():
     _init_logging()
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    watcher = _QueueWatcher(QUEUE_DIR)
     thumbnailers.init()
     port = start_http_server()
     send_message({'event': 'server', 'port': port, 'token': TOKEN})
 
-    if sys.platform == 'win32':
-        # Windows: select() does not work on pipes, so use a reader thread.
-        import queue as _q
-        _msgs = _q.Queue()
+    # Read stdin in a background thread on all platforms.
+    # (select() on pipes is unreliable on Windows; a thread works everywhere.)
+    msgs = _q.Queue()
+    def _stdin_reader():
+        while True:
+            m = _read_message()
+            if m is None:
+                return
+            msgs.put(m)
+    threading.Thread(target=_stdin_reader, daemon=True, name='stdin-reader').start()
 
-        def _reader():
+    while True:
+        watcher.wait(POLL_INTERVAL)
+
+        for req in check_queue():
+            _handle_req(req)
+
+        try:
             while True:
-                m = _read_message()
-                if m is None:
-                    return
-                _msgs.put(m)
-
-        threading.Thread(target=_reader, daemon=True).start()
-
-        while True:
-            for req in check_queue():
-                _handle_req(req)
-            time.sleep(POLL_INTERVAL)
-            try:
-                while True:
-                    _handle_msg(_msgs.get_nowait())
-            except _q.Empty:
-                pass
-
-    else:
-        # Unix: use select() on stdin + optional kernel file-watch fd.
-        watcher   = _QueueWatcher(QUEUE_DIR)
-        select_in = [sys.stdin.buffer]
-        if watcher.available:
-            select_in.append(watcher.fileno())
-
-        while True:
-            ready, _, _ = select.select(select_in, [], [], POLL_INTERVAL)
-            watch_fd    = watcher.fileno()
-
-            if watcher.available and watch_fd in ready:
-                # Kernel notified us: drain events and check queue immediately.
-                watcher.drain()
-                for req in check_queue():
-                    _handle_req(req)
-            elif not ready:
-                # Timeout: polling fallback (also catches missed events).
-                for req in check_queue():
-                    _handle_req(req)
-
-            if sys.stdin.buffer in ready:
-                _handle_msg(_read_message())
+                _handle_msg(msgs.get_nowait())
+        except _q.Empty:
+            pass
 
 if __name__ == '__main__':
     main()

@@ -60,9 +60,13 @@ def main():
 
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     req = {'path': path, 'page': page, 'ts': time.time()}
-    # Unique name so concurrent calls don't collide
-    req_file = QUEUE_DIR / f'open_{int(time.time() * 1000)}_{os.getpid()}.json'
-    req_file.write_text(json.dumps(req))
+    stem = f'open_{int(time.time() * 1000)}_{os.getpid()}'
+    # Write to a .tmp file first, then rename atomically so the host never
+    # reads a partially-written request.
+    tmp_file  = QUEUE_DIR / f'{stem}.json.tmp'
+    req_file  = QUEUE_DIR / f'{stem}.json'
+    tmp_file.write_text(json.dumps(req))
+    tmp_file.replace(req_file)
     print(f'Opening {os.path.basename(path)} (page {page})…')
 
 if __name__ == '__main__':

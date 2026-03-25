@@ -60,8 +60,13 @@ def main():
         sys.exit(1)
 
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
-    fname = QUEUE_DIR / f'open_{int(time.time() * 1000)}_{os.getpid()}.json'
-    fname.write_text(json.dumps(req))
+    stem     = f'open_{int(time.time() * 1000)}_{os.getpid()}'
+    # Write to a .tmp file first, then rename atomically so the host never
+    # reads a partially-written request.
+    tmp_file = QUEUE_DIR / f'{stem}.json.tmp'
+    req_file = QUEUE_DIR / f'{stem}.json'
+    tmp_file.write_text(json.dumps(req))
+    tmp_file.replace(req_file)
 
 if __name__ == '__main__':
     main()
