@@ -58,12 +58,32 @@
       <!-- DIVIDER: drag to resize panes -->
       <div id="pane-divider"></div>
 
-      <!-- RIGHT: image display -->
+      <!-- RIGHT: image / video / audio display -->
       <div id="image-pane">
 
-        <!-- Transform host: sized to image visual bounding box -->
+        <!-- Transform host: sized to image visual bounding box (image mode) -->
         <div id="transform-host">
           <img id="main-image" alt="" draggable="false" />
+        </div>
+
+        <!-- Video element (video / gif-loop mode) -->
+        <video id="main-video" preload="metadata" draggable="false"></video>
+
+        <!-- Audio element (audio mode, not visible) -->
+        <audio id="main-audio" preload="metadata"></audio>
+
+        <!-- Audio-mode placeholder -->
+        <div id="audio-placeholder"><span>♪</span></div>
+
+        <!-- Video / audio controls overlay -->
+        <div id="video-controls">
+          <div id="video-progress">
+            <div id="video-seek-fill"></div>
+          </div>
+          <div id="video-hud">
+            <span id="video-time"></span>
+            <span id="video-vol"></span>
+          </div>
         </div>
 
         <!-- Spinner -->
@@ -76,9 +96,9 @@
           <div id="info-content"></div>
         </div>
 
-        <!-- Empty-pane hint when no image is selected -->
+        <!-- Empty-pane hint when nothing is selected -->
         <div id="no-image-hint">
-          <span>Select an image · Enter or double-click</span>
+          <span>Select a file · Enter or double-click</span>
         </div>
       </div>
 
