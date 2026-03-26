@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # install-common.sh — shared install logic for native messaging hosts.
 #
 # Source this file from a component's install.sh after setting:
@@ -28,7 +28,7 @@
 
 set -euo pipefail
 
-_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 SHARED_DIR="$_REPO_ROOT/native-shared"
 
 # ── Detect OS ─────────────────────────────────────────────────────────────────
@@ -52,15 +52,9 @@ case "$OS" in
 esac
 
 # ── Install Python package ────────────────────────────────────────────────────
-# viewer-host-utils (local shared package) must be installed alongside the
-# component package.  For pipx, a three-step dance is required because
-# viewer-host-utils is not on PyPI and pipx uses an isolated venv:
-#  1. Install the component with --no-deps to create the venv + entry-point
-#     wrapper without pip trying to find viewer-host-utils on PyPI.
-#  2. Inject viewer-host-utils so it is present in the venv.
-#  3. Re-inject the component package so pip resolves any real PyPI deps
-#     (e.g. jeepney) normally; viewer-host-utils is already in the venv so
-#     pip does not look it up on PyPI.  Cache is welcome here.
+# viewer_host_utils (local shared package) must be installed alongside the
+# component package.  For pipx, --preinstall is required since otherwise the
+# local package cannot be found.
 # For pip --user both packages are installed together in one invocation.
 
 BREAK_SYSTEM=0
@@ -69,12 +63,12 @@ for arg in "$@"; do
 done
 
 PKG_SPEC="$PKG_NAME @ file://$PKG_DIR"
-SHARED_SPEC="viewer-host-utils @ file://$SHARED_DIR"
+SHARED_SPEC="viewer_host_utils @ file://$SHARED_DIR"
 
 if command -v pipx >/dev/null 2>&1; then
-  pipx install --force --pip-args="--no-deps --no-cache-dir" "$PKG_SPEC"
-  pipx inject "$PKG_NAME" --pip-args="--no-cache-dir" "$SHARED_SPEC"
-  pipx inject "$PKG_NAME" "$PKG_SPEC"
+  pip cache remove "$PKG_NAME"
+  pip cache remove viewer_host_utils
+  pipx install --force "$PKG_SPEC" --preinstall "$SHARED_SPEC"
   echo "Installed package via pipx"
 elif pip3 install --user --no-cache-dir "$SHARED_SPEC" "$PKG_SPEC"; then
   echo "Installed package via pip"

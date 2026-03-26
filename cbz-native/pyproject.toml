@@ -3,13 +3,13 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cbz-viewer-host"
+name = "cbz_viewer_host"
 version = "1.0"
 requires-python = ">=3.8"
 dependencies = [
-    # Local shared package — install.sh (or pipx inject) satisfies this from
+    # Local shared package — install.sh satisfies this from
     # ../native-shared before or alongside this package.
-    "viewer-host-utils @ file:../native-shared",
+    "viewer_host_utils",
 ]
 
 [project.scripts]
