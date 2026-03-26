@@ -55,10 +55,15 @@ PKG_SPEC="cbz-viewer-host @ file://$SCRIPT_DIR"
 SHARED_SPEC="viewer-host-utils @ file://$SHARED_DIR"
 
 if command -v pipx >/dev/null 2>&1; then
-  # Install cbz-viewer-host without resolving viewer-host-utils from PyPI
-  # (it's a local-only package), then inject it into the same isolated venv.
+  # viewer-host-utils is local-only (not on PyPI), so a plain pipx install
+  # would fail trying to resolve it.  Work around this in three steps:
+  #  1. Create the venv + entry-point wrapper, skipping all dep resolution.
+  #  2. Inject the local dep so it is present in the venv.
+  #  3. Re-inject the main package so pip resolves any real PyPI deps normally;
+  #     it finds viewer-host-utils already in the venv and does not go to PyPI.
   pipx install --force --pip-args="--no-deps --no-cache-dir" "$PKG_SPEC"
   pipx inject cbz-viewer-host --pip-args="--no-cache-dir" "$SHARED_SPEC"
+  pipx inject cbz-viewer-host --pip-args="--no-cache-dir" "$PKG_SPEC"
   echo "Installed package via pipx"
 elif pip3 install --user --no-cache-dir "$SHARED_SPEC" "$PKG_SPEC"; then
   echo "Installed package via pip"
