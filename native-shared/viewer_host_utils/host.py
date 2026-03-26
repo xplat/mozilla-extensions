@@ -6,42 +6,72 @@ Both cbz_native_host and media_native_host share this structure:
     forwards them to the dispatch loop via a queue.Queue.
   Thread 2 (stdin-reader)  — reads native messages from stdin and forwards them.
   Main loop                — blocks on the queue and dispatches to callbacks.
+    Ping/pong is handled automatically; the optional handle_msg_fn receives
+    only non-ping messages.
 
 Usage::
 
-    from viewer_host_utils import run_host
+    from viewer_host_utils import BaseViewerHandler, run_host
+
+    class MyHandler(BaseViewerHandler):
+        def _dispatch(self, path_tail, head_only): ...
 
     def _handle_req(req): ...
-    def _handle_msg(msg): ...
 
-    run_host(TOKEN, QUEUE_DIR, start_http_server, _handle_req, _handle_msg)
+    run_host('my-app', '127.7.203.x', MyHandler, _handle_req)
 """
 
-import threading
+import logging, secrets, threading
 import queue as _q
-from .wire import read_message, send_message
+from .platform      import cache_dir
+from .wire          import read_message, send_message
 from .queue_watcher import QueueWatcher
-from .queue import check_queue
+from .queue         import check_queue
+from .http          import ThreadedHTTPServer
 
 
-def run_host(token, queue_dir, start_server_fn, handle_req_fn, handle_msg_fn,
-             pre_start=None):
+def run_host(app_name, bind_host, handler_class, handle_req_fn,
+             handle_msg_fn=None):
     """Start the native host's three-thread event loop and block until stdin closes.
+
+    Automatically:
+      - Opens a log file at cache_dir(app_name)/<app_name>_native_host.log
+      - Creates the queue directory at cache_dir(app_name)/queue/
+      - Generates a 512-bit token and sets handler_class.token
+      - Starts a ThreadedHTTPServer on (bind_host, 0)
+      - Sends {"event":"server","port":N,"token":"T"} to the extension
+      - Handles ping → pong internally
 
     Parameters
     ----------
-    token           : str          — 512-bit hex token for the local HTTP server
-    queue_dir       : pathlib.Path — directory to watch for open_*.json requests
-    start_server_fn : () → int     — starts the HTTP server, returns the bound port
-    handle_req_fn   : (dict) → None — called for each open request from the queue
-    handle_msg_fn   : (dict) → None — called for each incoming native message
-    pre_start       : optional () → None — called first (logging init, thumbnailer
-                      init, etc.) before the queue directory is created
+    app_name       : str            — e.g. 'cbz-viewer'; drives cache dir + log name
+    bind_host      : str            — loopback address for the HTTP server
+    handler_class  : type           — BaseViewerHandler subclass
+    handle_req_fn  : (dict) → None  — called for each open request from the queue
+    handle_msg_fn  : optional (dict) → None — called for non-ping native messages
     """
-    if pre_start is not None:
-        pre_start()
+    app_dir  = cache_dir(app_name)
+    log_name = app_name.replace('-', '_') + '_native_host.log'
+    log_path = app_dir / log_name
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        filename=str(log_path),
+        level=logging.WARNING,
+        format='%(asctime)s %(levelname)-8s %(name)s: %(message)s',
+        datefmt='%H:%M:%S',
+    )
+
+    queue_dir = app_dir / 'queue'
     queue_dir.mkdir(parents=True, exist_ok=True)
-    port = start_server_fn()
+
+    token               = secrets.token_hex(64)   # 512 bits of entropy
+    handler_class.token = token
+
+    server = ThreadedHTTPServer((bind_host, 0), handler_class)
+    threading.Thread(target=server.serve_forever, daemon=True,
+                     name='http-server').start()
+    port = server.server_address[1]
+
     send_message({'event': 'server', 'port': port, 'token': token})
 
     work_q = _q.Queue()
@@ -72,4 +102,7 @@ def run_host(token, queue_dir, start_server_fn, handle_req_fn, handle_msg_fn,
         if kind == 'open':
             handle_req_fn(item)
         elif kind == 'msg':
-            handle_msg_fn(item)
+            if item is not None and item.get('cmd') == 'ping':
+                send_message({'status': 'pong'})
+            elif handle_msg_fn is not None:
+                handle_msg_fn(item)

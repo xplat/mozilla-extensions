@@ -6,55 +6,44 @@ Serves local media files and directory listings to the viewer over a loopback
 HTTP socket, generates thumbnails, and watches a platform queue directory for
 open requests from media-open.
 
-The three-thread event loop, inotify/kqueue/RDCW directory watching, and the
-4-byte-LE-prefixed JSON wire protocol are all provided by viewer_host_utils.
+HTTP server binds to 127.7.203.98:0 (OS-assigned random port).
 
-HTTP server:
-  Binds to 127.7.203.98:0 (OS-assigned random port).
+URL format:
+  GET /<token>/media-file/<url-encoded-absolute-path>
+      Serves the media file with appropriate Content-Type.
+      Supports Range requests (HTTP 206).
 
-  URL format:
-    GET /<token>/media-file/<url-encoded-absolute-path>
-        Serves the media file with appropriate Content-Type.
-        Supports Range requests (HTTP 206).
+  GET /<token>/media-dir/<url-encoded-absolute-path>[?recursive=1]
+      Returns a JSON directory listing:
+        { "files": [{"u":..., "m":..., "s":..., "t":..., "r":...}, ...] }
+      Keys: u=url/filename, m=mtime, s=size, t=type ("d" for dir),
+            r=0 when unreadable (key absent when readable).
+      With ?recursive=1 the listing is flattened; subdirs are omitted and
+      file "u" values are relative paths (e.g. "subdir/photo.jpg").
 
-    GET /<token>/media-dir/<url-encoded-absolute-path>[?recursive=1]
-        Returns a JSON directory listing:
-          { "files": [{"u":..., "m":..., "s":..., "t":..., "r":...}, ...] }
-        Keys: u=url/filename, m=mtime, s=size, t=type ("d" for dir),
-              r=0 when unreadable (key absent when readable).
-        With ?recursive=1 the listing is flattened; subdirs are omitted and
-        file "u" values are relative paths (e.g. "subdir/photo.jpg").
+  GET /<token>/media-thumb/<url-encoded-absolute-path>
+      Returns a 128px thumbnail PNG.  Generation is delegated to the
+      platform-appropriate backend (Tumbler on XFCE, qlmanage on macOS,
+      Pillow as last resort).
 
-    GET /<token>/media-thumb/<url-encoded-absolute-path>
-        Returns a 128px thumbnail PNG.  Generation is delegated to the
-        platform-appropriate backend (Tumbler on XFCE, qlmanage on macOS,
-        Pillow as last resort).
+  GET /<token>/media-queue-dir/<url-encoded-absolute-path>
+      Pre-queues all images in the directory for background thumbnailing
+      on backends that support it (e.g. Tumbler on XFCE).  Returns 204
+      immediately; the queue call runs in a daemon thread.
 
-    GET /<token>/media-queue-dir/<url-encoded-absolute-path>
-        Pre-queues all images in the directory for background thumbnailing
-        on backends that support it (e.g. Tumbler on XFCE).  Returns 204
-        immediately; the queue call runs in a daemon thread.
-
-On startup, sends {"event":"server","port":N,"token":"T"} so the extension
-knows where to direct proxy requests.
-Open requests produce {"event":"open","dir":"...","file":"..."}.
+Token generation, queue directory setup, logging, server lifecycle, wire
+protocol, and the three-thread event loop are all handled by viewer_host_utils.
 """
 
-import sys, os, json, logging, secrets, threading, pathlib, stat
+import os, json, threading, stat
 import urllib.parse
-from http.server import HTTPServer
-from socketserver import ThreadingMixIn
 
 import thumbnailers
 from thumbnailers import MIME_TYPES
 
-from viewer_host_utils import cache_dir, BaseViewerHandler, send_message, run_host
+from viewer_host_utils import BaseViewerHandler, send_message, run_host
 
-_CACHE_DIR    = cache_dir('media-viewer')
-QUEUE_DIR     = _CACHE_DIR / 'queue'
-BIND_HOST     = '127.7.203.98'
-TOKEN         = secrets.token_hex(64)   # 512 bits of entropy
-
+BIND_HOST      = '127.7.203.98'
 _SERVABLE_EXTS = frozenset(MIME_TYPES)   # derived — MIME_TYPES is the single source of truth
 
 # ── Directory listing ──────────────────────────────────────────────────────────
@@ -103,17 +92,10 @@ def list_directory(dir_path, recursive=False):
 
 class MediaHandler(BaseViewerHandler):
 
-    def _dispatch(self, head_only):
-        # Path: /<TOKEN>/<type>/<encoded-absolute-path>[?query]
-        raw_path, _, query_str = self.path.partition('?')
-        parts = raw_path.split('/', 3)   # ['', TOKEN, type, encoded-path]
-
-        if len(parts) < 3 or parts[1] != TOKEN:
-            self._error(403, 'Forbidden')
-            return
-
-        req_type = parts[2] if len(parts) > 2 else ''
-        encoded  = parts[3] if len(parts) > 3 else ''
+    def _dispatch(self, path_tail, head_only):
+        # path_tail: type/encoded-path[?query]  (token already validated)
+        raw_tail, _, query_str = path_tail.partition('?')
+        req_type, _, encoded   = raw_tail.partition('/')
 
         try:
             file_path = urllib.parse.unquote(encoded)
@@ -205,32 +187,6 @@ class MediaHandler(BaseViewerHandler):
         self.send_header('Content-Length', '0')
         self.end_headers()
 
-# ── HTTP server ────────────────────────────────────────────────────────────────
-
-class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-    daemon_threads = True
-
-
-def start_http_server():
-    server = ThreadedHTTPServer((BIND_HOST, 0), MediaHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server.server_address[1]   # actual port assigned by OS
-
-# ── Logging ────────────────────────────────────────────────────────────────────
-
-# stdout carries the native messaging wire protocol (4-byte-length-prefixed JSON)
-# so logging must never go there.  stderr is silently discarded by Firefox for
-# native messaging hosts.  Log to a file instead.
-def _init_logging():
-    log_path = _CACHE_DIR / 'media_native_host.log'
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        filename=str(log_path),
-        level=logging.WARNING,
-        format='%(asctime)s %(levelname)-8s %(name)s: %(message)s',
-        datefmt='%H:%M:%S',
-    )
-
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def validate_open_request(req):
@@ -256,19 +212,9 @@ def _handle_req(req):
         })
 
 
-def _handle_msg(msg):
-    if msg is not None and msg.get('cmd') == 'ping':
-        send_message({'status': 'pong'})
-
-
-def _pre_start():
-    _init_logging()
-    thumbnailers.init()
-
-
 def main():
-    run_host(TOKEN, QUEUE_DIR, start_http_server, _handle_req, _handle_msg,
-             pre_start=_pre_start)
+    thumbnailers.init()
+    run_host('media-viewer', BIND_HOST, MediaHandler, _handle_req)
 
 
 if __name__ == '__main__':

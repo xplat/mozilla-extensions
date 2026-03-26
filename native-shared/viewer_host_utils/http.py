@@ -1,19 +1,34 @@
 """http.py — base HTTP request handler shared by both native messaging hosts.
 
-Subclass BaseViewerHandler and implement _dispatch(head_only).  The base class
-provides CORS headers, OPTIONS/HEAD/GET routing, a range-file server, and a
-uniform error response helper.
+Subclass BaseViewerHandler and implement _dispatch(path_tail, head_only).
+run_host() sets handler_class.token before starting the server; _handle()
+validates the token on every request and strips the /TOKEN/ prefix before
+calling _dispatch, so subclasses never need to touch the token themselves.
 """
 
 import os
-from http.server import BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
+
+
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    """HTTP server that handles each request in its own daemon thread."""
+    daemon_threads = True
 
 
 class BaseViewerHandler(BaseHTTPRequestHandler):
-    """Base handler with CORS, HEAD/GET routing, range-file serving, and errors."""
+    """Base handler: CORS, token validation, range-file serving, error responses.
+
+    Class attribute `token` is set by run_host() before the server starts.
+
+    Subclasses implement _dispatch(path_tail, head_only) where path_tail is
+    self.path with the leading /TOKEN/ prefix already stripped and validated.
+    """
+
+    token = None   # set by run_host() before the server is created
 
     def log_message(self, fmt, *args):
-        pass  # silence the default per-request stderr log
+        pass  # silence per-request stderr log
 
     def send_cors(self):
         origin = self.headers.get('Origin', '')
@@ -32,13 +47,22 @@ class BaseViewerHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_HEAD(self):
-        self._dispatch(head_only=True)
+        self._handle(head_only=True)
 
     def do_GET(self):
-        self._dispatch(head_only=False)
+        self._handle(head_only=False)
 
-    def _dispatch(self, head_only):
-        """Override in subclass to handle GET/HEAD requests."""
+    def _handle(self, head_only):
+        # Path: /TOKEN/…  — validate the token, then dispatch.
+        parts = self.path.split('/', 2)   # ['', TOKEN, rest]
+        if len(parts) < 2 or parts[1] != self.token:
+            self._error(403, 'Forbidden')
+            return
+        path_tail = parts[2] if len(parts) > 2 else ''
+        self._dispatch(path_tail, head_only)
+
+    def _dispatch(self, path_tail, head_only):
+        """Override in subclass.  path_tail is self.path after the /TOKEN/ prefix."""
         raise NotImplementedError
 
     def _error(self, code, msg):
@@ -53,8 +77,8 @@ class BaseViewerHandler(BaseHTTPRequestHandler):
                           head_only: bool) -> None:
         """Serve *file_path* with full HTTP Range support.
 
-        The caller is responsible for validating that *file_path* exists and is
-        an allowed type before calling this method.
+        The caller is responsible for validating that *file_path* exists and
+        is an allowed type before calling this method.
         """
         file_size = os.path.getsize(file_path)
         start, end, partial = 0, file_size - 1, False
