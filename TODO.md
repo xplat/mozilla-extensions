@@ -1,8 +1,6 @@
-# General
-
-- The extensions have too much code duplication between them.  Making use of well-known python packages where applicable, and ones local to this project where not, we should factor out the main event loop and threading structure, directory and file location logic, and the installation (registration and directory creation) logic from the native components.  The installation scripts could be something in the repo root we can just give an appropriate directory argument to and it will install python code with pip/pipx as appropriate and ask *the code itself* to complete setup.  Or maybe they could actually load little sh/powershell files that define the appropriate details of the installation that differ between the extensions, either through variables or hook calls.  For the extension components, maybe the common pieces of the background scripts could be symlinked into the extension dirs and loaded as sub-scripts from within the browser, or if that won't work well for some permissions or efficiency reason, maybe use some simple JS build tooling (no very involved transpiling and definitely no minifying!).
-
 # Media Viewer
+
+- Audio files should have the progress bar always displayed, not just on hover.
 
 - Since video was added, the loaded image blanks right away when a new image starts loading, and even before that, when an image first showed up it would often be squished into the shape of the previous image. This should be fixed, so the user always has something to look at and what they're looking at always makes sense.
 
