@@ -3,13 +3,16 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "media-viewer-host"
+name = "media_viewer_host"
 version = "1.0"
 requires-python = ">=3.8"
 dependencies = [
     # Pure-Python D-Bus client used to call Tumbler for thumbnail generation.
     # Linux only — not needed on macOS (qlmanage) or other platforms.
     "jeepney; sys_platform == 'linux'",
+    # Local shared package — install.sh handles pipx isolation; pip path
+    # installs it explicitly before this package.
+    "viewer_host_utils",
 ]
 
 [project.scripts]

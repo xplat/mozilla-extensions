@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cbz_viewer_host"
+version = "1.0"
+requires-python = ">=3.8"
+dependencies = [
+    # Local shared package — install.sh satisfies this from
+    # ../native-shared before or alongside this package.
+    "viewer_host_utils",
+]
+
+[project.scripts]
+cbz_native_host = "cbz_native_host:main"
+cbz-open        = "cbz_open:main"
+
+[tool.setuptools]
+py-modules = ["cbz_native_host", "cbz_open"]

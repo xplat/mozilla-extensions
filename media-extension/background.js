@@ -18,9 +18,6 @@ const DIR_PROXY_PREFIX       = 'http://' + LOOPBACK + '/media-dir/';
 const THUMB_PROXY_PREFIX     = 'http://' + LOOPBACK + '/media-thumb/';
 const QUEUE_DIR_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-queue-dir/';
 
-var serverPort  = null;
-var serverToken = null;
-
 // ── Per-request proxy redirect ────────────────────────────────────────────
 
 chrome.webRequest.onBeforeRequest.addListener(
@@ -82,52 +79,6 @@ chrome.webRequest.onBeforeRequest.addListener(
 
 // ── Native messaging ──────────────────────────────────────────────────────
 
-var nativePort   = null;
-var pendingQueue = [];
-
-function connectNative() {
-  if (nativePort) return;
-  try {
-    nativePort = chrome.runtime.connectNative(HOST_NAME);
-  } catch (e) {
-    nativePort = null;
-    return;
-  }
-
-  nativePort.onMessage.addListener(function(msg) {
-    if (msg.event === 'server') {
-      serverPort  = msg.port;
-      serverToken = msg.token;
-      return;
-    }
-    if (msg.event === 'open') {
-      handleNativeOpen(msg);
-      return;
-    }
-    var pending = pendingQueue.shift();
-    if (!pending) return;
-    clearTimeout(pending.timeoutId);
-    if (msg.status === 'error') {
-      pending.reject(new Error(msg.message || 'Native host error'));
-    } else {
-      pending.resolve(msg);
-    }
-  });
-
-  nativePort.onDisconnect.addListener(function() {
-    nativePort  = null;
-    serverPort  = null;
-    serverToken = null;
-    var queue   = pendingQueue;
-    pendingQueue = [];
-    for (var i = 0; i < queue.length; i++) {
-      clearTimeout(queue[i].timeoutId);
-      queue[i].reject(new Error('Native host disconnected'));
-    }
-    setTimeout(function() { connectNative(); }, 3000);
-  });
-}
-
 function handleNativeOpen(msg) {
   // Build a file:// URL for the directory (stable, pasteable).
   // Encode each path segment so spaces/special chars are valid in the URL.
@@ -143,4 +94,9 @@ function handleNativeOpen(msg) {
   chrome.tabs.create({ url: viewerUrl });
 }
 
+// handleNativeOpen and HOST_NAME are defined above; load shared plumbing.
+// importScripts is only available in service-worker contexts (Chrome MV3);
+// in Firefox MV3 event-page contexts it is undefined, and native-messaging.js
+// is instead listed first in the manifest's background.scripts array.
+if (typeof importScripts !== 'undefined') importScripts('native-messaging.js');
 connectNative();
