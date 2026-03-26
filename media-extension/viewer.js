@@ -455,7 +455,6 @@ function showImage(filename) {
     mainImageEl.style.transform = '';
     transformHostEl.style.width  = '';
     transformHostEl.style.height = '';
-    imagePaneEl.classList.remove('image-loaded');
     mainImageEl.src = proxyUrl;   // fires 'load' from cache immediately
   };
   pending.onerror = function() {
@@ -908,8 +907,8 @@ document.addEventListener('keydown', function(e) {
           _mediaChannel.postMessage({ cmd: 'pause-toggle' });
         }
         return;
-      case '9': e.preventDefault(); adjustVolume(-0.1);  return;
-      case '0': e.preventDefault(); adjustVolume(+0.1);  return;
+      case '9': e.preventDefault(); adjustVolume(-1.5);  return;
+      case '0': e.preventDefault(); adjustVolume(+1.5);  return;
       case '(': e.preventDefault(); adjustBalance(-0.1); return;
       case ')': e.preventDefault(); adjustBalance(+0.1); return;
       case 'A': e.preventDefault(); toggleAutoplay(); return;
@@ -1521,15 +1520,24 @@ function toggleAutoplay() {
   _updateVideoControls();
 }
 
-function adjustVolume(delta) {
+// Adjust volume by dBDelta decibels.  Using dB steps gives perceptually uniform
+// increments (~1.5 dB ≈ a just-noticeable loudness change; ~20 steps full→silence).
+function adjustVolume(dBDelta) {
+  var current = activeMediaEl
+    ? activeMediaEl.volume
+    : parseFloat(localStorage.getItem('media-volume') || '1');
   var vol;
-  if (activeMediaEl) {
-    activeMediaEl.volume = Math.max(0, Math.min(1, activeMediaEl.volume + delta));
-    activeMediaEl.muted  = false;
-    vol = activeMediaEl.volume;
+  if (current <= 0) {
+    // At zero, stepping up goes to a minimal audible level (~-40 dB).
+    vol = (dBDelta > 0) ? Math.pow(10, -40 / 20) : 0;
   } else {
-    vol = +Math.max(0, Math.min(1,
-      parseFloat(localStorage.getItem('media-volume') || '1') + delta)).toFixed(4);
+    var newdB = 20 * Math.log10(current) + dBDelta;
+    vol = (newdB <= -60) ? 0 : Math.min(1, Math.pow(10, newdB / 20));
+  }
+  vol = +vol.toFixed(4);
+  if (activeMediaEl) {
+    activeMediaEl.volume = vol;
+    activeMediaEl.muted  = false;
   }
   localStorage.setItem('media-volume', String(vol));
   localStorage.setItem('media-muted',  'false');
@@ -1657,15 +1665,28 @@ function showMediaFile(filename) {
     _imgPendingLoad.src    = '';
     _imgPendingLoad        = null;
   }
+  var wasMedia = imagePaneEl.classList.contains('media-video') ||
+                 imagePaneEl.classList.contains('media-audio') ||
+                 imagePaneEl.classList.contains('media-gif');
   _stopActiveMedia();
-  mainImageEl.src = '';
-  imagePaneEl.classList.remove('image-loaded');
   if (type === 'image') {
+    // image→image: leave mainImageEl.src and image-loaded intact so the old
+    // image remains visible while the new one preloads.
+    // media→image: clear stale src so the old video frame doesn't flash.
+    if (wasMedia) {
+      mainImageEl.src = '';
+      imagePaneEl.classList.remove('image-loaded');
+    }
     showImage(filename);
   } else if (type === 'video' || type === 'audio') {
+    mainImageEl.src = '';
+    imagePaneEl.classList.remove('image-loaded');
     showMedia(filename, type);
+  } else {
+    // Unknown type: show empty pane / no-content hint.
+    mainImageEl.src = '';
+    imagePaneEl.classList.remove('image-loaded');
   }
-  // 'unknown': leave pane empty — no-content hint will be visible
 }
 
 function showMedia(filename, type) {
