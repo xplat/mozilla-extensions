@@ -16,6 +16,8 @@ YOU DO:
 YOU DO NOT:
 - use polling loops when a non-polling alternative is available;
 - use in-band sentinel values;
+- use super-new python APIs or packaging methodology;
+- commit a bash script for something that would be expressed perfectly adequately in sh;
 - override specs, or design decisions made in consultation, without further consultation to see if it's really
    appropriate.
 
@@ -32,3 +34,5 @@ localnet URIs that are intercepted and redirected by the background script.
 Due to their fundamental nature, it's difficult to run full integration tests on these extensions or even unit tests on
 some of the platform-specific code, so please don't assume code has ever been tested unless your collaborator mentions
 testing a specific version or you ran the tests yourself.
+
+Basically nothing here but build scripts and installers is immediately runnable; you need make for the extensions and to use install scripts for the python components.  Manifests are stored with the extension .json.in so people won't accidentally successfully install the incompletely-built extensions and then wonder why they don't work.
