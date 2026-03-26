@@ -2,7 +2,7 @@
 # For Linux / macOS, use install.sh instead.
 # Usage: powershell -ExecutionPolicy Bypass -File install.ps1 [--break-system-packages]
 $PkgDir       = $PSScriptRoot
-$PkgName      = 'cbz-viewer-host'
+$PkgName      = 'cbz_viewer_host'
 $HostBinName  = 'cbz_native_host'
 $HostId       = 'cbz_viewer_host'
 $HostDesc     = 'Native messaging host for the CBZ Viewer extension'

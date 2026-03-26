@@ -95,5 +95,8 @@ function handleNativeOpen(msg) {
 }
 
 // handleNativeOpen and HOST_NAME are defined above; load shared plumbing.
-importScripts('native-messaging.js');
+// importScripts is only available in service-worker contexts (Chrome MV3);
+// in Firefox MV3 event-page contexts it is undefined, and native-messaging.js
+// is instead listed first in the manifest's background.scripts array.
+if (typeof importScripts !== 'undefined') importScripts('native-messaging.js');
 connectNative();

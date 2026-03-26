@@ -3,7 +3,7 @@
 #
 # Source this file from a component's install.sh after setting:
 #   PKG_DIR        absolute path to the component directory (contains pyproject.toml)
-#   PKG_NAME       pip package name          e.g. cbz-viewer-host
+#   PKG_NAME       pip package name          e.g. cbz_viewer_host
 #   HOST_BIN_NAME  installed binary name     e.g. cbz_native_host
 #   HOST_ID        native messaging host ID  e.g. cbz_viewer_host
 #   HOST_DESC      one-line manifest description
@@ -26,7 +26,7 @@
 #                             (Debian/Ubuntu 23+); needed only when pipx is
 #                             unavailable and pip3 --user refuses to install.
 
-set -euo pipefail
+set -eu
 
 _REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 SHARED_DIR="$_REPO_ROOT/native-shared"

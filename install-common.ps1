@@ -2,7 +2,7 @@
 #
 # Dot-source this from a component install.ps1 after setting:
 #   $PkgDir       absolute path to the component directory
-#   $PkgName      pip package name          e.g. cbz-viewer-host
+#   $PkgName      pip package name          e.g. cbz_viewer_host
 #   $HostBinName  installed binary name     e.g. cbz_native_host
 #   $HostId       native messaging host ID  e.g. cbz_viewer_host
 #   $HostDesc     one-line manifest description
@@ -43,13 +43,13 @@ else {
 Write-Host "Using Python: $PythonExe"
 
 # ── Install Python packages ────────────────────────────────────────────────────
-# Install viewer-host-utils (local shared package) and the component package
+# Install viewer_host_utils (local shared package) and the component package
 # together in one pip invocation.  File URIs need forward slashes on Windows.
 
 $PkgUri     = 'file:///' + ($PkgDir    -replace '\\', '/')
 $SharedUri  = 'file:///' + ($SharedDir -replace '\\', '/')
 $PkgSpec    = "$PkgName @ $PkgUri"
-$SharedSpec = "viewer-host-utils @ $SharedUri"
+$SharedSpec = "viewer_host_utils @ $SharedUri"
 
 $PipArgs = @('-m', 'pip', 'install', '--user', '--no-cache-dir', $SharedSpec, $PkgSpec)
 if ($BreakSystem) { $PipArgs += '--break-system-packages' }

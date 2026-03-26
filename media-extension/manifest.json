@@ -20,7 +20,7 @@
     "http://127.7.203.98/*"
   ],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["native-messaging.js", "background.js"]
   },
   "icons": {
     "16":  "icons/icon16.png",
