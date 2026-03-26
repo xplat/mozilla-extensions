@@ -870,6 +870,7 @@ document.addEventListener('keydown', function(e) {
       case '0': if (activeMediaEl) { e.preventDefault(); adjustVolume(+0.1);    return; } break;
       case '(': if (activeMediaEl) { e.preventDefault(); adjustBalance(-0.1);   return; } break;
       case ')': if (activeMediaEl) { e.preventDefault(); adjustBalance(+0.1);   return; } break;
+      case 'A': e.preventDefault(); toggleAutoplay(); return;
     }
   }
 
@@ -940,9 +941,10 @@ function handleViewerKey(e, key, ctrl, plain) {
         activeMediaEl.currentTime = 0; _updateVideoControls(); return;
       case 'Backspace':  e.preventDefault();
         activeMediaEl.playbackRate = 1; return;
-      // Play / pause / advance
-      case 'Enter':
-        e.preventDefault(); nextImage(); return;
+      // Navigation
+      case 'Enter': e.preventDefault(); nextImage(); return;
+      case 'b':     e.preventDefault(); prevImage(); return;
+      // Play / pause
       case ' ':
         e.preventDefault();
         activeMediaEl.ended ? nextImage() : togglePlayPause();
@@ -1006,9 +1008,10 @@ function handleViewerKey(e, key, ctrl, plain) {
         imagePaneEl.scrollTop  = imagePaneEl.scrollHeight;
         break;
       // Image navigation
-      case ' ': e.preventDefault(); nextImage(); break;
+      case 'Enter':
+      case ' ':  e.preventDefault(); nextImage(); break;
       case 'b':
-      case 'p': prevImage(); break;
+      case 'p':  prevImage(); break;
       // Rotation (xzgv r/R/N)
       case 'r': rotateBy(90);        break;
       case 'R': rotateBy(-90);       break;
@@ -1197,6 +1200,7 @@ var videoVolEl      = document.getElementById('video-vol');
 
 var activeMediaEl       = null;  // currently active <video> or <audio>, or null
 var _posCheckpointTimer = null;  // setTimeout handle for position-save throttle
+var _autoplay           = false; // advance to next file automatically when media ends
 
 // Stereo balance (Web Audio API); created lazily on first adjustBalance() call
 var _panValue      = 0;      // -1 (full left) … 0 (centre) … +1 (full right)
@@ -1282,6 +1286,7 @@ function _updateVideoControls() {
       var side = _panValue > 0 ? 'R' : 'L';
       text += '\u2002' + side + Math.abs(_panValue).toFixed(1);
     }
+    if (_autoplay) text += '\u2002AUTO';
     videoVolEl.textContent = text;
   }
 }
@@ -1353,6 +1358,7 @@ function _onMediaEnded() {
     _clearSavedPosition(currentDir.replace(/\/$/, '') + '/' + currentFile);
   }
   _updateVideoControls();
+  if (_autoplay) nextImage();
 }
 
 function _onMediaError() {
@@ -1386,6 +1392,11 @@ function togglePlayPause() {
 function toggleMute() {
   if (!activeMediaEl) return;
   activeMediaEl.muted = !activeMediaEl.muted;
+  _updateVideoControls();
+}
+
+function toggleAutoplay() {
+  _autoplay = !_autoplay;
   _updateVideoControls();
 }
 
