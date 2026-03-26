@@ -1,40 +1,36 @@
 #!/usr/bin/env bash
-# install.sh — install the CBZ Viewer native messaging host (Linux / macOS)
-#
-# Installs:
-#   - cbz_native_host.py  → platform data dir
-#   - cbz-open            → ~/.local/bin/ or ~/bin/ (Linux / macOS)
-#   - host manifest JSON  → Firefox native messaging hosts dir for this OS
-#   - queue directory     → platform cache dir
+# install.sh — Install the CBZ Viewer native messaging host (Linux / macOS).
 #
 # Platform directories used:
-#   Linux :  host → ~/.local/share/cbz-viewer/
-#            queue → $XDG_CACHE_HOME/cbz-viewer/queue/   (default ~/.cache/…)
+#   Linux :  package → ~/.local/  (via pip --user or pipx)
+#            queue   → $XDG_CACHE_HOME/cbz-viewer/queue/   (default ~/.cache/…)
 #            manifest → ~/.mozilla/native-messaging-hosts/
-#   macOS :  host → ~/Library/Application Support/cbz-viewer/
-#            queue → ~/Library/Caches/cbz-viewer/queue/
+#   macOS :  package → ~/Library/  (via pip --user or pipx)
+#            queue   → ~/Library/Caches/cbz-viewer/queue/
 #            manifest → ~/Library/Application Support/Mozilla/NativeMessagingHosts/
 #
 # For Windows, use install.ps1 instead.
 #
-# Run once after loading the extension. Re-run to update.
-
+# Usage: ./install.sh [--break-system-packages]
+#   --break-system-packages  passed through to pip3 on PEP 668 systems
+#                            (Debian/Ubuntu 23+); required only when pipx is
+#                            unavailable and pip3 --user refuses to install.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SHARED_DIR="$SCRIPT_DIR/../native-shared"
 
-# ── Detect OS ──────────────────────────────────────────────────────────────────
+# ── Detect OS ─────────────────────────────────────────────────────────────────
+
 OS="$(uname -s)"
 case "$OS" in
   Linux)
-    MANIFEST_DIR="$HOME/.mozilla/native-messaging-hosts"
-    INSTALL_DIR="$HOME/.local/share/cbz-viewer"
+    NM_HOSTS_DIR="$HOME/.mozilla/native-messaging-hosts"
     XDG_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}"
     QUEUE_DIR="$XDG_CACHE/cbz-viewer/queue"
     ;;
   Darwin)
-    MANIFEST_DIR="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts"
-    INSTALL_DIR="$HOME/Library/Application Support/cbz-viewer"
+    NM_HOSTS_DIR="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts"
     QUEUE_DIR="$HOME/Library/Caches/cbz-viewer/queue"
     ;;
   *)
@@ -44,61 +40,75 @@ case "$OS" in
     ;;
 esac
 
-# ── Install host script ────────────────────────────────────────────────────────
-mkdir -p "$INSTALL_DIR"
-cp "$SCRIPT_DIR/cbz_native_host.py" "$INSTALL_DIR/cbz_native_host.py"
-chmod +x "$INSTALL_DIR/cbz_native_host.py"
-echo "Installed host: $INSTALL_DIR/cbz_native_host.py"
+# ── Install Python package ────────────────────────────────────────────────────
+# Installs cbz_native_host and cbz-open as console scripts.
+# viewer-host-utils (local shared package) must be installed first so that pip
+# can satisfy the dependency; pipx uses inject to add it to the isolated venv.
+# Prefer pipx (isolated venv, works on all systems); fall back to pip3 --user.
 
-# ── Install cbz-open ───────────────────────────────────────────────────────────
-if [[ "$OS" == "Darwin" ]]; then
-  # macOS: use ~/.local/bin (same convention as Linux; no platform-specific
-  # equivalent exists, and /usr/local/bin requires sudo on stock macOS)
-  BIN_DIR="$HOME/.local/bin"
-  if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-    echo "Note: $BIN_DIR is not in your PATH. Add it to use cbz-open from anywhere."
-    echo "  Add to ~/.zshrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
-  fi
+BREAK_SYSTEM=0
+for arg in "$@"; do
+  [ "$arg" = "--break-system-packages" ] && BREAK_SYSTEM=1
+done
+
+PKG_SPEC="cbz-viewer-host @ file://$SCRIPT_DIR"
+SHARED_SPEC="viewer-host-utils @ file://$SHARED_DIR"
+
+if command -v pipx >/dev/null 2>&1; then
+  # Install cbz-viewer-host without resolving viewer-host-utils from PyPI
+  # (it's a local-only package), then inject it into the same isolated venv.
+  pipx install --force --pip-args="--no-deps --no-cache-dir" "$PKG_SPEC"
+  pipx inject cbz-viewer-host --pip-args="--no-cache-dir" "$SHARED_SPEC"
+  echo "Installed package via pipx"
+elif pip3 install --user --no-cache-dir "$SHARED_SPEC" "$PKG_SPEC"; then
+  echo "Installed package via pip"
+elif [ "$BREAK_SYSTEM" -eq 1 ]; then
+  pip3 install --user --no-cache-dir --break-system-packages \
+      "$SHARED_SPEC" "$PKG_SPEC"
+  echo "Installed package via pip (--break-system-packages)"
 else
-  # Linux: prefer ~/.local/bin (modern XDG), fall back to ~/bin
-  if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
-    BIN_DIR="$HOME/.local/bin"
-  elif [[ ":$PATH:" == *":$HOME/bin:"* ]]; then
-    BIN_DIR="$HOME/bin"
-  else
-    BIN_DIR="$HOME/.local/bin"
-    echo "Note: $BIN_DIR is not in your PATH. Add it to use cbz-open from anywhere."
-    echo "  Add to ~/.bashrc or ~/.zshrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
-  fi
+  echo "" >&2
+  echo "pip3 install --user failed.  If this system uses an externally-managed" >&2
+  echo "Python environment (PEP 668 / Debian / Ubuntu 23+), re-run with:" >&2
+  echo "" >&2
+  echo "  $0 --break-system-packages" >&2
+  echo "" >&2
+  exit 1
 fi
-mkdir -p "$BIN_DIR"
-cp "$SCRIPT_DIR/cbz-open" "$BIN_DIR/cbz-open"
-chmod +x "$BIN_DIR/cbz-open"
-echo "Installed command: $BIN_DIR/cbz-open"
 
-# ── Write host manifest ────────────────────────────────────────────────────────
-mkdir -p "$MANIFEST_DIR"
-MANIFEST_PATH="$MANIFEST_DIR/cbz_viewer_host.json"
+# ── Locate the installed host binary ─────────────────────────────────────────
+# pip --user installs scripts to the user scripts directory; ask Python where
+# that is to handle non-standard setups correctly.
 
-cat > "$MANIFEST_PATH" << JSON
+SCRIPTS_DIR="$(python3 -c \
+  'import sysconfig; print(sysconfig.get_path("scripts", "posix_user"))')"
+HOST_BIN="$SCRIPTS_DIR/cbz_native_host"
+
+if [ ! -f "$HOST_BIN" ]; then
+  # Fallback: common default (also where pipx places its wrappers)
+  HOST_BIN="$HOME/.local/bin/cbz_native_host"
+fi
+echo "Host binary → $HOST_BIN"
+
+# ── Write native messaging manifest ──────────────────────────────────────────
+
+mkdir -p "$NM_HOSTS_DIR"
+cat > "$NM_HOSTS_DIR/cbz_viewer_host.json" <<JSON
 {
   "name": "cbz_viewer_host",
   "description": "Native messaging host for the CBZ Viewer extension",
-  "path": "$INSTALL_DIR/cbz_native_host.py",
+  "path": "$HOST_BIN",
   "type": "stdio",
   "allowed_extensions": ["cbz-viewer@xplat.github.io"]
 }
 JSON
+echo "Installed manifest → $NM_HOSTS_DIR/cbz_viewer_host.json"
 
-echo "Installed manifest: $MANIFEST_PATH"
+# ── Create queue directory ────────────────────────────────────────────────────
 
-# ── Create queue directory ─────────────────────────────────────────────────────
 mkdir -p "$QUEUE_DIR"
-echo "Queue directory: $QUEUE_DIR"
+echo "Queue dir → $QUEUE_DIR"
 
 echo ""
-echo "Installation complete."
-echo ""
-echo "Usage:  cbz-open /path/to/comic.cbz [page]"
-echo ""
-echo "Firefox must be running with the CBZ Viewer extension installed."
+echo "Done.  Load the cbz-extension/ directory as a temporary extension"
+echo "in Firefox (about:debugging → Load Temporary Add-on → manifest.json)."
