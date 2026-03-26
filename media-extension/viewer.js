@@ -93,6 +93,9 @@ var dragState = {};
 // Fullscreen bookkeeping — NOT persisted
 var selectorStateBeforeFS = true;
 
+// In-flight preload image — used to avoid blanking/squishing on image navigation
+var _imgPendingLoad = null;
+
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
 var pickScreenEl    = document.getElementById('pick-screen');
@@ -392,7 +395,7 @@ function selectItem(idx, scroll) {
   var el = fileListEl.children[idx];
   if (!el) return;
   el.classList.add('selected');
-  if (scroll) el.scrollIntoView({ block: 'nearest' });
+  if (scroll) el.scrollIntoView({ block: 'center' });
 }
 
 function openItem(idx) {
@@ -415,21 +418,52 @@ function openItem(idx) {
 }
 
 // ── Image display ──────────────────────────────────────────────────────────
+//
+// We preload the new image in a scratch element before swapping mainImageEl.src
+// so the old image stays visible during loading (no blank flash).  Clearing the
+// old inline width/height/transform on mainImageEl before the swap prevents the
+// new image from briefly inheriting the previous image's dimensions (squishing).
 
 function showImage(filename) {
   if (!filename || !currentDir) return;
   var fileUrl  = currentDir.replace(/\/$/, '') + '/' + filename;
   var proxyUrl = toProxyFile(fileUrl);
 
+  // Cancel any previous in-flight preload.
+  if (_imgPendingLoad) {
+    _imgPendingLoad.onload = _imgPendingLoad.onerror = null;
+    _imgPendingLoad.src    = '';
+    _imgPendingLoad        = null;
+  }
+
   imgSpinnerEl.classList.remove('hidden');
-  imagePaneEl.classList.remove('image-loaded');
-  mainImageEl.src = proxyUrl;
 
   if (!infoOverlayEl.classList.contains('hidden')) {
     updateInfoOverlay(filename);
   }
-
   document.title = filename + ' — Media Viewer';
+
+  // Load new image off-screen; swap only when decoded (no blank during load).
+  var pending = new Image();
+  _imgPendingLoad = pending;
+  pending.onload = function() {
+    if (_imgPendingLoad !== pending) return;  // superseded
+    _imgPendingLoad = null;
+    // Clear old size constraints before swap to prevent squishing.
+    mainImageEl.style.width     = '';
+    mainImageEl.style.height    = '';
+    mainImageEl.style.transform = '';
+    transformHostEl.style.width  = '';
+    transformHostEl.style.height = '';
+    imagePaneEl.classList.remove('image-loaded');
+    mainImageEl.src = proxyUrl;   // fires 'load' from cache immediately
+  };
+  pending.onerror = function() {
+    if (_imgPendingLoad !== pending) return;
+    _imgPendingLoad = null;
+    imgSpinnerEl.classList.add('hidden');
+  };
+  pending.src = proxyUrl;
 }
 
 mainImageEl.addEventListener('load', function() {
@@ -864,8 +898,16 @@ document.addEventListener('keydown', function(e) {
       case ']': e.preventDefault(); adjustSelectorWidth(+16); return;
       case '~': e.preventDefault(); setSelectorWidth(SELECTOR_W_DEFAULT); return;
       // Global media keys (active only when video/audio is loaded)
-      case 'm': if (activeMediaEl) { e.preventDefault(); toggleMute();          return; } break;
-      case 'p': if (activeMediaEl) { e.preventDefault(); togglePlayPause();     return; } break;
+      case 'm': if (activeMediaEl) { e.preventDefault(); toggleMute();      return; } break;
+      case 'p':
+        e.preventDefault();
+        if (activeMediaEl) {
+          togglePlayPause();
+        } else {
+          // No local media — ask whichever other tab is playing audio to toggle.
+          _mediaChannel.postMessage({ cmd: 'pause-toggle' });
+        }
+        return;
       case '9': if (activeMediaEl) { e.preventDefault(); adjustVolume(-0.1);    return; } break;
       case '0': if (activeMediaEl) { e.preventDefault(); adjustVolume(+0.1);    return; } break;
       case '(': if (activeMediaEl) { e.preventDefault(); adjustBalance(-0.1);   return; } break;
@@ -918,8 +960,7 @@ function handleSelectorKey(e, key, ctrl, plain) {
     case 'u':
       e.preventDefault(); goToParent(); break;
     case 'n': nextImage(); break;
-    case 'b':
-    case 'p': prevImage(); break;
+    case 'b': prevImage(); break;
     case 's': cycleSortBy(); break;
     case 'z': toggleZoom(); break;
   }
@@ -969,6 +1010,23 @@ function handleViewerKey(e, key, ctrl, plain) {
       case '_': e.preventDefault(); cycleVideoTrack(); return;
       // OSD / info
       case 'o': e.preventDefault(); toggleInfoOverlay(); return;
+      // Color/quality (video only; overrides image quick-zoom keys 1-4)
+      // mplayer layout: 1/2 contrast, 3/4 brightness, 5/6 hue, 7/8 saturation
+      case '1': case '2': case '3': case '4':
+      case '5': case '6': case '7': case '8':
+        if (imagePaneEl.classList.contains('media-video')) {
+          e.preventDefault();
+          if      (key === '1') adjustVideoFilter('contrast',   -0.1);
+          else if (key === '2') adjustVideoFilter('contrast',   +0.1);
+          else if (key === '3') adjustVideoFilter('brightness', -0.1);
+          else if (key === '4') adjustVideoFilter('brightness', +0.1);
+          else if (key === '5') adjustVideoFilter('hue',        -10);
+          else if (key === '6') adjustVideoFilter('hue',        +10);
+          else if (key === '7') adjustVideoFilter('saturation', -0.1);
+          else if (key === '8') adjustVideoFilter('saturation', +0.1);
+          return;
+        }
+        break;
     }
   }
 
@@ -1010,8 +1068,7 @@ function handleViewerKey(e, key, ctrl, plain) {
       // Image navigation
       case 'Enter':
       case ' ':  e.preventDefault(); nextImage(); break;
-      case 'b':
-      case 'p':  prevImage(); break;
+      case 'b':  prevImage(); break;
       // Rotation (xzgv r/R/N)
       case 'r': rotateBy(90);        break;
       case 'R': rotateBy(-90);       break;
@@ -1205,6 +1262,12 @@ var _posCheckpointTimer = null;  // setTimeout handle for position-save throttle
 var _autoplay           = true;  // if false, media loads but does not start playing
 var _shouldAnnounce     = false; // true when audio-bearing media loaded; cleared after first 'playing' event
 
+// Video color/quality filter state (reset on each new file; applied via CSS filter on videoEl)
+var _vContrast   = 1.0;  // CSS contrast()   — mplayer keys 1/2
+var _vBrightness = 1.0;  // CSS brightness() — mplayer keys 3/4
+var _vHue        = 0;    // CSS hue-rotate() degrees — mplayer keys 5/6
+var _vSaturation = 1.0;  // CSS saturate()   — mplayer keys 7/8
+
 // Stereo balance (Web Audio API); created lazily on first adjustBalance() call
 var _panValue      = 0;      // -1 (full left) … 0 (centre) … +1 (full right)
 var _audioCtx      = null;
@@ -1216,8 +1279,26 @@ var _audioGraphed  = false;  // whether audioEl has been wired into _audioCtx
 
 var _mediaChannel = new BroadcastChannel('media-viewer');
 _mediaChannel.onmessage = function(e) {
-  if (e.data && e.data.cmd === 'pause' && activeMediaEl) {
+  if (!e.data) return;
+  if (e.data.cmd === 'pause' && activeMediaEl) {
     activeMediaEl.pause();
+  } else if (e.data.cmd === 'pause-toggle' && activeMediaEl) {
+    togglePlayPause();
+  } else if (e.data.cmd === 'av-settings') {
+    // Persist and immediately apply volume/mute/balance from another tab.
+    var d = e.data;
+    if (d.volume  !== undefined) localStorage.setItem('media-volume',  String(d.volume));
+    if (d.muted   !== undefined) localStorage.setItem('media-muted',   String(d.muted));
+    if (d.balance !== undefined) localStorage.setItem('media-balance', String(d.balance));
+    if (activeMediaEl) {
+      if (d.volume  !== undefined) activeMediaEl.volume = d.volume;
+      if (d.muted   !== undefined) activeMediaEl.muted  = d.muted;
+      if (d.balance !== undefined) {
+        _panValue = d.balance;
+        if (_panNode) _panNode.pan.value = _panValue;
+      }
+      _updateVideoControls();
+    }
   }
 };
 
@@ -1425,6 +1506,8 @@ function togglePlayPause() {
 function toggleMute() {
   if (!activeMediaEl) return;
   activeMediaEl.muted = !activeMediaEl.muted;
+  localStorage.setItem('media-muted', String(activeMediaEl.muted));
+  _mediaChannel.postMessage({ cmd: 'av-settings', muted: activeMediaEl.muted });
   _updateVideoControls();
 }
 
@@ -1437,6 +1520,9 @@ function adjustVolume(delta) {
   if (!activeMediaEl) return;
   activeMediaEl.volume = Math.max(0, Math.min(1, activeMediaEl.volume + delta));
   activeMediaEl.muted  = false;
+  localStorage.setItem('media-volume', String(activeMediaEl.volume));
+  localStorage.setItem('media-muted',  'false');
+  _mediaChannel.postMessage({ cmd: 'av-settings', volume: activeMediaEl.volume, muted: false });
   _updateVideoControls();
 }
 
@@ -1480,11 +1566,42 @@ function _ensureAudioGraph(mediaEl) {
 
 function adjustBalance(delta) {
   _panValue = +Math.max(-1, Math.min(1, _panValue + delta)).toFixed(1);
+  localStorage.setItem('media-balance', String(_panValue));
+  _mediaChannel.postMessage({ cmd: 'av-settings', balance: _panValue });
   if (activeMediaEl) {
     _ensureAudioGraph(activeMediaEl);
     _panNode.pan.value = _panValue;
   }
   _updateVideoControls();
+}
+
+// ── Video color/quality filter ───────────────────────────────────────────────
+//
+// Applies CSS filter to the video element.  mplayer key layout:
+//   1/2 contrast, 3/4 brightness, 5/6 hue-rotate, 7/8 saturate
+// Filter is reset to defaults when a new file is opened (showMedia).
+
+function _applyVideoFilter() {
+  var parts = [];
+  if (_vContrast   !== 1.0) parts.push('contrast('   + _vContrast.toFixed(2)   + ')');
+  if (_vBrightness !== 1.0) parts.push('brightness(' + _vBrightness.toFixed(2) + ')');
+  if (_vHue        !== 0)   parts.push('hue-rotate(' + _vHue                   + 'deg)');
+  if (_vSaturation !== 1.0) parts.push('saturate('   + _vSaturation.toFixed(2) + ')');
+  videoEl.style.filter = parts.join(' ');
+}
+
+function adjustVideoFilter(prop, delta) {
+  if (prop === 'contrast') {
+    _vContrast   = +Math.max(0, Math.min(3, _vContrast   + delta)).toFixed(2);
+  } else if (prop === 'brightness') {
+    _vBrightness = +Math.max(0, Math.min(3, _vBrightness + delta)).toFixed(2);
+  } else if (prop === 'hue') {
+    _vHue = ((_vHue + delta) % 360 + 360) % 360;
+    if (_vHue > 180) _vHue -= 360;
+  } else if (prop === 'saturation') {
+    _vSaturation = +Math.max(0, Math.min(3, _vSaturation + delta)).toFixed(2);
+  }
+  _applyVideoFilter();
 }
 
 // ── Track switching ──────────────────────────────────────────────────────────
@@ -1524,6 +1641,11 @@ if (videoProgressEl) {
 function showMediaFile(filename) {
   if (!filename || !currentDir) return;
   var type = mediaType(filename);
+  if (_imgPendingLoad) {
+    _imgPendingLoad.onload = _imgPendingLoad.onerror = null;
+    _imgPendingLoad.src    = '';
+    _imgPendingLoad        = null;
+  }
   _stopActiveMedia();
   mainImageEl.src = '';
   imagePaneEl.classList.remove('image-loaded');
@@ -1540,8 +1662,20 @@ function showMedia(filename, type) {
   var proxyUrl = toProxyFile(fileUrl);
 
   activeMediaEl      = (type === 'video') ? videoEl : audioEl;
-  activeMediaEl.loop  = false;
-  activeMediaEl.muted = false;
+  activeMediaEl.loop   = false;
+  activeMediaEl.volume = parseFloat(localStorage.getItem('media-volume') || '1');
+  activeMediaEl.muted  = localStorage.getItem('media-muted') === 'true';
+  var _savedBal = parseFloat(localStorage.getItem('media-balance') || '0');
+  if (_savedBal !== _panValue) {
+    _panValue = _savedBal;
+    if (_panNode) _panNode.pan.value = _panValue;
+  }
+
+  // Reset per-file video filter to defaults.
+  _vContrast = _vBrightness = 1.0;
+  _vHue = 0;
+  _vSaturation = 1.0;
+  videoEl.style.filter = '';
 
   imgSpinnerEl.classList.remove('hidden');
   imagePaneEl.classList.add(type === 'video' ? 'media-video' : 'media-audio');

@@ -628,6 +628,8 @@ html, body {
 #image-pane.media-audio #transform-host    { display: none; }
 #image-pane.media-audio #video-controls    { display: flex; }
 #image-pane.media-audio #no-image-hint     { display: none; }
+/* Progress bar always visible for audio (no hover required) */
+#image-pane.media-audio #video-controls    { opacity: 1; pointer-events: auto; }
 
 /* — media error overlay — */
 #media-error {
