@@ -15,23 +15,12 @@ host picks it up promptly and opens the viewer.
   Windows: %LOCALAPPDATA%\media-viewer\queue\
 """
 
-import sys, os, json, time, pathlib
+import sys, os, time
 
 from thumbnailers import MIME_TYPES
+from viewer_host_utils import cache_dir, enqueue_request
 
-
-def _platform_cache_dir(app_name):
-    """Return the platform-appropriate user cache directory for app_name."""
-    if sys.platform == 'darwin':
-        return pathlib.Path.home() / 'Library' / 'Caches' / app_name
-    if sys.platform == 'win32':
-        base = os.environ.get('LOCALAPPDATA') or os.environ.get('APPDATA', '')
-        return (pathlib.Path(base) if base else pathlib.Path.home()) / app_name
-    xdg = os.environ.get('XDG_CACHE_HOME', '').strip()
-    return (pathlib.Path(xdg) if xdg else pathlib.Path.home() / '.cache') / app_name
-
-
-QUEUE_DIR = _platform_cache_dir('media-viewer') / 'queue'
+QUEUE_DIR = cache_dir('media-viewer') / 'queue'
 
 _SUPPORTED_EXTS = frozenset(MIME_TYPES)  # derived — MIME_TYPES is the single source of truth
 
@@ -58,14 +47,7 @@ def main():
         print(f'error: {target}: no such file or directory', file=sys.stderr)
         sys.exit(1)
 
-    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
-    stem     = f'open_{int(time.time() * 1000)}_{os.getpid()}'
-    # Write to a .tmp file first, then rename atomically so the host never
-    # reads a partially-written request.
-    tmp_file = QUEUE_DIR / f'{stem}.json.tmp'
-    req_file = QUEUE_DIR / f'{stem}.json'
-    tmp_file.write_text(json.dumps(req))
-    tmp_file.replace(req_file)
+    enqueue_request(QUEUE_DIR, req)
 
 if __name__ == '__main__':
     main()

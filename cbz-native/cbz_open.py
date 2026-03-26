@@ -16,25 +16,12 @@ tells the extension to open the file.
 Firefox must be running with the CBZ Viewer extension installed and active.
 """
 
-import sys
-import os
-import json
-import time
-import pathlib
+import sys, os, time
 
+from viewer_host_utils import cache_dir, enqueue_request
 
-def _platform_cache_dir(app_name):
-    """Return the platform-appropriate user cache directory for app_name."""
-    if sys.platform == 'darwin':
-        return pathlib.Path.home() / 'Library' / 'Caches' / app_name
-    if sys.platform == 'win32':
-        base = os.environ.get('LOCALAPPDATA') or os.environ.get('APPDATA', '')
-        return (pathlib.Path(base) if base else pathlib.Path.home()) / app_name
-    xdg = os.environ.get('XDG_CACHE_HOME', '').strip()
-    return (pathlib.Path(xdg) if xdg else pathlib.Path.home() / '.cache') / app_name
+QUEUE_DIR = cache_dir('cbz-viewer') / 'queue'
 
-
-QUEUE_DIR = _platform_cache_dir('cbz-viewer') / 'queue'
 
 def main():
     args = sys.argv[1:]
@@ -58,15 +45,7 @@ def main():
         print(f'cbz-open: file not found: {path}', file=sys.stderr)
         sys.exit(1)
 
-    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
-    req = {'path': path, 'page': page, 'ts': time.time()}
-    stem = f'open_{int(time.time() * 1000)}_{os.getpid()}'
-    # Write to a .tmp file first, then rename atomically so the host never
-    # reads a partially-written request.
-    tmp_file  = QUEUE_DIR / f'{stem}.json.tmp'
-    req_file  = QUEUE_DIR / f'{stem}.json'
-    tmp_file.write_text(json.dumps(req))
-    tmp_file.replace(req_file)
+    enqueue_request(QUEUE_DIR, {'path': path, 'page': page, 'ts': time.time()})
     print(f'Opening {os.path.basename(path)} (page {page})…')
 
 if __name__ == '__main__':
