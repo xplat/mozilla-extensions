@@ -297,7 +297,7 @@ A `#video-controls` div sits over the image pane (visible only in `media-video` 
 * **Progress bar** (`#video-progress` / `#video-seek-fill`) — 18 px transparent hit
   target with a 3 px visual track via `::before`; click to seek.
 * **HUD** (`#video-time`, `#video-vol`) — current/total time on the left; volume,
-  stereo balance, and autoplay state on the right (e.g. `VOL 80  R0.3  AUTO`).
+  stereo balance, and manual-mode indicator on the right (e.g. `VOL 80  R0.3  MANUAL`).
 
 ### Stereo balance
 
@@ -490,6 +490,11 @@ in gif-loop mode.  They shadow the image-mode bindings for the same keys.
   selector pane width globally here.  Rate keys are remapped to `<` / `>`.
 * **Gif-loop videos**: treated as static images — keyboard behaves as image mode,
   no HUD overlay, no position saving.
+* **Keys available for future video-mode overrides**: rotation (`r`/`R`/`N`/`M`/`F`)
+  and quick-zoom (`1`–`4`) do not apply to video, so those keys are free for
+  subtitle position (`r`/`t`), subtitle track cycling (`j`/`J`), and colour
+  adjustments (`1`–`4` for contrast/brightness) in later implementations without
+  conflicting with image-mode bindings.
 * **Removed from xzgv**: copy, move, rename, delete, tagging, thumbnail
   management, dithering / interpolation controls.
 * **Removed**: `q` to quit — the browser provides adequate tab-close controls.
