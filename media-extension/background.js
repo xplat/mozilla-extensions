@@ -75,7 +75,7 @@ chrome.webRequest.onBeforeRequest.addListener(
   {
     urls: [FILE_PROXY_PREFIX + '*', DIR_PROXY_PREFIX + '*',
            THUMB_PROXY_PREFIX + '*', QUEUE_DIR_PROXY_PREFIX + '*'],
-    types: ['xmlhttprequest', 'image', 'other']
+    types: ['xmlhttprequest', 'image', 'media', 'other']
   },
   ['blocking']
 );

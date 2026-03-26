@@ -2,9 +2,9 @@
 
 ## Overview
 
-A Firefox WebExtension (MV3) for viewing local image files, with a UI modelled on
-[xzgv](https://sourceforge.net/projects/xzgv/).  A companion Python native messaging
-host serves files and directory listings over a local HTTP socket.
+A Firefox WebExtension (MV3) for viewing local image, video, and audio files, with a
+UI modelled on [xzgv](https://sourceforge.net/projects/xzgv/).  A companion Python
+native messaging host serves files and directory listings over a local HTTP socket.
 
 ---
 
@@ -24,13 +24,15 @@ port or secret token:
 
 | Prefix | Purpose |
 |--------|---------|
-| `http://127.7.203.98/media-file/`      | Fetch an image file |
+| `http://127.7.203.98/media-file/`      | Fetch a media file (image, video, or audio) |
 | `http://127.7.203.98/media-dir/`       | Fetch a directory listing (JSON) |
 | `http://127.7.203.98/media-thumb/`     | Fetch a 128px thumbnail PNG |
 | `http://127.7.203.98/media-queue-dir/` | Trigger background thumbnail pre-generation for a directory |
 
-The background script intercepts `webRequest.onBeforeRequest` for both prefixes and
-rewrites them to the real native-host HTTP server URL:
+The background script intercepts `webRequest.onBeforeRequest` (types:
+`xmlhttprequest`, `image`, `media`, `other`) for both prefixes and rewrites them to
+the real native-host HTTP server URL.  The `media` type is required for `<video>` and
+`<audio>` src requests, which the browser classifies separately from `image`.
 
 ```
 http://127.7.203.98:<random-port>/<512-bit-token>/<type>/<encoded-path>
@@ -217,15 +219,102 @@ are omitted and file `"u"` values are relative paths, e.g. `"vacation/beach.jpg"
 
 ---
 
-## Displayed File Types
+## Supported Media Types
 
-The viewer treats the following extensions as displayable (by the browser's native
-image rendering):
+A single `MEDIA_TYPES` map in `viewer.js` (and a matching `MIME_TYPES` dict in
+`thumbnailers/_base.py`) is the sole source of truth for supported extensions.  The
+`mediaType(filename)` function returns `'image'`, `'video'`, `'audio'`, or `'unknown'`.
+Files whose `mediaType` is `'unknown'` are shown in the selector but greyed out and
+non-selectable.
 
-`jpg`, `jpeg`, `png`, `gif`, `webp`, `avif`, `bmp`, `tiff`, `tif`, `svg`, `ico`
+| Category | Extensions |
+|----------|-----------|
+| **image** | `jpg` `jpeg` `png` `gif` `webp` `avif` `bmp` `tiff` `tif` `svg` `ico` |
+| **video** | `mp4` `m4v` `webm` `ogv` `mov` `avi` `mkv` `flv` `wmv` `3gp` |
+| **audio** | `mp3` `flac` `ogg` `oga` `m4a` `aac` `opus` `wav` |
 
-Files with other extensions are shown in the selector but **greyed out and
-non-selectable** (same treatment as unreadable files).
+### CORS requirement
+
+The `<video>` and `<audio>` elements carry `crossorigin="anonymous"`.  This is
+required so that `AudioContext.createMediaElementSource()` (used for stereo balance)
+can access the decoded audio without a CORS taint error.  The native host already
+sends `Access-Control-Allow-Origin: <moz-extension://…>` on all responses.
+
+---
+
+## Media Playback
+
+### Gif-loop detection
+
+Short videos (duration < 60 s) with no audio track (`mozHasAudio === false`) are
+treated as looping animations rather than playable videos.  On `loadedmetadata` the
+element is set to `loop = true`, `muted = true`, and the image pane gains class
+`media-gif` instead of `media-video`.  `activeMediaEl` remains set (for cleanup on
+navigation) but the media keyboard override block is skipped for gif-loop files, so
+keys behave as in image mode.
+
+### Position persistence
+
+The current playback position is saved to `localStorage` under the key
+`media-pos:<absolute-path>` whenever it changes, with a 5-second throttle.  On
+`loadedmetadata` the saved position is restored before `play()` is called.  When
+a file ends normally (`ended` event) its saved position is cleared.
+
+### Cross-tab pause
+
+A `BroadcastChannel('media-viewer')` is used to pause other viewer tabs when a new
+audio-bearing file starts playing in the current tab.  On `loadedmetadata`, if the
+file has audio, the channel broadcasts `{ cmd: 'pause' }` before calling `play()`.
+Each tab listens on the same channel and pauses its active media element when it
+receives the message.  (This uses a pure Web API — no `chrome.*` calls — so it is
+safe in viewer pages.)
+
+### Auto-fullscreen
+
+On `loadedmetadata`, if the video dimensions exactly match a known standard format
+(the `FULLSCREEN_DIMS` set) and no saved position is being restored and the browser
+is not already fullscreen, `requestFullscreen()` is called automatically.  If the
+browser denies the request (e.g. because the user-gesture window has expired), the
+selector state is restored silently.
+
+`FULLSCREEN_DIMS` covers:
+
+| Category | Dimensions |
+|----------|-----------|
+| HD / broadcast | 1920×1080, 1280×720 |
+| 480p (widescreen + 4:3) | 854×480, 852×480, 640×480 |
+| 4K UHD / DCI 4K / 8K | 3840×2160, 4096×2160, 7680×4320 |
+| 1440p / 2K DCI | 2560×1440, 2048×1080 |
+| DVD NTSC / PAL fullscreen | 720×480, 720×576 |
+| DVD widescreen PAL output | 1024×576 |
+| Old computer (VGA / SVGA / XGA) | 800×600, 1024×768 |
+
+### Video controls overlay
+
+A `#video-controls` div sits over the image pane (visible only in `media-video` and
+`media-audio` classes).  It contains:
+
+* **Progress bar** (`#video-progress` / `#video-seek-fill`) — 18 px transparent hit
+  target with a 3 px visual track via `::before`; click to seek.
+* **HUD** (`#video-time`, `#video-vol`) — current/total time on the left; volume,
+  stereo balance, and manual-mode indicator on the right (e.g. `VOL 80  R0.3  MANUAL`).
+
+### Stereo balance
+
+`(` / `)` adjust stereo balance in 0.1 steps via the Web Audio API:
+`AudioContext` + `StereoPannerNode`.  `createMediaElementSource()` permanently
+reroutes a media element's audio through the AudioContext, so each element is
+connected at most once (tracked by `_videoGraphed` / `_audioGraphed` flags).  The
+AudioContext is created lazily on the first balance adjustment.
+
+### Autoplay
+
+`A` (global) toggles whether media starts playing automatically when loaded.
+Default is **on** (matching the current browser behaviour).  When turned off,
+loading a video or audio file shows the first frame / audio-placeholder without
+starting playback — useful for browsing a mixed image/video directory.  The HUD
+shows `MANUAL` when autoplay is off.  Gif-loop videos are unaffected and always
+play.
 
 ---
 
@@ -288,10 +377,20 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
 | `Z` | Toggle selector panel visibility |
 | `f` | Toggle browser-level fullscreen (also hides selector; restores on exit) |
 | `i` | Toggle file-info overlay (filename, size, mtime, dimensions) |
-| `.` | Toggle visibility of hidden (dot) files |
+| `.` | Toggle visibility of hidden (dot) files; or frame-step (+1/30 s) when a video is active in viewer focus |
 | `v` | Toggle thumbnail grid / filename-list mode in selector (xzgv `v`) |
 | `[` / `]` | Narrow / widen selector pane by 16 px (xzgv `[` / `]`) |
 | `~` | Reset selector pane to default width (xzgv `~`) |
+| `A` | Toggle autoplay (advance to next file when media ends; HUD shows `AUTO`) |
+
+**Global media keys** (only when a video or audio file is active):
+
+| Key | Action |
+|-----|--------|
+| `m` | Toggle mute |
+| `p` | Toggle play / pause |
+| `9` / `0` | Volume −10 % / +10 % |
+| `(` / `)` | Stereo balance left / right (0.1 step; HUD shows `L`/`R` value) |
 
 ### Selector focus
 
@@ -309,6 +408,27 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
 | `z` | Toggle zoom fit-to-window |
 | `R` | Rescan current directory (xzgv `Ctrl-r`; `Ctrl-r` unavailable in browser) |
 
+### Viewer focus — video / audio playback
+
+These keys are active when a video or audio file is displayed and the browser is **not**
+in gif-loop mode.  They shadow the image-mode bindings for the same keys.
+
+| Key | Action |
+|-----|--------|
+| `←` / `→` | Seek −10 s / +10 s |
+| `↑` / `↓` | Seek +1 min / −1 min |
+| `PgUp` / `PgDn` | Seek +10 min / −10 min |
+| `Home` | Seek to start |
+| `Backspace` | Reset playback rate to 1× |
+| `Space` | Play / pause; if ended, advance to next file |
+| `Enter` | Advance to next file immediately |
+| `b` | Go to previous file |
+| `<` / `>` | Playback rate −0.1 / +0.1 (min 0.25×, max 4×) |
+| `{` / `}` | Halve / double playback rate |
+| `a` / `#` | Cycle audio track |
+| `_` | Cycle video track |
+| `o` | Toggle info overlay |
+
 ### Viewer focus — scrolling / panning
 
 | Key | Action |
@@ -324,8 +444,8 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
 
 | Key | Action |
 |-----|--------|
-| `Space` | Next image |
-| `b` / `p` | Previous image |
+| `Enter` / `Space` | Next file |
+| `b` / `p` | Previous file |
 
 ### Viewer focus — orientation
 
@@ -364,12 +484,24 @@ file from the selector (Enter / Space) switches focus to viewer automatically.
   sizes.  Here it toggles between a thumbnail list view (48px thumbnails with
   filename alongside, lazy-loaded via `media-thumb`) and the plain filename list.
   State is persisted in history.
+* **`p` in image mode**: acts as previous file (xzgv `p`).  When a video/audio is
+  active, `p` is claimed globally for play/pause; use `b` for previous file instead.
+* **`<` / `>` rate keys**: mplayer uses `[` / `]` for rate, but those adjust the
+  selector pane width globally here.  Rate keys are remapped to `<` / `>`.
+* **Gif-loop videos**: treated as static images — keyboard behaves as image mode,
+  no HUD overlay, no position saving.
+* **Keys available for future video-mode overrides**: rotation (`r`/`R`/`N`/`M`/`F`)
+  and quick-zoom (`1`–`4`) do not apply to video, so those keys are free for
+  subtitle position (`r`/`t`), subtitle track cycling (`j`/`J`), and colour
+  adjustments (`1`–`4` for contrast/brightness) in later implementations without
+  conflicting with image-mode bindings.
 * **Removed from xzgv**: copy, move, rename, delete, tagging, thumbnail
   management, dithering / interpolation controls.
 * **Removed**: `q` to quit — the browser provides adequate tab-close controls.
-* **Mouse**: Left-click on the image pane switches to viewer focus.  Drag to
-  pan (scroll) the image when not in fit-to-window mode.  Drag the pane divider
-  to resize the selector/image split.
+* **Mouse**: Left-click on the image pane switches to viewer focus.  In video/audio
+  mode a clean click (no drag) toggles play/pause; if ended, restarts from the
+  beginning.  Drag to pan (scroll) when not in fit-to-window mode.  Drag the pane
+  divider to resize the selector/image split.
 
 ---
 

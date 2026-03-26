@@ -78,7 +78,7 @@ POLL_INTERVAL = 0.5
 BIND_HOST     = '127.7.203.98'
 TOKEN         = secrets.token_hex(64)   # 512 bits of entropy
 
-IMAGE_EXTS = frozenset(MIME_TYPES)   # derived — MIME_TYPES is the single source of truth
+_SERVABLE_EXTS = frozenset(MIME_TYPES)   # derived — MIME_TYPES is the single source of truth
 
 # ── Queue watcher (inotify / kqueue / ReadDirectoryChangesW / polling) ─────────
 
@@ -383,7 +383,7 @@ class MediaHandler(BaseHTTPRequestHandler):
 
     def _serve_file(self, file_path, head_only):
         ext = os.path.splitext(file_path)[1].lower()
-        if ext not in IMAGE_EXTS:
+        if ext not in _SERVABLE_EXTS:
             self._error(400, 'Not a supported image type')
             return
         if not os.path.isfile(file_path):
@@ -451,7 +451,7 @@ class MediaHandler(BaseHTTPRequestHandler):
 
     def _serve_thumb(self, file_path, head_only):
         ext = os.path.splitext(file_path)[1].lower()
-        if ext not in IMAGE_EXTS:
+        if ext not in _SERVABLE_EXTS:
             self._error(400, 'Not a supported image type')
             return
         if not os.path.isfile(file_path):

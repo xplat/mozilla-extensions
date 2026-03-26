@@ -9,8 +9,46 @@ const DIR_PROXY_PREFIX       = 'http://' + LOOPBACK + '/media-dir/';
 const THUMB_PROXY_PREFIX     = 'http://' + LOOPBACK + '/media-thumb/';
 const QUEUE_DIR_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-queue-dir/';
 
-const IMAGE_EXTS = new Set([
-  'jpg','jpeg','png','gif','webp','avif','bmp','tiff','tif','svg','ico'
+// Maps file extension (lowercase, no dot) → media category.
+// Only extensions that should be selectable/viewable belong here;
+// anything absent returns 'unknown'.
+const MEDIA_TYPES = {
+  // images (rendered natively by the browser)
+  jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image',
+  avif: 'image', bmp: 'image', tiff: 'image', tif: 'image', svg: 'image', ico: 'image',
+  // video
+  mp4: 'video', m4v: 'video', webm: 'video', ogv: 'video',
+  mov: 'video', avi: 'video', mkv: 'video', flv: 'video', wmv: 'video', '3gp': 'video',
+  // audio
+  mp3: 'audio', flac: 'audio', ogg: 'audio', oga: 'audio',
+  m4a: 'audio', aac: 'audio', opus: 'audio', wav: 'audio',
+};
+
+function mediaType(filename) {
+  var dot = filename.lastIndexOf('.');
+  if (dot < 0) return 'unknown';
+  return MEDIA_TYPES[filename.slice(dot + 1).toLowerCase()] || 'unknown';
+}
+
+// Known standard video dimensions (width × height as "WxH" strings) that
+// should trigger auto-fullscreen when played from the beginning.
+// Covers HD/4K/8K broadcast, DVD (NTSC + PAL, fullscreen + widescreen output),
+// and the VGA/SVGA/XGA fullscreen formats common on old computers.
+const FULLSCREEN_DIMS = new Set([
+  // HD / broadcast
+  '1920x1080', '1280x720',
+  // 480p — widescreen (anamorphic output) and 4:3
+  '854x480', '852x480', '640x480',
+  // 4K UHD / DCI 4K / 8K
+  '3840x2160', '4096x2160', '7680x4320',
+  // 1440p (QHD) and 2K DCI
+  '2560x1440', '2048x1080',
+  // DVD fullscreen: NTSC 720×480, PAL 720×576
+  '720x480', '720x576',
+  // DVD widescreen PAL output
+  '1024x576',
+  // Old computer fullscreen: VGA, SVGA, XGA
+  '800x600', '1024x768',
 ]);
 
 // Scale steps for s/S keys (xzgv-style integer-ratio stepping)
@@ -172,16 +210,10 @@ function toProxyQueueDir(dirUrl) {
 
 // ── Directory loading ──────────────────────────────────────────────────────
 
-function isDisplayable(filename) {
-  var dot = filename.lastIndexOf('.');
-  if (dot < 0) return false;
-  return IMAGE_EXTS.has(filename.slice(dot + 1).toLowerCase());
-}
-
 function isSelectable(item) {
   if (item.t === 'd') return true;
   if (item.r === 0)   return false;
-  return isDisplayable(item.u);
+  return mediaType(item.u) !== 'unknown';
 }
 
 function sortItems(items) {
@@ -239,7 +271,7 @@ async function loadDir(dirUrl, push) {
   if (currentFile) {
     var selIdx = listing.findIndex(function(i) { return i.u === currentFile; });
     if (selIdx >= 0) selectItem(selIdx, false);
-    showImage(currentFile);
+    showMediaFile(currentFile);
   } else {
     var firstFile = listing.findIndex(function(i) { return isSelectable(i) && i.t !== 'd'; });
     if (firstFile >= 0) selectItem(firstFile, false);
@@ -261,9 +293,12 @@ function renderSelector() {
     el.className = 'file-item';
     el.dataset.idx = String(idx);
 
-    var sel = isSelectable(item);
-    if (!sel)         el.classList.add('dimmed');
-    if (item.t==='d') el.classList.add('is-dir');
+    var sel  = isSelectable(item);
+    var mtype = mediaType(item.u);
+    if (!sel)              el.classList.add('dimmed');
+    if (item.t === 'd')    el.classList.add('is-dir');
+    if (mtype === 'video') el.classList.add('is-video');
+    if (mtype === 'audio') el.classList.add('is-audio');
 
     if (ui.thumbnails) {
       _renderThumbItem(el, item);
@@ -286,9 +321,10 @@ function renderSelector() {
 }
 
 function _renderListItem(el, item) {
+  var type   = mediaType(item.u);
   var iconEl = document.createElement('span');
   iconEl.className = 'file-icon';
-  iconEl.textContent = (item.t === 'd') ? '>' : ' ';
+  iconEl.textContent = item.t === 'd' ? '>' : type === 'video' ? '▶' : type === 'audio' ? '♪' : ' ';
 
   var nameEl = document.createElement('span');
   nameEl.className = 'file-name';
@@ -304,8 +340,9 @@ function _renderListItem(el, item) {
 }
 
 function _renderThumbItem(el, item) {
-  if (item.t === 'd' || !isDisplayable(item.u)) {
-    // Non-image: show icon + name as a compact tile
+  var type = mediaType(item.u);
+  if (item.t === 'd' || type === 'unknown') {
+    // Directory or unrecognised type: icon + name as a compact tile
     var iconEl = document.createElement('span');
     iconEl.className = 'file-icon';
     iconEl.textContent = (item.t === 'd') ? '>' : ' ';
@@ -315,6 +352,8 @@ function _renderThumbItem(el, item) {
     el.appendChild(iconEl);
     el.appendChild(labelEl);
   } else {
+    // Any known media type: attempt thumbnail; fall back to a text icon on error
+    var fallback = type === 'video' ? '▶' : type === 'audio' ? '♪' : null;
     var fileUrl  = currentDir.replace(/\/$/, '') + '/' + item.u;
     var imgEl = document.createElement('img');
     imgEl.className = 'thumb-img thumb-loading';
@@ -322,10 +361,18 @@ function _renderThumbItem(el, item) {
     imgEl.alt = '';
     imgEl.draggable = false;
     imgEl.loading = 'lazy';
-    imgEl.addEventListener('load',  function() { imgEl.classList.remove('thumb-loading'); });
+    imgEl.addEventListener('load', function() { imgEl.classList.remove('thumb-loading'); });
     imgEl.addEventListener('error', function() {
       imgEl.classList.remove('thumb-loading');
-      imgEl.classList.add('thumb-missing');
+      if (fallback) {
+        // Replace broken img with a text icon for video/audio
+        var fbEl = document.createElement('span');
+        fbEl.className = 'thumb-img-fallback';
+        fbEl.textContent = fallback;
+        el.replaceChild(fbEl, imgEl);
+      } else {
+        imgEl.classList.add('thumb-missing');
+      }
     });
     var labelEl = document.createElement('span');
     labelEl.className = 'thumb-label';
@@ -362,7 +409,7 @@ function openItem(idx) {
   } else {
     currentFile = item.u;
     persistState(false);
-    showImage(item.u);
+    showMediaFile(item.u);
     setFocusMode('viewer');
   }
 }
@@ -651,7 +698,7 @@ function nextImage() {
   selectItem(li, true);
   currentFile = next.u;
   persistState(false);
-  showImage(next.u);
+  showMediaFile(next.u);
 }
 
 function prevImage() {
@@ -663,7 +710,7 @@ function prevImage() {
   selectItem(li, true);
   currentFile = prev.u;
   persistState(false);
-  showImage(prev.u);
+  showMediaFile(prev.u);
 }
 
 function goToParent() {
@@ -736,7 +783,12 @@ function updateInfoOverlay(filename) {
     if (item.s !== undefined) lines.push(fmtSize(item.s));
     if (item.m)               lines.push(fmtDate(item.m, true));
   }
-  if (mainImageEl.naturalWidth) {
+  if (activeMediaEl && isFinite(activeMediaEl.duration)) {
+    lines.push(fmtTime(activeMediaEl.duration));
+    if (activeMediaEl === videoEl && videoEl.videoWidth) {
+      lines.push(videoEl.videoWidth + '\u00d7' + videoEl.videoHeight + ' px');
+    }
+  } else if (mainImageEl.naturalWidth) {
     lines.push(mainImageEl.naturalWidth + '\u00d7' + mainImageEl.naturalHeight + ' px');
   }
   infoContentEl.textContent = lines.join('\n');
@@ -788,7 +840,16 @@ document.addEventListener('keydown', function(e) {
       case 'i':
         e.preventDefault(); toggleInfoOverlay(); return;
       case '.':
-        e.preventDefault(); toggleHidden(); return;
+        e.preventDefault();
+        // In video/audio viewer focus: step forward one frame; elsewhere: toggle hidden files
+        if (focusMode === 'viewer' && activeMediaEl) {
+          activeMediaEl.currentTime =
+            Math.min(activeMediaEl.duration, activeMediaEl.currentTime + 1 / 30);
+          _updateVideoControls();
+        } else {
+          toggleHidden();
+        }
+        return;
       case 'v':
         e.preventDefault(); toggleThumbnails(); return;
       case 'Tab':
@@ -802,6 +863,14 @@ document.addEventListener('keydown', function(e) {
       case '[': e.preventDefault(); adjustSelectorWidth(-16); return;
       case ']': e.preventDefault(); adjustSelectorWidth(+16); return;
       case '~': e.preventDefault(); setSelectorWidth(SELECTOR_W_DEFAULT); return;
+      // Global media keys (active only when video/audio is loaded)
+      case 'm': if (activeMediaEl) { e.preventDefault(); toggleMute();          return; } break;
+      case 'p': if (activeMediaEl) { e.preventDefault(); togglePlayPause();     return; } break;
+      case '9': if (activeMediaEl) { e.preventDefault(); adjustVolume(-0.1);    return; } break;
+      case '0': if (activeMediaEl) { e.preventDefault(); adjustVolume(+0.1);    return; } break;
+      case '(': if (activeMediaEl) { e.preventDefault(); adjustBalance(-0.1);   return; } break;
+      case ')': if (activeMediaEl) { e.preventDefault(); adjustBalance(+0.1);   return; } break;
+      case 'A': e.preventDefault(); toggleAutoplay(); return;
     }
   }
 
@@ -857,6 +926,52 @@ function handleSelectorKey(e, key, ctrl, plain) {
 }
 
 function handleViewerKey(e, key, ctrl, plain) {
+  // Media-mode overrides: applied when a controllable video or audio file is
+  // active (gif-loop videos are excluded — they behave like static images).
+  if (plain && activeMediaEl && !imagePaneEl.classList.contains('media-gif')) {
+    switch (key) {
+      // Seek (mplayer defaults: ←/→ ±10 s, ↑/↓ ±1 min, PgUp/PgDn ±10 min)
+      case 'ArrowLeft':  e.preventDefault(); seekRelative(-10);  return;
+      case 'ArrowRight': e.preventDefault(); seekRelative(+10);  return;
+      case 'ArrowUp':    e.preventDefault(); seekRelative(+60);  return;
+      case 'ArrowDown':  e.preventDefault(); seekRelative(-60);  return;
+      case 'PageUp':     e.preventDefault(); seekRelative(+600); return;
+      case 'PageDown':   e.preventDefault(); seekRelative(-600); return;
+      case 'Home':       e.preventDefault();
+        activeMediaEl.currentTime = 0; _updateVideoControls(); return;
+      case 'Backspace':  e.preventDefault();
+        activeMediaEl.playbackRate = 1; return;
+      // Navigation
+      case 'Enter': e.preventDefault(); nextImage(); return;
+      case 'b':     e.preventDefault(); prevImage(); return;
+      // Play / pause
+      case ' ':
+        e.preventDefault();
+        activeMediaEl.ended ? nextImage() : togglePlayPause();
+        return;
+      // Playback rate  (</>: ±0.1 step, matching mplayer's [/] moved to angle brackets)
+      //                ({/}: halve/double, as in mplayer)
+      case '<': e.preventDefault();
+        activeMediaEl.playbackRate = Math.max(0.25, +(activeMediaEl.playbackRate - 0.1).toFixed(2));
+        return;
+      case '>': e.preventDefault();
+        activeMediaEl.playbackRate = Math.min(4.0,  +(activeMediaEl.playbackRate + 0.1).toFixed(2));
+        return;
+      case '{': e.preventDefault();
+        activeMediaEl.playbackRate = Math.max(0.25, activeMediaEl.playbackRate / 2);
+        return;
+      case '}': e.preventDefault();
+        activeMediaEl.playbackRate = Math.min(4.0,  activeMediaEl.playbackRate * 2);
+        return;
+      // Audio / video track cycling
+      case 'a':
+      case '#': e.preventDefault(); cycleAudioTrack(); return;
+      case '_': e.preventDefault(); cycleVideoTrack(); return;
+      // OSD / info
+      case 'o': e.preventDefault(); toggleInfoOverlay(); return;
+    }
+  }
+
   if (plain) {
     switch (key) {
       // Scrolling — 100 px steps
@@ -893,9 +1008,10 @@ function handleViewerKey(e, key, ctrl, plain) {
         imagePaneEl.scrollTop  = imagePaneEl.scrollHeight;
         break;
       // Image navigation
-      case ' ': e.preventDefault(); nextImage(); break;
+      case 'Enter':
+      case ' ':  e.preventDefault(); nextImage(); break;
       case 'b':
-      case 'p': prevImage(); break;
+      case 'p':  prevImage(); break;
       // Rotation (xzgv r/R/N)
       case 'r': rotateBy(90);        break;
       case 'R': rotateBy(-90);       break;
@@ -971,6 +1087,9 @@ function jumpToEdge(dir) {
 
 imagePaneEl.addEventListener('mousedown', function(e) {
   if (e.button !== 0) return;
+  // Clicks inside the controls overlay (progress bar, HUD) are handled there;
+  // don't treat them as image-pane drag or play/pause clicks.
+  if (videoProgressEl && videoProgressEl.contains(e.target)) return;
   dragMode = 'image';
   dragState.wasDrag = false;
   dragState.startX  = e.clientX;
@@ -1006,6 +1125,17 @@ document.addEventListener('mousemove', function(e) {
 document.addEventListener('mouseup', function() {
   if (dragMode === 'image' && !dragState.wasDrag) {
     setFocusMode('viewer');
+    if (activeMediaEl) {
+      if (activeMediaEl.ended) {
+        activeMediaEl.currentTime = 0;
+        activeMediaEl.play().catch(function() {});
+      } else if (activeMediaEl.paused) {
+        activeMediaEl.play().catch(function() {});
+      } else {
+        activeMediaEl.pause();
+      }
+      _updateVideoControls();
+    }
   }
   if (dragMode === 'divider' && paneDividerEl) {
     paneDividerEl.classList.remove('dragging');
@@ -1027,6 +1157,7 @@ if (btnSort)      btnSort.addEventListener('click', cycleSortBy);
 // ── History (back/forward) ─────────────────────────────────────────────────
 
 window.addEventListener('popstate', function(e) {
+  _stopActiveMedia();
   applyHistoryState(e.state);
   var params = getUrlParams();
 
@@ -1039,7 +1170,7 @@ window.addEventListener('popstate', function(e) {
     if (currentFile) {
       var idx = listing.findIndex(function(i) { return i.u === currentFile; });
       if (idx >= 0) selectItem(idx, true);
-      showImage(currentFile);
+      showMediaFile(currentFile);
     }
   }
 });
@@ -1056,6 +1187,372 @@ function fmtSize(bytes) {
 function fmtDate(unixSecs, full) {
   var d = new Date(unixSecs * 1000);
   return full ? d.toLocaleString() : d.toLocaleDateString();
+}
+
+// ── Media playback ─────────────────────────────────────────────────────────
+
+var videoEl         = document.getElementById('main-video');
+var audioEl         = document.getElementById('main-audio');
+var videoProgressEl = document.getElementById('video-progress');
+var videoSeekFillEl = document.getElementById('video-seek-fill');
+var videoTimeEl     = document.getElementById('video-time');
+var videoVolEl      = document.getElementById('video-vol');
+var mediaErrorEl    = document.getElementById('media-error');
+var mediaErrorMsgEl = document.getElementById('media-error-msg');
+
+var activeMediaEl       = null;  // currently active <video> or <audio>, or null
+var _posCheckpointTimer = null;  // setTimeout handle for position-save throttle
+var _autoplay           = true;  // if false, media loads but does not start playing
+var _shouldAnnounce     = false; // true when audio-bearing media loaded; cleared after first 'playing' event
+
+// Stereo balance (Web Audio API); created lazily on first adjustBalance() call
+var _panValue      = 0;      // -1 (full left) … 0 (centre) … +1 (full right)
+var _audioCtx      = null;
+var _panNode       = null;
+var _videoGraphed  = false;  // whether videoEl has been wired into _audioCtx
+var _audioGraphed  = false;  // whether audioEl has been wired into _audioCtx
+
+// ── BroadcastChannel: pause other viewer tabs when we start playing audio ──
+
+var _mediaChannel = new BroadcastChannel('media-viewer');
+_mediaChannel.onmessage = function(e) {
+  if (e.data && e.data.cmd === 'pause' && activeMediaEl) {
+    activeMediaEl.pause();
+  }
+};
+
+// ── Stop / tear-down ────────────────────────────────────────────────────────
+
+function _stopActiveMedia() {
+  _clearPosCheckpoint();
+  _shouldAnnounce = false;
+  if (mediaErrorEl) mediaErrorEl.classList.add('hidden');
+  if (!activeMediaEl) return;
+  activeMediaEl.pause();
+  activeMediaEl.src = '';
+  activeMediaEl     = null;
+  imagePaneEl.classList.remove('media-video', 'media-audio', 'media-gif');
+}
+
+function _clearPosCheckpoint() {
+  if (_posCheckpointTimer !== null) {
+    clearTimeout(_posCheckpointTimer);
+    _posCheckpointTimer = null;
+  }
+}
+
+// ── Position persistence ────────────────────────────────────────────────────
+
+function _posKey(fileUrl) {
+  return 'media-pos:' + fileUrl.replace(/^file:\/\//, '');
+}
+
+function _savePosition(mediaEl) {
+  if (!currentFile || !currentDir || mediaEl.paused || mediaEl.ended) return;
+  var fileUrl = currentDir.replace(/\/$/, '') + '/' + currentFile;
+  localStorage.setItem(_posKey(fileUrl), String(mediaEl.currentTime));
+}
+
+function _getSavedPosition(fileUrl) {
+  var raw = localStorage.getItem(_posKey(fileUrl));
+  return raw ? parseFloat(raw) : 0;
+}
+
+function _clearSavedPosition(fileUrl) {
+  localStorage.removeItem(_posKey(fileUrl));
+}
+
+// ── Controls HUD ────────────────────────────────────────────────────────────
+
+function fmtTime(secs) {
+  var s = Math.floor(secs);
+  var m = Math.floor(s / 60);
+  var h = Math.floor(m / 60);
+  m = m % 60;
+  s = s % 60;
+  var pad = function(n) { return n < 10 ? '0' + n : String(n); };
+  return h > 0 ? h + ':' + pad(m) + ':' + pad(s) : m + ':' + pad(s);
+}
+
+function _updateVideoControls() {
+  if (!activeMediaEl) return;
+  var cur = activeMediaEl.currentTime || 0;
+  var dur = activeMediaEl.duration;
+  if (videoTimeEl) {
+    videoTimeEl.textContent = fmtTime(cur) + ' / ' + (isFinite(dur) ? fmtTime(dur) : '?');
+  }
+  if (videoSeekFillEl && isFinite(dur) && dur > 0) {
+    videoSeekFillEl.style.width = (cur / dur * 100).toFixed(2) + '%';
+  }
+  if (videoVolEl) {
+    var vol  = Math.round(activeMediaEl.volume * 100);
+    var text = activeMediaEl.muted ? 'MUTED' : ('VOL\u00a0' + vol);
+    if (_panValue !== 0) {
+      var side = _panValue > 0 ? 'R' : 'L';
+      text += '\u2002' + side + Math.abs(_panValue).toFixed(1);
+    }
+    if (!_autoplay) text += '\u2002MANUAL';
+    videoVolEl.textContent = text;
+  }
+}
+
+// ── Media element event listeners ───────────────────────────────────────────
+
+function _onMediaLoadedMetadata() {
+  imgSpinnerEl.classList.add('hidden');
+  var mediaEl = this;
+  var fileUrl = currentDir.replace(/\/$/, '') + '/' + currentFile;
+
+  // Restore saved position before playback starts
+  var saved = _getSavedPosition(fileUrl);
+  if (saved > 0 && isFinite(mediaEl.duration) && saved < mediaEl.duration) {
+    mediaEl.currentTime = saved;
+  }
+
+  // Detect gif-loop: short video with no audio → play silently in a loop
+  if (mediaEl === videoEl) {
+    if (isFinite(videoEl.duration) && videoEl.duration < 60 && !videoEl.mozHasAudio) {
+      videoEl.loop  = true;
+      videoEl.muted = true;
+      imagePaneEl.classList.replace('media-video', 'media-gif');
+    }
+  }
+
+  // Notify other tabs to pause before we start playing anything with audio
+  // Schedule cross-tab pause for the moment playback actually starts,
+  // not here — otherwise loading without autoplay still pauses other tabs.
+  var hasAudio = mediaEl === audioEl ||
+                 (mediaEl === videoEl && videoEl.mozHasAudio &&
+                  !imagePaneEl.classList.contains('media-gif'));
+  _shouldAnnounce = hasAudio;
+
+  // Auto-fullscreen: widescreen video (≥ 3:2 aspect) played from the beginning.
+  // Skipped when restoring a saved position (the user already watched part of it)
+  // or when already fullscreen or when gif-loop mode.
+  if (mediaEl === videoEl &&
+      !imagePaneEl.classList.contains('media-gif') &&
+      !document.fullscreenElement &&
+      !(saved > 0) &&
+      FULLSCREEN_DIMS.has(videoEl.videoWidth + 'x' + videoEl.videoHeight)) {
+    selectorStateBeforeFS = ui.selectorVisible;
+    ui.selectorVisible = false;
+    applySelector();
+    document.documentElement.requestFullscreen().catch(function() {
+      // Fullscreen denied (gesture expired or policy); restore selector state.
+      ui.selectorVisible = selectorStateBeforeFS;
+      applySelector();
+    });
+  }
+
+  _updateVideoControls();
+  // Gif-loops always play (they're treated as looping images, not video).
+  // For real video/audio, respect the autoplay toggle.
+  if (_autoplay || imagePaneEl.classList.contains('media-gif')) {
+    mediaEl.play().catch(function() {});
+  }
+}
+
+function _onTimeUpdate() {
+  _updateVideoControls();
+  if (_posCheckpointTimer !== null) return;
+  var el = this;
+  _posCheckpointTimer = setTimeout(function() {
+    _posCheckpointTimer = null;
+    _savePosition(el);
+  }, 5000);
+}
+
+function _onMediaEnded() {
+  if (currentFile && currentDir) {
+    _clearSavedPosition(currentDir.replace(/\/$/, '') + '/' + currentFile);
+  }
+  _updateVideoControls();
+}
+
+function _onMediaPlaying() {
+  if (_shouldAnnounce) {
+    _shouldAnnounce = false;
+    _mediaChannel.postMessage({ cmd: 'pause' });
+  }
+}
+
+function _onMediaError() {
+  imgSpinnerEl.classList.add('hidden');
+  // Guard: if src was cleared during navigation activeMediaEl is already null.
+  if (!activeMediaEl || !currentFile) return;
+  var ext = currentFile.slice(currentFile.lastIndexOf('.') + 1).toLowerCase();
+  var code = activeMediaEl.error ? activeMediaEl.error.code : 0;
+  var msg;
+  if (ext === 'mkv' && code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+    msg = 'MKV playback is not supported in this version of Firefox.\n' +
+          'Try enabling media.mkv.enabled in about:config, or upgrade to a newer Firefox.';
+  } else if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
+             code === MediaError.MEDIA_ERR_DECODE) {
+    msg = 'This file format is not supported by your browser (' + ext.toUpperCase() + ').';
+  } else {
+    msg = 'Error loading media.';
+  }
+  if (mediaErrorMsgEl) mediaErrorMsgEl.textContent = msg;
+  if (mediaErrorEl)    mediaErrorEl.classList.remove('hidden');
+}
+
+videoEl.addEventListener('loadedmetadata', _onMediaLoadedMetadata);
+audioEl.addEventListener('loadedmetadata', _onMediaLoadedMetadata);
+videoEl.addEventListener('playing',        _onMediaPlaying);
+audioEl.addEventListener('playing',        _onMediaPlaying);
+videoEl.addEventListener('timeupdate',     _onTimeUpdate);
+audioEl.addEventListener('timeupdate',     _onTimeUpdate);
+videoEl.addEventListener('ended',          _onMediaEnded);
+audioEl.addEventListener('ended',          _onMediaEnded);
+videoEl.addEventListener('error',          _onMediaError);
+audioEl.addEventListener('error',          _onMediaError);
+
+// ── Media control helpers ────────────────────────────────────────────────────
+
+function togglePlayPause() {
+  if (!activeMediaEl) return;
+  if (activeMediaEl.ended) {
+    activeMediaEl.currentTime = 0;
+    activeMediaEl.play().catch(function() {});
+  } else if (activeMediaEl.paused) {
+    activeMediaEl.play().catch(function() {});
+  } else {
+    activeMediaEl.pause();
+  }
+  _updateVideoControls();
+}
+
+function toggleMute() {
+  if (!activeMediaEl) return;
+  activeMediaEl.muted = !activeMediaEl.muted;
+  _updateVideoControls();
+}
+
+function toggleAutoplay() {
+  _autoplay = !_autoplay;
+  _updateVideoControls();
+}
+
+function adjustVolume(delta) {
+  if (!activeMediaEl) return;
+  activeMediaEl.volume = Math.max(0, Math.min(1, activeMediaEl.volume + delta));
+  activeMediaEl.muted  = false;
+  _updateVideoControls();
+}
+
+// secs may be negative (seek back) or positive (seek forward)
+function seekRelative(secs) {
+  if (!activeMediaEl || !isFinite(activeMediaEl.duration)) return;
+  activeMediaEl.currentTime =
+    Math.max(0, Math.min(activeMediaEl.duration, activeMediaEl.currentTime + secs));
+  _updateVideoControls();
+}
+
+// ── Stereo balance (Web Audio API) ──────────────────────────────────────────
+//
+// createMediaElementSource() permanently reroutes a media element's audio
+// through the AudioContext; calling it a second time on the same element
+// throws, so we track which elements have been connected.
+
+function _ensureAudioGraph(mediaEl) {
+  if (!_audioCtx) {
+    _audioCtx = new AudioContext();
+    _panNode  = _audioCtx.createStereoPanner();
+    _panNode.pan.value = _panValue;
+    _panNode.connect(_audioCtx.destination);
+  }
+  var already = (mediaEl === videoEl) ? _videoGraphed : _audioGraphed;
+  if (!already) {
+    // Mark as graphed first so a CORS-taint failure doesn't cause infinite retries.
+    if (mediaEl === videoEl) _videoGraphed = true;
+    else                     _audioGraphed = true;
+    try {
+      _audioCtx.createMediaElementSource(mediaEl).connect(_panNode);
+    } catch (err) {
+      console.warn('createMediaElementSource failed (CORS?):', err);
+      return;
+    }
+  }
+  if (_audioCtx.state === 'suspended') {
+    _audioCtx.resume().catch(function() {});
+  }
+}
+
+function adjustBalance(delta) {
+  _panValue = +Math.max(-1, Math.min(1, _panValue + delta)).toFixed(1);
+  if (activeMediaEl) {
+    _ensureAudioGraph(activeMediaEl);
+    _panNode.pan.value = _panValue;
+  }
+  _updateVideoControls();
+}
+
+// ── Track switching ──────────────────────────────────────────────────────────
+
+function cycleAudioTrack() {
+  if (!activeMediaEl) return;
+  var tracks = activeMediaEl.audioTracks;
+  if (!tracks || tracks.length <= 1) return;
+  var cur = 0;
+  for (var i = 0; i < tracks.length; i++) { if (tracks[i].enabled) { cur = i; break; } }
+  var next = (cur + 1) % tracks.length;
+  for (var i = 0; i < tracks.length; i++) { tracks[i].enabled = (i === next); }
+}
+
+function cycleVideoTrack() {
+  var tracks = videoEl.videoTracks;
+  if (!tracks || tracks.length <= 1) return;
+  var cur = 0;
+  for (var i = 0; i < tracks.length; i++) { if (tracks[i].selected) { cur = i; break; } }
+  var next = (cur + 1) % tracks.length;
+  for (var i = 0; i < tracks.length; i++) { tracks[i].selected = (i === next); }
+}
+
+// Progress bar click-to-seek
+if (videoProgressEl) {
+  videoProgressEl.addEventListener('click', function(e) {
+    if (!activeMediaEl || !isFinite(activeMediaEl.duration)) return;
+    var rect = videoProgressEl.getBoundingClientRect();
+    var frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    activeMediaEl.currentTime = frac * activeMediaEl.duration;
+    _updateVideoControls();
+  });
+}
+
+// ── Show media file (dispatcher) ────────────────────────────────────────────
+
+function showMediaFile(filename) {
+  if (!filename || !currentDir) return;
+  var type = mediaType(filename);
+  _stopActiveMedia();
+  mainImageEl.src = '';
+  imagePaneEl.classList.remove('image-loaded');
+  if (type === 'image') {
+    showImage(filename);
+  } else if (type === 'video' || type === 'audio') {
+    showMedia(filename, type);
+  }
+  // 'unknown': leave pane empty — no-content hint will be visible
+}
+
+function showMedia(filename, type) {
+  var fileUrl  = currentDir.replace(/\/$/, '') + '/' + filename;
+  var proxyUrl = toProxyFile(fileUrl);
+
+  activeMediaEl      = (type === 'video') ? videoEl : audioEl;
+  activeMediaEl.loop  = false;
+  activeMediaEl.muted = false;
+
+  imgSpinnerEl.classList.remove('hidden');
+  imagePaneEl.classList.add(type === 'video' ? 'media-video' : 'media-audio');
+
+  activeMediaEl.src = proxyUrl;
+  // loadedmetadata fires next → _onMediaLoadedMetadata()
+
+  if (!infoOverlayEl.classList.contains('hidden')) {
+    updateInfoOverlay(filename);
+  }
+  document.title = filename + ' — Media Viewer';
 }
 
 // ── Initialisation ─────────────────────────────────────────────────────────
