@@ -897,8 +897,8 @@ document.addEventListener('keydown', function(e) {
       case '[': e.preventDefault(); adjustSelectorWidth(-16); return;
       case ']': e.preventDefault(); adjustSelectorWidth(+16); return;
       case '~': e.preventDefault(); setSelectorWidth(SELECTOR_W_DEFAULT); return;
-      // Global media keys (active only when video/audio is loaded)
-      case 'm': if (activeMediaEl) { e.preventDefault(); toggleMute();      return; } break;
+      // Global A/V keys — always active; adjust shared settings and broadcast.
+      case 'm': e.preventDefault(); toggleMute();        return;
       case 'p':
         e.preventDefault();
         if (activeMediaEl) {
@@ -908,10 +908,10 @@ document.addEventListener('keydown', function(e) {
           _mediaChannel.postMessage({ cmd: 'pause-toggle' });
         }
         return;
-      case '9': if (activeMediaEl) { e.preventDefault(); adjustVolume(-0.1);    return; } break;
-      case '0': if (activeMediaEl) { e.preventDefault(); adjustVolume(+0.1);    return; } break;
-      case '(': if (activeMediaEl) { e.preventDefault(); adjustBalance(-0.1);   return; } break;
-      case ')': if (activeMediaEl) { e.preventDefault(); adjustBalance(+0.1);   return; } break;
+      case '9': e.preventDefault(); adjustVolume(-0.1);  return;
+      case '0': e.preventDefault(); adjustVolume(+0.1);  return;
+      case '(': e.preventDefault(); adjustBalance(-0.1); return;
+      case ')': e.preventDefault(); adjustBalance(+0.1); return;
       case 'A': e.preventDefault(); toggleAutoplay(); return;
     }
   }
@@ -1504,10 +1504,15 @@ function togglePlayPause() {
 }
 
 function toggleMute() {
-  if (!activeMediaEl) return;
-  activeMediaEl.muted = !activeMediaEl.muted;
-  localStorage.setItem('media-muted', String(activeMediaEl.muted));
-  _mediaChannel.postMessage({ cmd: 'av-settings', muted: activeMediaEl.muted });
+  var muted;
+  if (activeMediaEl) {
+    activeMediaEl.muted = !activeMediaEl.muted;
+    muted = activeMediaEl.muted;
+  } else {
+    muted = !(localStorage.getItem('media-muted') === 'true');
+  }
+  localStorage.setItem('media-muted', String(muted));
+  _mediaChannel.postMessage({ cmd: 'av-settings', muted: muted });
   _updateVideoControls();
 }
 
@@ -1517,12 +1522,18 @@ function toggleAutoplay() {
 }
 
 function adjustVolume(delta) {
-  if (!activeMediaEl) return;
-  activeMediaEl.volume = Math.max(0, Math.min(1, activeMediaEl.volume + delta));
-  activeMediaEl.muted  = false;
-  localStorage.setItem('media-volume', String(activeMediaEl.volume));
+  var vol;
+  if (activeMediaEl) {
+    activeMediaEl.volume = Math.max(0, Math.min(1, activeMediaEl.volume + delta));
+    activeMediaEl.muted  = false;
+    vol = activeMediaEl.volume;
+  } else {
+    vol = +Math.max(0, Math.min(1,
+      parseFloat(localStorage.getItem('media-volume') || '1') + delta)).toFixed(4);
+  }
+  localStorage.setItem('media-volume', String(vol));
   localStorage.setItem('media-muted',  'false');
-  _mediaChannel.postMessage({ cmd: 'av-settings', volume: activeMediaEl.volume, muted: false });
+  _mediaChannel.postMessage({ cmd: 'av-settings', volume: vol, muted: false });
   _updateVideoControls();
 }
 
