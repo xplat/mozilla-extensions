@@ -1197,10 +1197,13 @@ var videoProgressEl = document.getElementById('video-progress');
 var videoSeekFillEl = document.getElementById('video-seek-fill');
 var videoTimeEl     = document.getElementById('video-time');
 var videoVolEl      = document.getElementById('video-vol');
+var mediaErrorEl    = document.getElementById('media-error');
+var mediaErrorMsgEl = document.getElementById('media-error-msg');
 
 var activeMediaEl       = null;  // currently active <video> or <audio>, or null
 var _posCheckpointTimer = null;  // setTimeout handle for position-save throttle
 var _autoplay           = true;  // if false, media loads but does not start playing
+var _shouldAnnounce     = false; // true when audio-bearing media loaded; cleared after first 'playing' event
 
 // Stereo balance (Web Audio API); created lazily on first adjustBalance() call
 var _panValue      = 0;      // -1 (full left) … 0 (centre) … +1 (full right)
@@ -1222,6 +1225,8 @@ _mediaChannel.onmessage = function(e) {
 
 function _stopActiveMedia() {
   _clearPosCheckpoint();
+  _shouldAnnounce = false;
+  if (mediaErrorEl) mediaErrorEl.classList.add('hidden');
   if (!activeMediaEl) return;
   activeMediaEl.pause();
   activeMediaEl.src = '';
@@ -1314,12 +1319,12 @@ function _onMediaLoadedMetadata() {
   }
 
   // Notify other tabs to pause before we start playing anything with audio
+  // Schedule cross-tab pause for the moment playback actually starts,
+  // not here — otherwise loading without autoplay still pauses other tabs.
   var hasAudio = mediaEl === audioEl ||
                  (mediaEl === videoEl && videoEl.mozHasAudio &&
                   !imagePaneEl.classList.contains('media-gif'));
-  if (hasAudio) {
-    _mediaChannel.postMessage({ cmd: 'pause' });
-  }
+  _shouldAnnounce = hasAudio;
 
   // Auto-fullscreen: widescreen video (≥ 3:2 aspect) played from the beginning.
   // Skipped when restoring a saved position (the user already watched part of it)
@@ -1364,12 +1369,37 @@ function _onMediaEnded() {
   _updateVideoControls();
 }
 
+function _onMediaPlaying() {
+  if (_shouldAnnounce) {
+    _shouldAnnounce = false;
+    _mediaChannel.postMessage({ cmd: 'pause' });
+  }
+}
+
 function _onMediaError() {
   imgSpinnerEl.classList.add('hidden');
+  // Guard: if src was cleared during navigation activeMediaEl is already null.
+  if (!activeMediaEl || !currentFile) return;
+  var ext = currentFile.slice(currentFile.lastIndexOf('.') + 1).toLowerCase();
+  var code = activeMediaEl.error ? activeMediaEl.error.code : 0;
+  var msg;
+  if (ext === 'mkv' && code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+    msg = 'MKV playback is not supported in this version of Firefox.\n' +
+          'Try enabling media.mkv.enabled in about:config, or upgrade to a newer Firefox.';
+  } else if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
+             code === MediaError.MEDIA_ERR_DECODE) {
+    msg = 'This file format is not supported by your browser (' + ext.toUpperCase() + ').';
+  } else {
+    msg = 'Error loading media.';
+  }
+  if (mediaErrorMsgEl) mediaErrorMsgEl.textContent = msg;
+  if (mediaErrorEl)    mediaErrorEl.classList.remove('hidden');
 }
 
 videoEl.addEventListener('loadedmetadata', _onMediaLoadedMetadata);
 audioEl.addEventListener('loadedmetadata', _onMediaLoadedMetadata);
+videoEl.addEventListener('playing',        _onMediaPlaying);
+audioEl.addEventListener('playing',        _onMediaPlaying);
 videoEl.addEventListener('timeupdate',     _onTimeUpdate);
 audioEl.addEventListener('timeupdate',     _onTimeUpdate);
 videoEl.addEventListener('ended',          _onMediaEnded);

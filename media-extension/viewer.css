@@ -629,6 +629,25 @@ html, body {
 #image-pane.media-audio #video-controls    { display: flex; }
 #image-pane.media-audio #no-image-hint     { display: none; }
 
+/* — media error overlay — */
+#media-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+#media-error p {
+  color: var(--text-dim);
+  text-align: center;
+  max-width: 30em;
+  line-height: 1.6;
+  padding: 0.75rem 1.25rem;
+  background: rgba(0,0,0,0.55);
+  border-radius: 4px;
+}
+
 /* — gif-loop mode (short silent video played inline, no controls) — */
 #image-pane.media-gif #main-video    { display: block; }
 #image-pane.media-gif #transform-host { display: none; }
