@@ -4,8 +4,6 @@
 
 # Media Viewer
 
-- Audio playback needs end-to-end testing and possibly polish.  The mechanism is in place (audio element, events, all video-mode keyboard controls, position persistence, cross-tab pause) but audio has not been confirmed working the way video has.  Specific things to verify: audio placeholder display, progress bar/HUD behaviour with audio-only files, position restore on re-open.
-
 - The media viewer should support playlists and background audio.  q should queue an item and select the next item (whether focused or in selector).  Q should cycle between normal view, audio queue, and video queue.  When you start the audio queue playing it should be played by the background script and if it pauses for a foreground play it should start back up when that's over.  The extension popup should display the status of the audio queue.  When nothing else of extended duration is an appropriate target, the global media keys should control the audio queue.  Also when you press 'q' on a directory, all the queueable items in the directory or in subdirectories named `(CD|Disc)\s*\d+` should be queued.
 
 - Subtitle support.  Subtitles are probably a project as large as the rest of video support combined, so this is its own item.  The mplayer subtitle keys to implement are: j/J (cycle subtitle track forward/backward), x/z (delay ±0.1 s), and r/t (position up/down — these are safe to use in video-mode overrides since rotation does not apply to video).  External subtitle files (.srt, .vtt, .ass) should be auto-loaded if present alongside the video file with the same base name.  The `<track>` element covers .vtt natively; .srt and .ass will need conversion or a JS parser.
