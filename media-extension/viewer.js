@@ -1200,7 +1200,7 @@ var videoVolEl      = document.getElementById('video-vol');
 
 var activeMediaEl       = null;  // currently active <video> or <audio>, or null
 var _posCheckpointTimer = null;  // setTimeout handle for position-save throttle
-var _autoplay           = false; // advance to next file automatically when media ends
+var _autoplay           = true;  // if false, media loads but does not start playing
 
 // Stereo balance (Web Audio API); created lazily on first adjustBalance() call
 var _panValue      = 0;      // -1 (full left) … 0 (centre) … +1 (full right)
@@ -1286,7 +1286,7 @@ function _updateVideoControls() {
       var side = _panValue > 0 ? 'R' : 'L';
       text += '\u2002' + side + Math.abs(_panValue).toFixed(1);
     }
-    if (_autoplay) text += '\u2002AUTO';
+    if (!_autoplay) text += '\u2002MANUAL';
     videoVolEl.textContent = text;
   }
 }
@@ -1340,7 +1340,11 @@ function _onMediaLoadedMetadata() {
   }
 
   _updateVideoControls();
-  mediaEl.play().catch(function() {});
+  // Gif-loops always play (they're treated as looping images, not video).
+  // For real video/audio, respect the autoplay toggle.
+  if (_autoplay || imagePaneEl.classList.contains('media-gif')) {
+    mediaEl.play().catch(function() {});
+  }
 }
 
 function _onTimeUpdate() {
@@ -1358,7 +1362,6 @@ function _onMediaEnded() {
     _clearSavedPosition(currentDir.replace(/\/$/, '') + '/' + currentFile);
   }
   _updateVideoControls();
-  if (_autoplay) nextImage();
 }
 
 function _onMediaError() {

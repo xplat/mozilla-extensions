@@ -309,9 +309,12 @@ AudioContext is created lazily on the first balance adjustment.
 
 ### Autoplay
 
-`A` (global) toggles autoplay mode.  When on, `_onMediaEnded` calls `nextImage()`
-automatically so the next file plays without user input.  The HUD shows `AUTO` when
-active.
+`A` (global) toggles whether media starts playing automatically when loaded.
+Default is **on** (matching the current browser behaviour).  When turned off,
+loading a video or audio file shows the first frame / audio-placeholder without
+starting playback — useful for browsing a mixed image/video directory.  The HUD
+shows `MANUAL` when autoplay is off.  Gif-loop videos are unaffected and always
+play.
 
 ---
 
