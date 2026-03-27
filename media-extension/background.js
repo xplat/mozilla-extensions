@@ -112,9 +112,11 @@ var _aqPlaying    = false;
 var _aqSuppressed = false;
 
 var _queueAudio = new Audio();
-// Initialise volume/mute from persisted settings (toProxyFile and
-// initMediaElVolume come from media-shared.js, loaded before this script).
+// Initialise volume/mute/balance from persisted settings.
+// _ensureAudioContext, initMediaElVolume, and _panNode come from media-shared.js.
 initMediaElVolume(_queueAudio);
+_ensureAudioContext();
+_audioCtx.createMediaElementSource(_queueAudio).connect(_panNode);
 
 // ── State persistence ─────────────────────────────────────────────────────
 
@@ -354,7 +356,7 @@ _queueChannel.onmessage = function(e) {
 // before it disappears; no chrome.tabs.onRemoved safety net is needed.
 //
 // av-settings messages keep _queueAudio in sync with the extension-wide
-// volume and mute controls (balance is not applicable here).
+// volume, mute, and balance controls via the shared applyAvSettings() helper.
 
 var _viewerChannel = new BroadcastChannel('media-viewer');
 

@@ -1602,10 +1602,8 @@ var _vBrightness = 1.0;  // CSS brightness() — mplayer keys 3/4
 var _vHue        = 0;    // CSS hue-rotate() degrees — mplayer keys 5/6
 var _vSaturation = 1.0;  // CSS saturate()   — mplayer keys 7/8
 
-// Stereo balance (Web Audio API); created lazily on first adjustBalance() call
-var _panValue      = 0;      // -1 (full left) … 0 (centre) … +1 (full right)
-var _audioCtx      = null;
-var _panNode       = null;
+// Stereo balance (Web Audio API): _panValue, _audioCtx, _panNode defined in
+// media-shared.js; source wiring tracked per element here.
 var _videoGraphed  = false;  // whether videoEl has been wired into _audioCtx
 var _audioGraphed  = false;  // whether audioEl has been wired into _audioCtx
 
@@ -1625,12 +1623,7 @@ _mediaChannel.onmessage = function(e) {
     if (d.muted   !== undefined) localStorage.setItem('media-muted',   String(d.muted));
     if (d.balance !== undefined) localStorage.setItem('media-balance', String(d.balance));
     if (activeMediaEl) {
-      if (d.volume  !== undefined) activeMediaEl.volume = d.volume;
-      if (d.muted   !== undefined) activeMediaEl.muted  = d.muted;
-      if (d.balance !== undefined) {
-        _panValue = d.balance;
-        if (_panNode) _panNode.pan.value = _panValue;
-      }
+      applyAvSettings(activeMediaEl, d);
       _updateVideoControls();
     }
   }
@@ -1954,17 +1947,13 @@ function seekRelative(secs) {
 
 // ── Stereo balance (Web Audio API) ──────────────────────────────────────────
 //
+// _ensureAudioContext() (media-shared.js) owns the AudioContext + PannerNode.
 // createMediaElementSource() permanently reroutes a media element's audio
 // through the AudioContext; calling it a second time on the same element
-// throws, so we track which elements have been connected.
+// throws, so we track which elements have been connected here.
 
 function _ensureAudioGraph(mediaEl) {
-  if (!_audioCtx) {
-    _audioCtx = new AudioContext();
-    _panNode  = _audioCtx.createStereoPanner();
-    _panNode.pan.value = _panValue;
-    _panNode.connect(_audioCtx.destination);
-  }
+  _ensureAudioContext();
   var already = (mediaEl === videoEl) ? _videoGraphed : _audioGraphed;
   if (!already) {
     // Mark as graphed first so a CORS-taint failure doesn't cause infinite retries.
@@ -1974,11 +1963,7 @@ function _ensureAudioGraph(mediaEl) {
       _audioCtx.createMediaElementSource(mediaEl).connect(_panNode);
     } catch (err) {
       console.warn('createMediaElementSource failed (CORS?):', err);
-      return;
     }
-  }
-  if (_audioCtx.state === 'suspended') {
-    _audioCtx.resume().catch(function() {});
   }
 }
 
@@ -2132,11 +2117,9 @@ function showMedia(filename, type, deferred) {
   activeMediaEl.loop   = false;
   activeMediaEl.volume = parseFloat(localStorage.getItem('media-volume') || '1');
   activeMediaEl.muted  = localStorage.getItem('media-muted') === 'true';
-  var _savedBal = parseFloat(localStorage.getItem('media-balance') || '0');
-  if (_savedBal !== _panValue) {
-    _panValue = _savedBal;
-    if (_panNode) _panNode.pan.value = _panValue;
-  }
+  // Balance is applied via _panNode (shared, initialised from localStorage in
+  // media-shared.js) and kept in sync on every adjustBalance() / av-settings
+  // message, so no per-file re-sync is needed here.
 
   // Reset per-file video filter to defaults.
   _vContrast = _vBrightness = 1.0;

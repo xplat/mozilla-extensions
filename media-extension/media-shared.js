@@ -34,13 +34,42 @@ function toProxyFile(fileUrl) {
   return FILE_PROXY_PREFIX + encoded;
 }
 
-// Apply an av-settings broadcast payload to an HTMLMediaElement.
-// Balance is intentionally omitted here — routing audio through a
-// StereoPannerNode requires caller-side Web Audio API wiring (viewer.js
-// handles this; background.js plays queue audio without panning).
+// ── Shared Web Audio state ────────────────────────────────────────────────
+//
+// One AudioContext and StereoPannerNode are shared across all audio output in
+// a given script context (background or viewer tab).  Each caller wires its
+// own HTMLMediaElements into the graph via createMediaElementSource(el).connect(_panNode);
+// that part is intentionally left to the caller because createMediaElementSource
+// is one-shot per element and the set of elements differs between contexts.
+
+var _panValue = parseFloat(localStorage.getItem(LS_BALANCE) || '0');
+var _audioCtx = null;
+var _panNode  = null;
+
+// Ensure the AudioContext + StereoPannerNode chain exists.  No-op if already
+// created; resumes a suspended context (browser autoplay policy on web pages).
+// Callers should invoke this before any createMediaElementSource() call and
+// before playing audio that needs to be routed through the panner.
+function _ensureAudioContext() {
+  if (_audioCtx) {
+    if (_audioCtx.state === 'suspended') _audioCtx.resume().catch(function() {});
+    return;
+  }
+  _audioCtx = new AudioContext();
+  _panNode  = _audioCtx.createStereoPanner();
+  _panNode.pan.value = _panValue;
+  _panNode.connect(_audioCtx.destination);
+}
+
+// Apply an av-settings broadcast payload to an HTMLMediaElement and the
+// shared panner.  All three properties are optional; absent ones are skipped.
 function applyAvSettings(mediaEl, d) {
-  if (d.volume !== undefined) mediaEl.volume = d.volume;
-  if (d.muted  !== undefined) mediaEl.muted  = d.muted;
+  if (d.volume  !== undefined) mediaEl.volume = d.volume;
+  if (d.muted   !== undefined) mediaEl.muted  = d.muted;
+  if (d.balance !== undefined) {
+    _panValue = d.balance;
+    if (_panNode) _panNode.pan.value = _panValue;
+  }
 }
 
 // Initialise an HTMLMediaElement's volume and mute state from localStorage,
