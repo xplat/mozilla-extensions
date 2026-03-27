@@ -96,6 +96,12 @@ var selectorStateBeforeFS = true;
 // In-flight preload image — used to avoid blanking/squishing on image navigation
 var _imgPendingLoad = null;
 
+// Display dimensions from the most recent applyImageTransform() call, used to
+// compute the viewport centre fraction before applying a new transform so the
+// scroll position can be restored afterwards.  Reset to 0 on each new image.
+var _prevDisplayW = 0;
+var _prevDisplayH = 0;
+
 // Deferred image↔media transition state:
 //   _deferredMediaType ('video'|'audio'|'gif'|null): set when starting an
 //     image→media load without adding the CSS class yet (the old image stays
@@ -478,6 +484,8 @@ function showImage(filename) {
 mainImageEl.addEventListener('load', function() {
   imgSpinnerEl.classList.add('hidden');
   imagePaneEl.classList.add('image-loaded');
+  _prevDisplayW = 0;  // new image — don't inherit previous scroll centre
+  _prevDisplayH = 0;
   applyImageTransform();
   mainImageEl.style.visibility = '';
   if (_pendingMediaStop) {
@@ -512,6 +520,20 @@ function applyImageTransform() {
   var nw = img.naturalWidth;
   var nh = img.naturalHeight;
   if (!nw || !nh) return;
+
+  // Capture the viewport centre as a fraction of the current display size
+  // before we change anything.  Used at the end to restore scroll position.
+  var _snapFX = 0.5, _snapFY = 0.5;
+  if (!ui.zoomFit && _prevDisplayW > 0) {
+    var _snapPW  = pane.clientWidth;
+    var _snapPH  = pane.clientHeight;
+    var _snapOX  = Math.max(0, (_snapPW - _prevDisplayW) / 2);
+    var _snapOY  = Math.max(0, (_snapPH - _prevDisplayH) / 2);
+    _snapFX = Math.max(0, Math.min(1,
+      (pane.scrollLeft + _snapPW / 2 - _snapOX) / _prevDisplayW));
+    _snapFY = Math.max(0, Math.min(1,
+      (pane.scrollTop  + _snapPH / 2 - _snapOY) / _prevDisplayH));
+  }
 
   var rot = ui.rotation;
 
@@ -563,10 +585,34 @@ function applyImageTransform() {
     pane.style.justifyContent  = 'center';
     pane.classList.remove('mode-scroll');
   } else {
-    pane.style.overflow        = 'auto';
-    pane.style.display         = 'block';
+    pane.style.overflow       = 'auto';
+    pane.style.display        = '';           // use base-rule flex
+    pane.style.alignItems     = 'flex-start'; // margin:auto on host overrides
+    pane.style.justifyContent = 'flex-start'; //   when image fits; 0 when not
     pane.classList.add('mode-scroll');
   }
+
+  // Centre-preservation in scroll mode.  After any transform change (scale,
+  // rotation, mirror, flip) we restore the scroll so the image point that was
+  // at the viewport centre before the change is still at the centre after it.
+  //
+  // We track the centre as a fraction (fX, fY) of the previous display
+  // bounding box.  For scale-only changes this is exact.  For rotations it's
+  // a reasonable approximation (visual-space fractions, not image pixels).
+  //
+  // When _prevDisplayW == 0 (new image) we default to 0.5 / 0.5 (centre of
+  // image) and let the scroll clamp handle images smaller than the viewport.
+  if (!ui.zoomFit) {
+    var pW = pane.clientWidth;
+    var pH = pane.clientHeight;
+    var newOffX = Math.max(0, (pW - displayW) / 2);
+    var newOffY = Math.max(0, (pH - displayH) / 2);
+    pane.scrollLeft = Math.max(0, _snapFX * displayW + newOffX - pW / 2);
+    pane.scrollTop  = Math.max(0, _snapFY * displayH + newOffY - pH / 2);
+  }
+
+  _prevDisplayW = displayW;
+  _prevDisplayH = displayH;
 }
 
 // Reapply transform on window resize (fit mode depends on pane size)

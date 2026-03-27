@@ -345,9 +345,11 @@ html, body {
 
 #image-pane.mode-scroll {
   overflow: auto;
-  display: block;
-  align-items: unset;
-  justify-content: unset;
+  /* Keep display:flex from the base rule; alignment is handled by margin:auto
+     on transform-host, which centers the image when it fits and scrolls from
+     the edge (no empty space) when it overflows. */
+  align-items: flex-start;
+  justify-content: flex-start;
   cursor: grab;
 }
 
@@ -358,6 +360,12 @@ html, body {
 #transform-host {
   position: relative;
   flex-shrink: 0;
+}
+
+/* In scroll mode, margin:auto centers transform-host when smaller than the
+   viewport, and collapses to 0 when larger (so scroll starts at the edge). */
+#image-pane.mode-scroll #transform-host {
+  margin: auto;
 }
 
 #main-image {
