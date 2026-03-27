@@ -1629,10 +1629,18 @@ var _queueListenCh = null;
 function _onMediaMsg(e) {
   if (!e.data) return;
   var cmd = e.data.cmd;
-  if (cmd === 'pause' || cmd === 'pause-toggle') {
-    if (!activeMediaEl || activeMediaEl.paused) return;
-    if (cmd === 'pause') activeMediaEl.pause();
-    else                 togglePlayPause();
+  if (cmd === 'pause') {
+    // Another tab started playing and wants everyone else to stop.
+    if (activeMediaEl && !activeMediaEl.paused) activeMediaEl.pause();
+    // Yield the baton — we are no longer the active player.
+    if (_hasAnnounced) {
+      _hasAnnounced = false;
+      _updateChannelWiring();  // may close channel now that baton is yielded
+    }
+  } else if (cmd === 'pause-toggle') {
+    // A tab with no active media is asking whoever holds the baton to toggle.
+    // Must work whether we are currently playing OR paused (e.g. remotely paused).
+    if (activeMediaEl) togglePlayPause();
   } else if (cmd === 'av-settings') {
     var d = e.data;
     if (d.volume  !== undefined) localStorage.setItem('media-volume',  String(d.volume));
@@ -1658,7 +1666,9 @@ function _updateChannelWiring() {
   var visible = document.visibilityState === 'visible';
   var playing = !!(activeMediaEl && !activeMediaEl.paused);
 
-  var needMedia = playing || (visible && activeMediaEl !== null);
+  // Keep the channel open while playing, while holding the baton (_hasAnnounced),
+  // or while foregrounded with active media (so av-settings display stays live).
+  var needMedia = playing || _hasAnnounced || (visible && activeMediaEl !== null);
   if (needMedia && !_mediaListenCh) {
     _mediaListenCh = new BroadcastChannel('media-viewer');
     _mediaListenCh.onmessage = _onMediaMsg;
