@@ -129,16 +129,7 @@ function _qVideoItems() {
 var _preQueueDir  = null;
 var _preQueueFile = null;
 
-var _queueChannel = new BroadcastChannel('media-queue');
-_queueChannel.onmessage = function(e) {
-  if (!e.data || e.data.cmd !== 'q-changed') return;
-  // Background tabs with no queue UI visible skip updates and send q-sync on
-  // becoming visible to catch up (see visibilitychange handler below).
-  if (document.visibilityState !== 'visible' || ui.queueMode === null) return;
-  var prev = _qState;
-  _qState  = { audio: e.data.audio, video: e.data.video };
-  _onQueueStateUpdate(prev);
-};
+// _queueChannel / _mediaChannel: see _updateChannelWiring() below.
 
 // Deferred image↔media transition state:
 //   _deferredMediaType ('video'|'audio'|'gif'|null): set when starting an
@@ -866,7 +857,7 @@ function _setQueueMode(mode) {
     }
     applySelector();
     renderQueuePane();
-    _queueChannel.postMessage({ cmd: 'q-sync' });
+    _updateChannelWiring();
     return;
   }
 
@@ -887,9 +878,7 @@ function _setQueueMode(mode) {
 
   applySelector();
   renderQueuePane();
-  if (mode && !old) {
-    _queueChannel.postMessage({ cmd: 'q-sync' });
-  }
+  _updateChannelWiring();
 }
 
 // Render the queue playlist into #queue-list based on current _qState.
@@ -921,7 +910,7 @@ function renderQueuePane() {
     el.appendChild(name);
 
     el.addEventListener('click', function() {
-      _queueChannel.postMessage({
+      _bcPost('media-queue', {
         cmd: 'q-jump', type: isAudio ? 'audio' : 'video', index: idx
       });
     });
@@ -963,7 +952,7 @@ function _handleQueueKey() {
   } else {
     var mt = mediaType(item.u);
     if (mt !== 'audio' && mt !== 'video') return;
-    _queueChannel.postMessage({
+    _bcPost('media-queue', {
       cmd: 'q-add', type: mt,
       items: [{ dir: currentDir, file: item.u }]
     });
@@ -975,10 +964,10 @@ async function _collectAndQueueDir(dirUrl) {
   var audioItems = [], videoItems = [];
   await _collectQueueables(dirUrl, audioItems, videoItems);
   if (audioItems.length) {
-    _queueChannel.postMessage({ cmd: 'q-add', type: 'audio', items: audioItems });
+    _bcPost('media-queue', { cmd: 'q-add', type: 'audio', items: audioItems });
   }
   if (videoItems.length) {
-    _queueChannel.postMessage({ cmd: 'q-add', type: 'video', items: videoItems });
+    _bcPost('media-queue', { cmd: 'q-add', type: 'video', items: videoItems });
   }
 }
 
@@ -1016,7 +1005,7 @@ async function _collectQueueables(dirUrl, audioItems, videoItems) {
 if (queueClearBtn) {
   queueClearBtn.addEventListener('click', function() {
     if (!ui.queueMode) return;
-    _queueChannel.postMessage({
+    _bcPost('media-queue', {
       cmd: 'q-clear',
       type: ui.queueMode === 'video' ? 'video' : 'audio'
     });
@@ -1234,7 +1223,7 @@ document.addEventListener('keydown', function(e) {
           togglePlayPause();
         } else {
           // No local media — ask whichever other tab is playing audio to toggle.
-          _mediaChannel.postMessage({ cmd: 'pause-toggle' });
+          _bcPost('media-viewer', { cmd: 'pause-toggle' });
         }
         return;
       case '9': e.preventDefault(); adjustVolume(-1.5);  return;
@@ -1247,7 +1236,7 @@ document.addEventListener('keydown', function(e) {
       case 'Q': e.preventDefault(); cycleQueueMode();     return;
       case '\\':
         e.preventDefault();
-        _queueChannel.postMessage({ cmd: 'q-toggle' });
+        _bcPost('media-queue', { cmd: 'q-toggle' });
         return;
     }
   }
@@ -1614,41 +1603,85 @@ catch (err) { console.warn('createMediaElementSource(audioEl) failed:', err); }
 try { _audioCtx.createMediaElementSource(videoEl).connect(_panNode); }
 catch (err) { console.warn('createMediaElementSource(videoEl) failed:', err); }
 
-// ── BroadcastChannel listeners ───────────────────────────────────────────────
+// ── BroadcastChannel infrastructure ─────────────────────────────────────────
 //
-// Message handling is conditional on visibility and playback state so that
-// background tabs do minimal work.  A visibilitychange handler catches up
-// anything skipped while the tab was hidden.
+// Sends always use ephemeral create-post-close objects (_bcPost) so a tab is
+// never woken up by its own messages.
+//
+// Listener channels (_mediaListenCh, _queueListenCh) are opened and closed
+// dynamically by _updateChannelWiring(); a tab that has nothing to receive
+// keeps no channels open and causes zero wakeups.
+//
+//   _mediaListenCh  ('media-viewer') — open while playing (any visibility) OR
+//                   foregrounded with active audio/video (for av-settings display).
+//   _queueListenCh  ('media-queue')  — open only while foregrounded in a queue mode.
+//                   Opening it also sends q-sync to catch up on missed updates.
 
-var _mediaChannel = new BroadcastChannel('media-viewer');
-_mediaChannel.onmessage = function(e) {
+function _bcPost(name, msg) {
+  var ch = new BroadcastChannel(name);
+  ch.postMessage(msg);
+  ch.close();
+}
+
+var _mediaListenCh = null;
+var _queueListenCh = null;
+
+function _onMediaMsg(e) {
   if (!e.data) return;
   var cmd = e.data.cmd;
   if (cmd === 'pause' || cmd === 'pause-toggle') {
-    // Only act if we are currently playing; idle background tabs ignore these.
     if (!activeMediaEl || activeMediaEl.paused) return;
     if (cmd === 'pause') activeMediaEl.pause();
     else                 togglePlayPause();
   } else if (cmd === 'av-settings') {
     var d = e.data;
-    // Always persist — cheap, and needed before the next play start regardless.
     if (d.volume  !== undefined) localStorage.setItem('media-volume',  String(d.volume));
     if (d.muted   !== undefined) localStorage.setItem('media-muted',   String(d.muted));
     if (d.balance !== undefined) localStorage.setItem('media-balance', String(d.balance));
-    // Apply to the element only if currently playing (works in any visibility
-    // state) or if foregrounded with active audio/video (for display refresh).
-    if (activeMediaEl && (!activeMediaEl.paused || document.visibilityState === 'visible')) {
+    if (activeMediaEl) {
       applyAvSettings(activeMediaEl, d);
       _updateVideoControls();
     }
   }
-};
+}
 
-// When a tab becomes visible, catch up on anything skipped while it was hidden.
+function _onQueueMsg(e) {
+  if (!e.data || e.data.cmd !== 'q-changed') return;
+  var prev = _qState;
+  _qState  = { audio: e.data.audio, video: e.data.video };
+  _onQueueStateUpdate(prev);
+}
+
+// Recalculate which listener channels should be open and open/close as needed.
+// Idempotent — safe to call on every relevant state change.
+function _updateChannelWiring() {
+  var visible = document.visibilityState === 'visible';
+  var playing = !!(activeMediaEl && !activeMediaEl.paused);
+
+  var needMedia = playing || (visible && activeMediaEl !== null);
+  if (needMedia && !_mediaListenCh) {
+    _mediaListenCh = new BroadcastChannel('media-viewer');
+    _mediaListenCh.onmessage = _onMediaMsg;
+  } else if (!needMedia && _mediaListenCh) {
+    _mediaListenCh.close();
+    _mediaListenCh = null;
+  }
+
+  var needQueue = visible && ui.queueMode !== null;
+  if (needQueue && !_queueListenCh) {
+    _queueListenCh = new BroadcastChannel('media-queue');
+    _queueListenCh.onmessage = _onQueueMsg;
+    _queueListenCh.postMessage({ cmd: 'q-sync' });  // catch up on missed updates
+  } else if (!needQueue && _queueListenCh) {
+    _queueListenCh.close();
+    _queueListenCh = null;
+  }
+}
+
+// On visibility change: re-apply persisted A/V settings (may have drifted while
+// hidden), then rewire channels for the new visibility state.
 document.addEventListener('visibilitychange', function() {
-  if (document.visibilityState !== 'visible') return;
-  // Re-apply persisted A/V settings in case they changed while we were hidden.
-  if (activeMediaEl) {
+  if (document.visibilityState === 'visible' && activeMediaEl) {
     applyAvSettings(activeMediaEl, {
       volume:  parseFloat(localStorage.getItem('media-volume')  || '1'),
       muted:   localStorage.getItem('media-muted')  === 'true',
@@ -1656,10 +1689,7 @@ document.addEventListener('visibilitychange', function() {
     });
     _updateVideoControls();
   }
-  // Re-sync queue state if the queue pane is visible.
-  if (ui.queueMode !== null) {
-    _queueChannel.postMessage({ cmd: 'q-sync' });
-  }
+  _updateChannelWiring();
 });
 
 // ── Transition cover ────────────────────────────────────────────────────────
@@ -1687,7 +1717,7 @@ function _stopActiveMedia() {
   _shouldAnnounce = false;
   if (_hasAnnounced) {
     _hasAnnounced = false;
-    _mediaChannel.postMessage({ cmd: 'media-stopped' });
+    _bcPost('media-viewer', { cmd: 'media-stopped' });
   }
   if (mediaErrorEl) mediaErrorEl.classList.add('hidden');
   if (!activeMediaEl) return;
@@ -1695,6 +1725,7 @@ function _stopActiveMedia() {
   activeMediaEl.src = '';
   activeMediaEl     = null;
   imagePaneEl.classList.remove('media-video', 'media-audio', 'media-gif');
+  _updateChannelWiring();  // activeMediaEl just cleared
 }
 
 function _clearPosCheckpoint() {
@@ -1856,29 +1887,32 @@ function _onTimeUpdate() {
 function _onMediaEnded() {
   if (_hasAnnounced) {
     _hasAnnounced = false;
-    _mediaChannel.postMessage({ cmd: 'media-stopped' });
+    _bcPost('media-viewer', { cmd: 'media-stopped' });
   }
   // In video queue mode, auto-advance to the next queue item.
   if (ui.queueMode === 'video') {
     var next = _qState.video.index + 1;
     if (next < _qVideoItems().length) {
-      _queueChannel.postMessage({ cmd: 'q-jump', type: 'video', index: next });
+      _bcPost('media-queue', { cmd: 'q-jump', type: 'video', index: next });
       // _onQueueStateUpdate fires when the broadcast comes back and loads it.
     }
+    _updateChannelWiring();  // no longer playing
     return;
   }
   if (currentFile && currentDir) {
     _clearSavedPosition(currentDir.replace(/\/$/, '') + '/' + currentFile);
   }
   _updateVideoControls();
+  _updateChannelWiring();  // no longer playing
 }
 
 function _onMediaPlaying() {
   if (_shouldAnnounce) {
     _shouldAnnounce = false;
     _hasAnnounced   = true;
-    _mediaChannel.postMessage({ cmd: 'pause' });
+    _bcPost('media-viewer', { cmd: 'pause' });
   }
+  _updateChannelWiring();  // now playing
 }
 
 function _onMediaError() {
@@ -1936,7 +1970,7 @@ function toggleMute() {
     muted = !(localStorage.getItem('media-muted') === 'true');
   }
   localStorage.setItem('media-muted', String(muted));
-  _mediaChannel.postMessage({ cmd: 'av-settings', muted: muted });
+  _bcPost('media-viewer', { cmd: 'av-settings', muted: muted });
   _updateVideoControls();
 }
 
@@ -1966,7 +2000,7 @@ function adjustVolume(dBDelta) {
   }
   localStorage.setItem('media-volume', String(vol));
   localStorage.setItem('media-muted',  'false');
-  _mediaChannel.postMessage({ cmd: 'av-settings', volume: vol, muted: false });
+  _bcPost('media-viewer', { cmd: 'av-settings', volume: vol, muted: false });
   _updateVideoControls();
 }
 
@@ -1983,7 +2017,7 @@ function adjustBalance(delta) {
   _panNode.pan.value = _panValue;
   _ensureAudioContext();  // resume if suspended
   localStorage.setItem('media-balance', String(_panValue));
-  _mediaChannel.postMessage({ cmd: 'av-settings', balance: _panValue });
+  _bcPost('media-viewer', { cmd: 'av-settings', balance: _panValue });
   _updateVideoControls();
 }
 
@@ -2129,6 +2163,7 @@ function showMedia(filename, type, deferred) {
   // Balance is applied via _panNode (shared, initialised from localStorage in
   // media-shared.js) and kept in sync on every adjustBalance() / av-settings
   // message, so no per-file re-sync is needed here.
+  _updateChannelWiring();  // activeMediaEl just changed
 
   // Reset per-file video filter to defaults.
   _vContrast = _vBrightness = 1.0;
@@ -2156,10 +2191,6 @@ function showMedia(filename, type, deferred) {
 
 function init() {
   applyHistoryState(history.state);
-
-  // Fetch current queue state from background so the pane can reflect it
-  // immediately if the user enters queue mode.
-  _queueChannel.postMessage({ cmd: 'q-sync' });
 
   var params = getUrlParams();
   if (!params.dir) {
