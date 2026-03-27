@@ -409,6 +409,23 @@ html, body {
   white-space: pre;
 }
 
+/* Transition cover — snaps opaque (no transition) to hide old content, then
+   fades out (0.15s) once new content is ready.  z-index 4: above content
+   layers (2–3) but below the spinner (5) so loading state stays visible. */
+#transition-cover {
+  position: absolute;
+  inset: 0;
+  background: #111111;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 4;
+}
+#transition-cover.covering {
+  opacity: 1;
+  transition: none;  /* snap opaque instantly */
+}
+
 /* No-image hint */
 #no-image-hint {
   position: absolute;

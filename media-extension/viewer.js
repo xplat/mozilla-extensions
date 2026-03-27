@@ -106,10 +106,11 @@ var viewerScreenEl  = document.getElementById('viewer-screen');
 var dirPathEl       = document.getElementById('dir-path');
 var fileListEl      = document.getElementById('file-list');
 var selectorPaneEl  = document.getElementById('selector-pane');
-var imagePaneEl     = document.getElementById('image-pane');
-var transformHostEl = document.getElementById('transform-host');
-var mainImageEl     = document.getElementById('main-image');
-var imgSpinnerEl    = document.getElementById('img-spinner');
+var imagePaneEl       = document.getElementById('image-pane');
+var transformHostEl   = document.getElementById('transform-host');
+var mainImageEl       = document.getElementById('main-image');
+var imgSpinnerEl      = document.getElementById('img-spinner');
+var transitionCoverEl = document.getElementById('transition-cover');
 var infoOverlayEl   = document.getElementById('info-overlay');
 var infoContentEl   = document.getElementById('info-content');
 var noImageHintEl   = document.getElementById('no-image-hint');
@@ -469,6 +470,7 @@ mainImageEl.addEventListener('load', function() {
   imagePaneEl.classList.add('image-loaded');
   applyImageTransform();
   mainImageEl.style.visibility = '';
+  _endTransitionCover();
 });
 
 mainImageEl.addEventListener('error', function() {
@@ -1301,6 +1303,24 @@ _mediaChannel.onmessage = function(e) {
   }
 };
 
+// ── Transition cover ────────────────────────────────────────────────────────
+//
+// Used for image↔media mode switches.  Snaps opaque (transition:none) to hide
+// any intermediate layout state, then fades out (0.15s) when new content is
+// ready.  Calling _endTransitionCover() when no cover was started is harmless.
+
+function _startTransitionCover() {
+  transitionCoverEl.classList.add('covering');
+}
+
+function _endTransitionCover() {
+  // One rAF defers the fade until after the browser has painted the newly
+  // ready content at least once, so the fade reveals a stable frame.
+  requestAnimationFrame(function() {
+    transitionCoverEl.classList.remove('covering');
+  });
+}
+
 // ── Stop / tear-down ────────────────────────────────────────────────────────
 
 function _stopActiveMedia() {
@@ -1428,6 +1448,7 @@ function _onMediaLoadedMetadata() {
   }
 
   _updateVideoControls();
+  _endTransitionCover();
   // Gif-loops always play (they're treated as looping images, not video).
   // For real video/audio, respect the autoplay toggle.
   if (_autoplay || imagePaneEl.classList.contains('media-gif')) {
@@ -1674,21 +1695,29 @@ function showMediaFile(filename) {
   _stopActiveMedia();
   if (type === 'image') {
     // image→image: leave mainImageEl.src and image-loaded intact so the old
-    // image remains visible while the new one preloads.
-    // media→image: clear stale src so the old video frame doesn't flash.
+    // image remains visible while the new one preloads.  No cover needed —
+    // the preload+visibility:hidden swap is already seamless.
+    // media→image: cover the blank while the new image loads.
     if (wasMedia) {
+      _startTransitionCover();
       mainImageEl.src = '';
       imagePaneEl.classList.remove('image-loaded');
     }
     showImage(filename);
   } else if (type === 'video' || type === 'audio') {
+    _startTransitionCover();
     mainImageEl.src = '';
     imagePaneEl.classList.remove('image-loaded');
     showMedia(filename, type);
   } else {
     // Unknown type: show empty pane / no-content hint.
+    _startTransitionCover();
     mainImageEl.src = '';
     imagePaneEl.classList.remove('image-loaded');
+    // Nothing to wait for — fade out cover after one frame.
+    requestAnimationFrame(function() {
+      transitionCoverEl.classList.remove('covering');
+    });
   }
 }
 
