@@ -18,7 +18,8 @@ dependencies = [
 [project.scripts]
 media_native_host = "media_native_host:main"
 media-open        = "media_open:main"
+media-queue       = "media_queue:main"
 
 [tool.setuptools]
-py-modules = ["media_native_host", "media_open"]
+py-modules = ["media_native_host", "media_open", "media_queue"]
 packages   = ["thumbnailers", "thumbnailers.xdg"]

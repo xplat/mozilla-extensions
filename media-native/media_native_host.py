@@ -202,7 +202,30 @@ def validate_open_request(req):
     return {'dir': dir_path, 'file': file_name}
 
 
+def _validate_queue_items(items):
+    """Return only items whose files actually exist on disk."""
+    valid = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        d, f = item.get('dir', ''), item.get('file', '')
+        if d and f and os.path.isfile(os.path.join(d, f)):
+            valid.append({'dir': d, 'file': f})
+    return valid
+
+
 def _handle_req(req):
+    if req.get('type') == 'queue':
+        audio = _validate_queue_items(req.get('audio', []))
+        video = _validate_queue_items(req.get('video', []))
+        if audio or video:
+            send_message({
+                'event': 'queue',
+                'audio': audio,
+                'video': video,
+                'play':  bool(req.get('play', False)),
+            })
+        return
     validated = validate_open_request(req)
     if validated:
         send_message({
