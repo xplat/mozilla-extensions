@@ -1458,6 +1458,7 @@ function _posKey(fileUrl) {
 
 function _savePosition(mediaEl) {
   if (!currentFile || !currentDir || mediaEl.paused || mediaEl.ended) return;
+  if (imagePaneEl.classList.contains('media-gif')) return;
   var fileUrl = currentDir.replace(/\/$/, '') + '/' + currentFile;
   localStorage.setItem(_posKey(fileUrl), String(mediaEl.currentTime));
 }
@@ -1515,15 +1516,12 @@ function _onMediaLoadedMetadata() {
   var mediaEl = this;
   var fileUrl = currentDir.replace(/\/$/, '') + '/' + currentFile;
 
-  // Restore saved position before playback starts
-  var saved = _getSavedPosition(fileUrl);
-  if (saved > 0 && isFinite(mediaEl.duration) && saved < mediaEl.duration) {
-    mediaEl.currentTime = saved;
-  }
-
-  // Detect gif-loop: short video with no audio → play silently in a loop
+  // Detect gif-loop first: short video with no audio → play silently in a loop.
+  // Must run before the position-restore below so we can skip restoring for gifs.
+  var isGif = false;
   if (mediaEl === videoEl) {
     if (isFinite(videoEl.duration) && videoEl.duration < 60 && !videoEl.mozHasAudio) {
+      isGif = true;
       videoEl.loop  = true;
       videoEl.muted = true;
       if (_deferredMediaType) {
@@ -1531,6 +1529,16 @@ function _onMediaLoadedMetadata() {
       } else {
         imagePaneEl.classList.replace('media-video', 'media-gif');
       }
+    }
+  }
+
+  // Restore saved position before playback starts (gif-loops are excluded:
+  // they have no meaningful temporal position to resume).
+  var saved = 0;
+  if (!isGif) {
+    saved = _getSavedPosition(fileUrl);
+    if (saved > 0 && isFinite(mediaEl.duration) && saved < mediaEl.duration) {
+      mediaEl.currentTime = saved;
     }
   }
 
