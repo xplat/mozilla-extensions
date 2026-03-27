@@ -135,9 +135,15 @@
       return h > 0 ? h + ':' + p(m) + ':' + p(s) : m + ':' + p(s);
     }
 
+    function getItems() {
+      try { return JSON.parse(localStorage.getItem('media-audio-queue') || '{}').items || []; }
+      catch (e) { return []; }
+    }
+
     function render(state) {
-      var a = state.audio;
-      if (!a.items.length) {
+      var a     = state.audio;
+      var items = getItems();
+      if (!items.length) {
         statusEl.textContent = 'QUEUE EMPTY';
         statusEl.className   = '';
         trackEl.textContent  = '';
@@ -145,8 +151,8 @@
         btnPlay.textContent  = '▶';
         return;
       }
-      var item = a.items[a.index] || {};
-      trackEl.textContent = (a.index + 1) + '/' + a.items.length + '  ' + (item.file || '');
+      var item = items[a.index] || {};
+      trackEl.textContent = (a.index + 1) + '/' + items.length + '  ' + (item.file || '');
       timeEl.textContent  = fmtTime(a.time || 0);
 
       if (a.suppressed) {
@@ -176,7 +182,7 @@
     // Live updates via BroadcastChannel (popup shares extension origin).
     var ch = new BroadcastChannel('media-queue');
     ch.onmessage = function(e) {
-      if (e.data && e.data.cmd === 'q-state') render(e.data);
+      if (e.data && e.data.cmd === 'q-changed') render(e.data);
     };
   </script>
 </body>

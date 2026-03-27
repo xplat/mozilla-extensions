@@ -109,11 +109,24 @@ var _prevMirror = false;
 var _prevFlip   = false;
 
 // ── Queue state (mirrored from background via BroadcastChannel) ───────────
+//
+// Only volatile bits (index, time, playing, suppressed) come over the wire.
+// Items live in localStorage and are read via _qAudioItems()/_qVideoItems()
+// so large arrays are never pushed through the channel.
 
 var _qState = {
-  audio: { items: [], index: 0, time: 0, playing: false, suppressed: false },
-  video: { items: [], index: 0 }
+  audio: { index: 0, time: 0, playing: false, suppressed: false },
+  video: { index: 0 }
 };
+
+function _qAudioItems() {
+  try { return JSON.parse(localStorage.getItem('media-audio-queue') || '{}').items || []; }
+  catch (e) { return []; }
+}
+function _qVideoItems() {
+  try { return JSON.parse(localStorage.getItem('media-video-queue') || '{}').items || []; }
+  catch (e) { return []; }
+}
 
 // Saved dir/file to restore when exiting video queue mode.
 var _preQueueDir  = null;
@@ -121,7 +134,7 @@ var _preQueueFile = null;
 
 var _queueChannel = new BroadcastChannel('media-queue');
 _queueChannel.onmessage = function(e) {
-  if (!e.data || e.data.cmd !== 'q-state') return;
+  if (!e.data || e.data.cmd !== 'q-changed') return;
   var prev = _qState;
   _qState  = { audio: e.data.audio, video: e.data.video };
   _onQueueStateUpdate(prev);
@@ -850,7 +863,7 @@ function _setQueueMode(mode) {
     // Entering video queue mode: save current position, load first queue item.
     _preQueueDir  = currentDir;
     _preQueueFile = currentFile;
-    var item = _qState.video.items[_qState.video.index];
+    var item = _qVideoItems()[_qState.video.index];
     if (item) {
       currentDir  = item.dir;
       currentFile = item.file;
@@ -891,9 +904,10 @@ function renderQueuePane() {
 
   var isAudio = (ui.queueMode === 'audio');
   var q       = isAudio ? _qState.audio : _qState.video;
+  var items   = isAudio ? _qAudioItems() : _qVideoItems();
   queueListEl.innerHTML = '';
 
-  q.items.forEach(function(item, idx) {
+  items.forEach(function(item, idx) {
     var el   = document.createElement('div');
     el.className = 'file-item queue-item' +
                    (idx === q.index ? ' playing' : '');
@@ -930,7 +944,7 @@ function _onQueueStateUpdate(prev) {
   if (ui.queueMode === 'video') {
     var newIdx = _qState.video.index;
     if (newIdx !== prev.video.index) {
-      var item = _qState.video.items[newIdx];
+      var item = _qVideoItems()[newIdx];
       if (item) {
         currentDir  = item.dir;
         currentFile = item.file;
@@ -1829,7 +1843,7 @@ function _onMediaEnded() {
   // In video queue mode, auto-advance to the next queue item.
   if (ui.queueMode === 'video') {
     var next = _qState.video.index + 1;
-    if (next < _qState.video.items.length) {
+    if (next < _qVideoItems().length) {
       _queueChannel.postMessage({ cmd: 'q-jump', type: 'video', index: next });
       // _onQueueStateUpdate fires when the broadcast comes back and loads it.
     }

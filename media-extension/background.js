@@ -173,16 +173,13 @@ function _currentTime() {
 }
 
 function _broadcastState() {
+  // Items are already in localStorage (written by _saveQueueState before every
+  // broadcast); we send only the volatile bits so we don't push potentially
+  // large arrays through the channel on every skip or play/pause.
   _queueChannel.postMessage({
-    cmd:   'q-state',
-    audio: {
-      items:      _aq.items,
-      index:      _aq.index,
-      time:       _currentTime(),
-      playing:    _aqPlaying,
-      suppressed: _aqSuppressed
-    },
-    video: { items: _vq.items, index: _vq.index }
+    cmd:   'q-changed',
+    audio: { index: _aq.index, time: _currentTime(), playing: _aqPlaying, suppressed: _aqSuppressed },
+    video: { index: _vq.index }
   });
 }
 
@@ -397,14 +394,8 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 
   function state() {
     return {
-      audio: {
-        items:      _aq.items,
-        index:      _aq.index,
-        time:       _currentTime(),
-        playing:    _aqPlaying,
-        suppressed: _aqSuppressed
-      },
-      video: { items: _vq.items, index: _vq.index }
+      audio: { index: _aq.index, time: _currentTime(), playing: _aqPlaying, suppressed: _aqSuppressed },
+      video: { index: _vq.index }
     };
   }
 
