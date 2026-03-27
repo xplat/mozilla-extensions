@@ -96,11 +96,15 @@ var selectorStateBeforeFS = true;
 // In-flight preload image — used to avoid blanking/squishing on image navigation
 var _imgPendingLoad = null;
 
-// Display dimensions from the most recent applyImageTransform() call, used to
-// compute the viewport centre fraction before applying a new transform so the
-// scroll position can be restored afterwards.  Reset to 0 on each new image.
+// Display size and full transform state from the most recent applyImageTransform()
+// call.  Used to recover the exact image pixel at the viewport centre before a
+// transform change so it can be repositioned afterwards.  Reset on new image.
 var _prevDisplayW = 0;
 var _prevDisplayH = 0;
+var _prevRot    = 0;
+var _prevScale  = 1;
+var _prevMirror = false;
+var _prevFlip   = false;
 
 // Deferred image↔media transition state:
 //   _deferredMediaType ('video'|'audio'|'gif'|null): set when starting an
@@ -512,6 +516,39 @@ mainImageEl.addEventListener('error', function() {
 //
 // For 90°/270° rotation, visual W and H are swapped relative to natural dims.
 
+// Forward: image-centre offset → visual-centre offset under the given transform.
+// CSS transform order is "rotate scaleX scaleY scale", which means transforms
+// apply right-to-left to a point: scale → flip (scaleY−1) → mirror (scaleX−1)
+// → rotate.
+function _imageOffsetToVisual(ox, oy, rot, mirror, flip, scale) {
+  ox *= scale;  oy *= scale;
+  if (flip)   oy = -oy;
+  if (mirror) ox = -ox;
+  var rx, ry;
+  switch (rot) {
+    case  90: rx = -oy; ry =  ox; break;
+    case 180: rx = -ox; ry = -oy; break;
+    case 270: rx =  oy; ry = -ox; break;
+    default:  rx =  ox; ry =  oy;
+  }
+  return { x: rx, y: ry };
+}
+
+// Inverse: visual-centre offset → image-centre offset (exact inverse of above).
+function _visualOffsetToImage(ox, oy, rot, mirror, flip, scale) {
+  var rx, ry;
+  switch (rot) {
+    case  90: rx =  oy; ry = -ox; break;
+    case 180: rx = -ox; ry = -oy; break;
+    case 270: rx = -oy; ry =  ox; break;
+    default:  rx =  ox; ry =  oy;
+  }
+  if (mirror) rx = -rx;
+  if (flip)   ry = -ry;
+  rx /= scale;  ry /= scale;
+  return { x: rx, y: ry };
+}
+
 function applyImageTransform() {
   var img  = mainImageEl;
   var host = transformHostEl;
@@ -521,18 +558,21 @@ function applyImageTransform() {
   var nh = img.naturalHeight;
   if (!nw || !nh) return;
 
-  // Capture the viewport centre as a fraction of the current display size
-  // before we change anything.  Used at the end to restore scroll position.
-  var _snapFX = 0.5, _snapFY = 0.5;
+  // Capture the exact image pixel at the viewport centre before any changes.
+  // Defaults to (0, 0) = image centre for new images (_prevDisplayW == 0).
+  var _snapIPX = 0, _snapIPY = 0;
   if (!ui.zoomFit && _prevDisplayW > 0) {
-    var _snapPW  = pane.clientWidth;
-    var _snapPH  = pane.clientHeight;
-    var _snapOX  = Math.max(0, (_snapPW - _prevDisplayW) / 2);
-    var _snapOY  = Math.max(0, (_snapPH - _prevDisplayH) / 2);
-    _snapFX = Math.max(0, Math.min(1,
-      (pane.scrollLeft + _snapPW / 2 - _snapOX) / _prevDisplayW));
-    _snapFY = Math.max(0, Math.min(1,
-      (pane.scrollTop  + _snapPH / 2 - _snapOY) / _prevDisplayH));
+    var _snapPW = pane.clientWidth;
+    var _snapPH = pane.clientHeight;
+    var _snapOX = Math.max(0, (_snapPW - _prevDisplayW) / 2);
+    var _snapOY = Math.max(0, (_snapPH - _prevDisplayH) / 2);
+    // Viewport centre → transform-host-centre offset
+    var _vcOX = pane.scrollLeft + _snapPW / 2 - _snapOX - _prevDisplayW / 2;
+    var _vcOY = pane.scrollTop  + _snapPH / 2 - _snapOY - _prevDisplayH / 2;
+    var _snap = _visualOffsetToImage(_vcOX, _vcOY,
+                                     _prevRot, _prevMirror, _prevFlip, _prevScale);
+    _snapIPX = _snap.x;
+    _snapIPY = _snap.y;
   }
 
   var rot = ui.rotation;
@@ -593,26 +633,30 @@ function applyImageTransform() {
   }
 
   // Centre-preservation in scroll mode.  After any transform change (scale,
-  // rotation, mirror, flip) we restore the scroll so the image point that was
+  // rotation, mirror, flip) we restore the scroll so the image pixel that was
   // at the viewport centre before the change is still at the centre after it.
   //
-  // We track the centre as a fraction (fX, fY) of the previous display
-  // bounding box.  For scale-only changes this is exact.  For rotations it's
-  // a reasonable approximation (visual-space fractions, not image pixels).
-  //
-  // When _prevDisplayW == 0 (new image) we default to 0.5 / 0.5 (centre of
-  // image) and let the scroll clamp handle images smaller than the viewport.
+  // We recover the image pixel via the exact inverse transform, then re-apply
+  // the new forward transform to find where it lands.  Exact for all cases.
+  // When _prevDisplayW == 0 (new image) _snapIPX/Y default to (0,0) = image
+  // centre, which centres the image in the viewport.
   if (!ui.zoomFit) {
     var pW = pane.clientWidth;
     var pH = pane.clientHeight;
     var newOffX = Math.max(0, (pW - displayW) / 2);
     var newOffY = Math.max(0, (pH - displayH) / 2);
-    pane.scrollLeft = Math.max(0, _snapFX * displayW + newOffX - pW / 2);
-    pane.scrollTop  = Math.max(0, _snapFY * displayH + newOffY - pH / 2);
+    var newVis  = _imageOffsetToVisual(_snapIPX, _snapIPY,
+                                       rot, ui.mirror, ui.flip, scale);
+    pane.scrollLeft = Math.max(0, displayW / 2 + newVis.x + newOffX - pW / 2);
+    pane.scrollTop  = Math.max(0, displayH / 2 + newVis.y + newOffY - pH / 2);
   }
 
   _prevDisplayW = displayW;
   _prevDisplayH = displayH;
+  _prevRot    = rot;
+  _prevScale  = scale;
+  _prevMirror = ui.mirror;
+  _prevFlip   = ui.flip;
 }
 
 // Reapply transform on window resize (fit mode depends on pane size)
