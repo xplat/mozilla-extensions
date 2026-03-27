@@ -75,6 +75,8 @@ var ui = {
   mirror:          false,  // horizontal mirror (m key) — xzgv 'm'
   flip:            false,  // vertical flip   (F key) — xzgv 'f'
   scale:           1.0,    // scale factor when zoomFit=false
+  // Queue mode — NOT persisted (resets on page load)
+  queueMode:       null,   // null | 'audio' | 'video'
 };
 
 // Focus mode — NOT persisted (resets to selector on page load)
@@ -105,6 +107,25 @@ var _prevRot    = 0;
 var _prevScale  = 1;
 var _prevMirror = false;
 var _prevFlip   = false;
+
+// ── Queue state (mirrored from background via BroadcastChannel) ───────────
+
+var _qState = {
+  audio: { items: [], index: 0, time: 0, playing: false, suppressed: false },
+  video: { items: [], index: 0 }
+};
+
+// Saved dir/file to restore when exiting video queue mode.
+var _preQueueDir  = null;
+var _preQueueFile = null;
+
+var _queueChannel = new BroadcastChannel('media-queue');
+_queueChannel.onmessage = function(e) {
+  if (!e.data || e.data.cmd !== 'q-state') return;
+  var prev = _qState;
+  _qState  = { audio: e.data.audio, video: e.data.video };
+  _onQueueStateUpdate(prev);
+};
 
 // Deferred image↔media transition state:
 //   _deferredMediaType ('video'|'audio'|'gif'|null): set when starting an
@@ -140,6 +161,11 @@ var paneDividerEl  = document.getElementById('pane-divider');
 var btnRecursive = document.getElementById('btn-recursive');
 var btnHidden    = document.getElementById('btn-hidden');
 var btnSort      = document.getElementById('btn-sort');
+
+var queuePaneEl      = document.getElementById('queue-pane');
+var queuePaneTitleEl = document.getElementById('queue-pane-title');
+var queueListEl      = document.getElementById('queue-list');
+var queueClearBtn    = document.getElementById('queue-clear-btn');
 
 // ── Screen helpers ─────────────────────────────────────────────────────────
 
@@ -795,6 +821,10 @@ function adjustSelectorWidth(delta) {
 
 function applySelector() {
   viewerScreenEl.classList.toggle('no-selector', !ui.selectorVisible);
+  viewerScreenEl.classList.toggle('queue-mode',  !!ui.queueMode);
+  if (ui.queueMode && queuePaneTitleEl) {
+    queuePaneTitleEl.textContent = (ui.queueMode === 'video') ? 'VIDEO QUEUE' : 'AUDIO QUEUE';
+  }
   if (btnRecursive) btnRecursive.classList.toggle('active', ui.recursive);
 }
 
@@ -802,6 +832,186 @@ function toggleSelector() {
   ui.selectorVisible = !ui.selectorVisible;
   applySelector();
   persistState(false);
+}
+
+// ── Queue mode ─────────────────────────────────────────────────────────────
+
+// Cycle: null → 'audio' → 'video' → null
+function cycleQueueMode() {
+  var modes = [null, 'audio', 'video'];
+  _setQueueMode(modes[(modes.indexOf(ui.queueMode) + 1) % modes.length]);
+}
+
+function _setQueueMode(mode) {
+  var old = ui.queueMode;
+  ui.queueMode = mode;
+
+  if (mode === 'video' && old !== 'video') {
+    // Entering video queue mode: save current position, load first queue item.
+    _preQueueDir  = currentDir;
+    _preQueueFile = currentFile;
+    var item = _qState.video.items[_qState.video.index];
+    if (item) {
+      currentDir  = item.dir;
+      currentFile = item.file;
+      showMediaFile(item.file);
+    }
+    applySelector();
+    renderQueuePane();
+    _queueChannel.postMessage({ cmd: 'q-sync' });
+    return;
+  }
+
+  if (old === 'video' && mode !== 'video') {
+    // Leaving video queue mode: stop queue video, restore saved position.
+    _stopActiveMedia();
+    var savedDir  = _preQueueDir;
+    var savedFile = _preQueueFile;
+    _preQueueDir  = null;
+    _preQueueFile = null;
+    if (savedDir) {
+      currentDir  = savedDir;
+      currentFile = savedFile;
+      loadDir(savedDir, false);  // reloads listing and shows savedFile
+      return;  // loadDir calls applySelector / applyUiState
+    }
+  }
+
+  applySelector();
+  renderQueuePane();
+  if (mode && !old) {
+    _queueChannel.postMessage({ cmd: 'q-sync' });
+  }
+}
+
+// Render the queue playlist into #queue-list based on current _qState.
+function renderQueuePane() {
+  if (!queueListEl) return;
+  if (!ui.queueMode) { queueListEl.innerHTML = ''; return; }
+
+  var isAudio = (ui.queueMode === 'audio');
+  var q       = isAudio ? _qState.audio : _qState.video;
+  queueListEl.innerHTML = '';
+
+  q.items.forEach(function(item, idx) {
+    var el   = document.createElement('div');
+    el.className = 'file-item queue-item' +
+                   (idx === q.index ? ' playing' : '');
+    el.dataset.idx = String(idx);
+
+    var icon = document.createElement('span');
+    icon.className   = 'file-icon';
+    icon.textContent = isAudio ? '♪' : '▶';
+
+    var name = document.createElement('span');
+    name.className   = 'file-name';
+    name.textContent = item.file;
+    name.title       = item.file;
+
+    el.appendChild(icon);
+    el.appendChild(name);
+
+    el.addEventListener('click', function() {
+      _queueChannel.postMessage({
+        cmd: 'q-jump', type: isAudio ? 'audio' : 'video', index: idx
+      });
+    });
+
+    queueListEl.appendChild(el);
+  });
+
+  // Scroll current item into view.
+  var cur = queueListEl.querySelector('.playing');
+  if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
+
+// Called when background broadcasts new queue state.
+function _onQueueStateUpdate(prev) {
+  if (ui.queueMode === 'video') {
+    var newIdx = _qState.video.index;
+    if (newIdx !== prev.video.index) {
+      var item = _qState.video.items[newIdx];
+      if (item) {
+        currentDir  = item.dir;
+        currentFile = item.file;
+        showMediaFile(item.file);
+      }
+    }
+  }
+  renderQueuePane();
+}
+
+// Queue the currently highlighted selector item (or a directory's contents).
+// On a file: add to queue and advance to next item.
+// On a directory: collect all audio/video files (and CD/Disc subdirs) and
+//   add them in sorted order; don't advance the cursor.
+function _handleQueueKey() {
+  if (selectedIdx < 0 || !listing[selectedIdx]) return;
+  var item = listing[selectedIdx];
+  if (item.t === 'd') {
+    var dirUrl = currentDir.replace(/\/$/, '') + '/' + item.u;
+    _collectAndQueueDir(dirUrl).catch(function() {});
+  } else {
+    var mt = mediaType(item.u);
+    if (mt !== 'audio' && mt !== 'video') return;
+    _queueChannel.postMessage({
+      cmd: 'q-add', type: mt,
+      items: [{ dir: currentDir, file: item.u }]
+    });
+    nextImage();
+  }
+}
+
+async function _collectAndQueueDir(dirUrl) {
+  var audioItems = [], videoItems = [];
+  await _collectQueueables(dirUrl, audioItems, videoItems);
+  if (audioItems.length) {
+    _queueChannel.postMessage({ cmd: 'q-add', type: 'audio', items: audioItems });
+  }
+  if (videoItems.length) {
+    _queueChannel.postMessage({ cmd: 'q-add', type: 'video', items: videoItems });
+  }
+}
+
+async function _collectQueueables(dirUrl, audioItems, videoItems) {
+  var resp = await fetch(toProxyDir(dirUrl, false));
+  if (!resp.ok) return;
+  var data  = await resp.json();
+  var items = data.files || [];
+
+  var dirs  = items.filter(function(i) { return i.t === 'd'; });
+  var files = items.filter(function(i) { return i.t !== 'd'; });
+
+  files.sort(function(a, b) {
+    return a.u.toLowerCase().localeCompare(b.u.toLowerCase());
+  });
+  files.forEach(function(f) {
+    var mt = mediaType(f.u);
+    if (mt === 'audio') audioItems.push({ dir: dirUrl, file: f.u });
+    else if (mt === 'video') videoItems.push({ dir: dirUrl, file: f.u });
+  });
+
+  // Recurse only into subdirectories named like "CD 1", "Disc 2", etc.
+  var cdDirs = dirs.filter(function(d) { return /^(CD|Disc)\s*\d+$/i.test(d.u); });
+  cdDirs.sort(function(a, b) {
+    return parseInt(a.u.match(/\d+/)[0]) - parseInt(b.u.match(/\d+/)[0]);
+  });
+  for (var i = 0; i < cdDirs.length; i++) {
+    await _collectQueueables(
+      dirUrl.replace(/\/$/, '') + '/' + cdDirs[i].u, audioItems, videoItems
+    );
+  }
+}
+
+// Wire up clear button.
+if (queueClearBtn) {
+  queueClearBtn.addEventListener('click', function() {
+    if (!ui.queueMode) return;
+    _queueChannel.postMessage({
+      cmd: 'q-clear',
+      type: ui.queueMode === 'video' ? 'video' : 'audio'
+    });
+  });
 }
 
 // ── Browser fullscreen ─────────────────────────────────────────────────────
@@ -1023,6 +1233,13 @@ document.addEventListener('keydown', function(e) {
       case '(': e.preventDefault(); adjustBalance(-0.1); return;
       case ')': e.preventDefault(); adjustBalance(+0.1); return;
       case 'A': e.preventDefault(); toggleAutoplay(); return;
+      // Queue
+      case 'q': e.preventDefault(); _handleQueueKey();    return;
+      case 'Q': e.preventDefault(); cycleQueueMode();     return;
+      case '\\':
+        e.preventDefault();
+        _queueChannel.postMessage({ cmd: 'q-toggle' });
+        return;
     }
   }
 
@@ -1371,6 +1588,7 @@ var activeMediaEl       = null;  // currently active <video> or <audio>, or null
 var _posCheckpointTimer = null;  // setTimeout handle for position-save throttle
 var _autoplay           = true;  // if false, media loads but does not start playing
 var _shouldAnnounce     = false; // true when audio-bearing media loaded; cleared after first 'playing' event
+var _hasAnnounced       = false; // true after we've broadcast 'pause' to other tabs; cleared on stop/end
 
 // Video color/quality filter state (reset on each new file; applied via CSS filter on videoEl)
 var _vContrast   = 1.0;  // CSS contrast()   — mplayer keys 1/2
@@ -1435,6 +1653,10 @@ function _endTransitionCover() {
 function _stopActiveMedia() {
   _clearPosCheckpoint();
   _shouldAnnounce = false;
+  if (_hasAnnounced) {
+    _hasAnnounced = false;
+    _mediaChannel.postMessage({ cmd: 'media-stopped' });
+  }
   if (mediaErrorEl) mediaErrorEl.classList.add('hidden');
   if (!activeMediaEl) return;
   activeMediaEl.pause();
@@ -1600,6 +1822,19 @@ function _onTimeUpdate() {
 }
 
 function _onMediaEnded() {
+  if (_hasAnnounced) {
+    _hasAnnounced = false;
+    _mediaChannel.postMessage({ cmd: 'media-stopped' });
+  }
+  // In video queue mode, auto-advance to the next queue item.
+  if (ui.queueMode === 'video') {
+    var next = _qState.video.index + 1;
+    if (next < _qState.video.items.length) {
+      _queueChannel.postMessage({ cmd: 'q-jump', type: 'video', index: next });
+      // _onQueueStateUpdate fires when the broadcast comes back and loads it.
+    }
+    return;
+  }
   if (currentFile && currentDir) {
     _clearSavedPosition(currentDir.replace(/\/$/, '') + '/' + currentFile);
   }
@@ -1609,6 +1844,7 @@ function _onMediaEnded() {
 function _onMediaPlaying() {
   if (_shouldAnnounce) {
     _shouldAnnounce = false;
+    _hasAnnounced   = true;
     _mediaChannel.postMessage({ cmd: 'pause' });
   }
 }
@@ -1922,6 +2158,10 @@ function showMedia(filename, type, deferred) {
 
 function init() {
   applyHistoryState(history.state);
+
+  // Fetch current queue state from background so the pane can reflect it
+  // immediately if the user enters queue mode.
+  _queueChannel.postMessage({ cmd: 'q-sync' });
 
   var params = getUrlParams();
   if (!params.dir) {

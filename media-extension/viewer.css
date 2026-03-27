@@ -707,6 +707,66 @@ html, body {
   flex-shrink: 0;
 }
 
+/* ── QUEUE PANE ──────────────────────────────────────────────────────────── */
+
+/* Queue pane occupies the same slot as the selector pane; they are mutually
+   exclusive.  In queue mode #selector-pane is hidden and #queue-pane shown. */
+#queue-pane {
+  display: none;
+  width: var(--selector-w);
+  min-width: 80px;
+  flex-direction: column;
+  background: var(--surface);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+#viewer-screen.queue-mode   #selector-pane { display: none; }
+#viewer-screen.queue-mode   #queue-pane    { display: flex; }
+#viewer-screen.no-selector  #queue-pane    { display: none; }
+
+#queue-pane-header {
+  height: var(--hdr-h);
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface-2);
+}
+
+#queue-pane-title {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 0.05em;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#queue-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 0;
+}
+
+#queue-list::-webkit-scrollbar       { width: 6px; }
+#queue-list::-webkit-scrollbar-track { background: transparent; }
+#queue-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* Queue items reuse .file-item / .file-name / .file-icon styles.
+   .playing replaces .selected for the currently active item. */
+.queue-item.playing {
+  background: var(--sel-bg);
+  color: var(--sel-text);
+}
+.queue-item.playing .file-icon,
+.queue-item.playing .file-name { color: var(--sel-text); }
+
 /* ── RESPONSIVE ─────────────────────────────────────────────────────────── */
 
 @media (max-width: 600px) {

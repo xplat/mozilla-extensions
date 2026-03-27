@@ -5,8 +5,8 @@
   <title>Media Viewer</title>
   <style>
     body {
-      min-width: 200px;
-      padding: 12px 16px;
+      min-width: 220px;
+      padding: 10px 14px 12px;
       background: #141414;
       color: #e0d8cc;
       font-family: 'DM Sans', 'Segoe UI', sans-serif;
@@ -33,14 +33,151 @@
       color: #e0aa58;
       font-size: 11px;
     }
+
+    /* ── Queue section ──────────────────────────────────── */
+    #queue-section { margin-top: 10px; }
+
+    #queue-status {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 6px;
+      min-height: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #queue-status.active { color: #c8933a; }
+    #queue-status.suppressed { color: #667 }
+
+    #queue-track {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: #ccc;
+      margin-bottom: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #queue-time {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: #666;
+      margin-bottom: 8px;
+    }
+
+    #queue-controls {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .q-btn {
+      background: #1c1c1c;
+      border: 1px solid #333;
+      color: #bbb;
+      font-size: 14px;
+      width: 28px;
+      height: 28px;
+      border-radius: 3px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      padding: 0;
+    }
+    .q-btn:hover { border-color: #666; color: #eee; }
+    .q-btn:active { background: #282828; }
+    #btn-play-pause { width: 36px; font-size: 16px; }
+
+    hr { border: none; border-top: 1px solid #222; margin: 10px 0; }
   </style>
 </head>
 <body>
   <h2>Media Viewer</h2>
+
+  <!-- ── Audio queue status ── -->
+  <div id="queue-section">
+    <div id="queue-status">QUEUE EMPTY</div>
+    <div id="queue-track"></div>
+    <div id="queue-time"></div>
+    <div id="queue-controls">
+      <button class="q-btn" id="btn-prev"      title="Previous (or restart)">⏮</button>
+      <button class="q-btn" id="btn-play-pause" title="Play / Pause (\\)">▶</button>
+      <button class="q-btn" id="btn-next"      title="Next">⏭</button>
+    </div>
+  </div>
+
+  <hr>
+
   <p>Open a directory from the command line:</p>
   <br>
   <p><code>media-open /path/to/dir</code></p>
   <br>
   <p><code>media-open /path/to/image.jpg</code></p>
+
+  <script>
+    'use strict';
+
+    var statusEl    = document.getElementById('queue-status');
+    var trackEl     = document.getElementById('queue-track');
+    var timeEl      = document.getElementById('queue-time');
+    var btnPrev     = document.getElementById('btn-prev');
+    var btnPlay     = document.getElementById('btn-play-pause');
+    var btnNext     = document.getElementById('btn-next');
+
+    function fmtTime(secs) {
+      var s = Math.floor(secs), m = Math.floor(s / 60), h = Math.floor(m / 60);
+      m = m % 60; s = s % 60;
+      var p = function(n) { return n < 10 ? '0' + n : String(n); };
+      return h > 0 ? h + ':' + p(m) + ':' + p(s) : m + ':' + p(s);
+    }
+
+    function render(state) {
+      var a = state.audio;
+      if (!a.items.length) {
+        statusEl.textContent = 'QUEUE EMPTY';
+        statusEl.className   = '';
+        trackEl.textContent  = '';
+        timeEl.textContent   = '';
+        btnPlay.textContent  = '▶';
+        return;
+      }
+      var item = a.items[a.index] || {};
+      trackEl.textContent = (a.index + 1) + '/' + a.items.length + '  ' + (item.file || '');
+      timeEl.textContent  = fmtTime(a.time || 0);
+
+      if (a.suppressed) {
+        statusEl.textContent = '⏸ SUPPRESSED';
+        statusEl.className   = 'suppressed';
+      } else if (a.playing) {
+        statusEl.textContent = '▶ PLAYING';
+        statusEl.className   = 'active';
+      } else {
+        statusEl.textContent = '⏸ PAUSED';
+        statusEl.className   = '';
+      }
+      btnPlay.textContent = (a.playing && !a.suppressed) ? '⏸' : '▶';
+    }
+
+    function sendCmd(cmd, extra) {
+      chrome.runtime.sendMessage(Object.assign({ cmd: cmd }, extra || {}), render);
+    }
+
+    btnPrev.addEventListener('click', function() { sendCmd('q-skip', { delta: -1 }); });
+    btnNext.addEventListener('click', function() { sendCmd('q-skip', { delta:  1 }); });
+    btnPlay.addEventListener('click', function() { sendCmd('q-toggle'); });
+
+    // Initial state fetch.
+    chrome.runtime.sendMessage({ cmd: 'q-get-state' }, render);
+
+    // Live updates via BroadcastChannel (popup shares extension origin).
+    var ch = new BroadcastChannel('media-queue');
+    ch.onmessage = function(e) {
+      if (e.data && e.data.cmd === 'q-state') render(e.data);
+    };
+  </script>
 </body>
 </html>
