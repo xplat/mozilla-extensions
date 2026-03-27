@@ -132,6 +132,9 @@ var _preQueueFile = null;
 var _queueChannel = new BroadcastChannel('media-queue');
 _queueChannel.onmessage = function(e) {
   if (!e.data || e.data.cmd !== 'q-changed') return;
+  // Background tabs with no queue UI visible skip updates and send q-sync on
+  // becoming visible to catch up (see visibilitychange handler below).
+  if (document.visibilityState !== 'visible' || ui.queueMode === null) return;
   var prev = _qState;
   _qState  = { audio: e.data.audio, video: e.data.video };
   _onQueueStateUpdate(prev);
@@ -1611,27 +1614,53 @@ catch (err) { console.warn('createMediaElementSource(audioEl) failed:', err); }
 try { _audioCtx.createMediaElementSource(videoEl).connect(_panNode); }
 catch (err) { console.warn('createMediaElementSource(videoEl) failed:', err); }
 
-// ── BroadcastChannel: pause other viewer tabs when we start playing audio ──
+// ── BroadcastChannel listeners ───────────────────────────────────────────────
+//
+// Message handling is conditional on visibility and playback state so that
+// background tabs do minimal work.  A visibilitychange handler catches up
+// anything skipped while the tab was hidden.
 
 var _mediaChannel = new BroadcastChannel('media-viewer');
 _mediaChannel.onmessage = function(e) {
   if (!e.data) return;
-  if (e.data.cmd === 'pause' && activeMediaEl) {
-    activeMediaEl.pause();
-  } else if (e.data.cmd === 'pause-toggle' && activeMediaEl) {
-    togglePlayPause();
-  } else if (e.data.cmd === 'av-settings') {
-    // Persist and immediately apply volume/mute/balance from another tab.
+  var cmd = e.data.cmd;
+  if (cmd === 'pause' || cmd === 'pause-toggle') {
+    // Only act if we are currently playing; idle background tabs ignore these.
+    if (!activeMediaEl || activeMediaEl.paused) return;
+    if (cmd === 'pause') activeMediaEl.pause();
+    else                 togglePlayPause();
+  } else if (cmd === 'av-settings') {
     var d = e.data;
+    // Always persist — cheap, and needed before the next play start regardless.
     if (d.volume  !== undefined) localStorage.setItem('media-volume',  String(d.volume));
     if (d.muted   !== undefined) localStorage.setItem('media-muted',   String(d.muted));
     if (d.balance !== undefined) localStorage.setItem('media-balance', String(d.balance));
-    if (activeMediaEl) {
+    // Apply to the element only if currently playing (works in any visibility
+    // state) or if foregrounded with active audio/video (for display refresh).
+    if (activeMediaEl && (!activeMediaEl.paused || document.visibilityState === 'visible')) {
       applyAvSettings(activeMediaEl, d);
       _updateVideoControls();
     }
   }
 };
+
+// When a tab becomes visible, catch up on anything skipped while it was hidden.
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState !== 'visible') return;
+  // Re-apply persisted A/V settings in case they changed while we were hidden.
+  if (activeMediaEl) {
+    applyAvSettings(activeMediaEl, {
+      volume:  parseFloat(localStorage.getItem('media-volume')  || '1'),
+      muted:   localStorage.getItem('media-muted')  === 'true',
+      balance: parseFloat(localStorage.getItem('media-balance') || '0'),
+    });
+    _updateVideoControls();
+  }
+  // Re-sync queue state if the queue pane is visible.
+  if (ui.queueMode !== null) {
+    _queueChannel.postMessage({ cmd: 'q-sync' });
+  }
+});
 
 // ── Transition cover ────────────────────────────────────────────────────────
 //
