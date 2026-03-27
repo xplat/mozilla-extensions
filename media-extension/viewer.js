@@ -2,12 +2,9 @@
 'use strict';
 
 // ── Constants ──────────────────────────────────────────────────────────────
-
-const LOOPBACK          = '127.7.203.98';
-const FILE_PROXY_PREFIX      = 'http://' + LOOPBACK + '/media-file/';
-const DIR_PROXY_PREFIX       = 'http://' + LOOPBACK + '/media-dir/';
-const THUMB_PROXY_PREFIX     = 'http://' + LOOPBACK + '/media-thumb/';
-const QUEUE_DIR_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-queue-dir/';
+// LOOPBACK, FILE_PROXY_PREFIX, DIR_PROXY_PREFIX, THUMB_PROXY_PREFIX,
+// QUEUE_DIR_PROXY_PREFIX, LS_*, toProxyFile(), applyAvSettings(),
+// initMediaElVolume() — all defined in media-shared.js (loaded first).
 
 // Maps file extension (lowercase, no dot) → media category.
 // Only extensions that should be selectable/viewable belong here;
@@ -244,12 +241,7 @@ function applyHistoryState(state) {
 }
 
 // ── Proxy URL helpers ──────────────────────────────────────────────────────
-
-function toProxyFile(fileUrl) {
-  var path    = fileUrl.replace(/^file:\/\//, '');
-  var encoded = path.split('/').map(encodeURIComponent).join('/');
-  return FILE_PROXY_PREFIX + encoded;
-}
+// toProxyFile() is defined in media-shared.js.
 
 function toProxyThumb(fileUrl) {
   var path    = fileUrl.replace(/^file:\/\//, '');

@@ -20,7 +20,7 @@
     "http://127.7.203.98/*"
   ],
   "background": {
-    "scripts": ["native-messaging.js", "background.js"]
+    "scripts": ["native-messaging.js", "media-shared.js", "background.js"]
   },
   "icons": {
     "16":  "icons/icon16.png",
@@ -37,7 +37,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["viewer.html", "viewer.js", "viewer.css"],
+      "resources": ["viewer.html", "viewer.js", "viewer.css", "media-shared.js"],
       "matches": ["<all_urls>"]
     }
   ]

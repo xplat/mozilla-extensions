@@ -1,22 +1,11 @@
 // background.js — Media Viewer background script (MV3, Firefox)
+// LOOPBACK, FILE_PROXY_PREFIX, DIR_PROXY_PREFIX, THUMB_PROXY_PREFIX,
+// QUEUE_DIR_PROXY_PREFIX, LS_*, toProxyFile(), applyAvSettings(),
+// initMediaElVolume() — all defined in media-shared.js (loaded first).
 'use strict';
 
 const VIEWER_HTML = chrome.runtime.getURL('viewer.html');
 const HOST_NAME   = 'media_viewer_host';
-
-// Fixed loopback address distinct from the CBZ viewer's 127.7.203.66.
-// All of 127.0.0.0/8 is loopback on Linux/macOS; this specific address is
-// unlikely to conflict with anything real, and file paths won't leak off the
-// machine if redirect handling has a bug.
-const LOOPBACK = '127.7.203.98';
-
-// Proxy URL prefixes used by the viewer.  The background rewrites every
-// request to the real server URL (with port + token) on the fly, so neither
-// the port nor the token ever appear in the viewer page or its URL.
-const FILE_PROXY_PREFIX      = 'http://' + LOOPBACK + '/media-file/';
-const DIR_PROXY_PREFIX       = 'http://' + LOOPBACK + '/media-dir/';
-const THUMB_PROXY_PREFIX     = 'http://' + LOOPBACK + '/media-thumb/';
-const QUEUE_DIR_PROXY_PREFIX = 'http://' + LOOPBACK + '/media-queue-dir/';
 
 // ── Per-request proxy redirect ────────────────────────────────────────────
 
@@ -123,13 +112,9 @@ var _aqPlaying    = false;
 var _aqSuppressed = false;
 
 var _queueAudio = new Audio();
-
-// Proxy URL helper — mirrors viewer.js toProxyFile().
-function _toProxyFile(fileUrl) {
-  var path    = fileUrl.replace(/^file:\/\//, '');
-  var encoded = path.split('/').map(encodeURIComponent).join('/');
-  return FILE_PROXY_PREFIX + encoded;
-}
+// Initialise volume/mute from persisted settings (toProxyFile and
+// initMediaElVolume come from media-shared.js, loaded before this script).
+initMediaElVolume(_queueAudio);
 
 // ── State persistence ─────────────────────────────────────────────────────
 
@@ -200,7 +185,7 @@ function _loadAudioItem(index, timeOffset, autoPlay) {
   _aq.index = index;
   _aq.time  = timeOffset;
 
-  _queueAudio.src = _toProxyFile(fileUrl);
+  _queueAudio.src = toProxyFile(fileUrl);
 
   if (timeOffset > 0) {
     _queueAudio.addEventListener('loadedmetadata', function() {
@@ -259,8 +244,7 @@ function _audioQueueSkip(delta) {
     }
   }
   var next = _aq.index + delta;
-  if (next < 0) next = _aq.items.length - 1;       // manual wrap
-  if (next >= _aq.items.length) next = 0;           // manual wrap
+  if (next < 0 || next >= _aq.items.length) return; // stop at ends, don't wrap
   _loadAudioItem(next, 0, _aqPlaying && !_aqSuppressed);
 }
 
@@ -350,13 +334,17 @@ _queueChannel.onmessage = function(e) {
   }
 };
 
-// ── Foreground-audio suppression ──────────────────────────────────────────
+// ── Foreground-audio suppression and A/V settings sync ────────────────────
 //
 // When a viewer tab starts playing audio ('pause' on media-viewer channel),
 // we pause the audio queue (_aqSuppressed = true, _aqPlaying stays true).
 // When foreground audio ends ('media-stopped'), we auto-resume.
-// When a tab is removed we tentatively resume; if another tab is still
-// playing it will re-suppress on its next 'pause' broadcast.
+// Extension pages share the background event-page's process and cannot
+// outlive it, so a closing tab is guaranteed to broadcast 'media-stopped'
+// before it disappears; no chrome.tabs.onRemoved safety net is needed.
+//
+// av-settings messages keep _queueAudio in sync with the extension-wide
+// volume and mute controls (balance is not applicable here).
 
 var _viewerChannel = new BroadcastChannel('media-viewer');
 
@@ -373,19 +361,10 @@ _viewerChannel.onmessage = function(e) {
       _broadcastState();
     });
     _broadcastState();
+  } else if (e.data.cmd === 'av-settings') {
+    applyAvSettings(_queueAudio, e.data);
   }
 };
-
-chrome.tabs.onRemoved.addListener(function() {
-  if (_aqSuppressed) {
-    _aqSuppressed = false;
-    _queueAudio.play().catch(function() {
-      _aqPlaying = false;
-      _broadcastState();
-    });
-    _broadcastState();
-  }
-});
 
 // ── Popup message handler ─────────────────────────────────────────────────
 
