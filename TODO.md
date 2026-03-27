@@ -29,9 +29,14 @@
   5/6 (hue-rotate), 7/8 (saturation) via CSS `filter:` on the video element.
   Filter resets to defaults when a new file is opened.
 
-## Pending
+- In scroll mode, images smaller than the viewport are centred (via `margin:auto`
+  on `#transform-host` inside a flex scroll container); images larger than the
+  viewport scroll from the edge with no empty space.  On zoom, rotate, mirror,
+  and flip the viewport centre is preserved by tracking the centre as a fraction
+  of the display bounding box and restoring the scroll after the transform.
+  (Exact for scale changes; visual-space approximation for rotations.)
 
-- Images displayed as smaller than the viewport in one or both dimensions should be centered in the viewport in those dimension(s) regardless of scaling and zoom mode, while in dimensions bigger than the viewport there should not be empty space on either side.  Within these constraints, a view adjustment from scaling, rotation or flipping should disturb the position in image coordinates of the center of the viewport as little as possible.
+## Pending
 
 - The media viewer should support playlists and background audio.  q should queue an item and select the next item (whether focused or in selector).  Q should cycle between normal view, audio queue, and video queue.  When you start the audio queue playing it should be played by the background script and if it pauses for a foreground play it should start back up when that's over.  The extension popup should display the status of the audio queue.  When nothing else of extended duration is an appropriate target, the global media keys should control the audio queue.  Also when you press 'q' on a directory, all the queueable items in the directory or in subdirectories named `(CD|Disc)\s*\d+` should be queued.
 
