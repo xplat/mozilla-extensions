@@ -83,6 +83,25 @@ function handleNativeOpen(msg) {
   chrome.tabs.create({ url: viewerUrl });
 }
 
+// Called once the native host's 'server' event arrives and serverPort is valid.
+// We defer audio preloading to here so the proxy redirect is ready.
+function handleNativeServer() {
+  if (_aq.items.length > 0) {
+    _loadAudioItem(_aq.index, _aq.time, false);
+  }
+}
+
+// Called when the native host forwards a 'queue' event (from media-queue CLI).
+function handleNativeQueue(msg) {
+  var newAudio = msg.audio || [];
+  var newVideo = msg.video || [];
+  if (newAudio.length) _aq.items = _aq.items.concat(newAudio);
+  if (newVideo.length) _vq.items = _vq.items.concat(newVideo);
+  _saveQueueState();
+  _broadcastState();
+  if (msg.play && !_aqPlaying && newAudio.length) _toggleAudioQueue();
+}
+
 // handleNativeOpen and HOST_NAME are defined above; load shared plumbing.
 // importScripts is only available in service-worker contexts (Chrome MV3);
 // in Firefox MV3 event-page contexts it is undefined, and native-messaging.js
@@ -219,7 +238,7 @@ function _toggleAudioQueue() {
     if (!_aq.items.length) return;
     _aqPlaying    = true;
     _aqSuppressed = false;
-    if (!_queueAudio.src) {
+    if (!_queueAudio.src || _queueAudio.readyState === HTMLMediaElement.HAVE_NOTHING) {
       _loadAudioItem(_aq.index, _aq.time, true);
       return;  // _loadAudioItem calls _broadcastState / _saveQueueState
     }
@@ -409,7 +428,5 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 // ── Initialise ────────────────────────────────────────────────────────────
 
 _loadQueueState();
-// Restore audio queue to saved position without autoplaying on startup.
-if (_aq.items.length > 0) {
-  _loadAudioItem(_aq.index, _aq.time, false);
-}
+// Audio preload is deferred to handleNativeServer(), which fires once the
+// proxy server port is known and the webRequest redirect will work.

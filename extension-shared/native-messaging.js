@@ -26,10 +26,15 @@ function connectNative() {
     if (msg.event === 'server') {
       serverPort  = msg.port;
       serverToken = msg.token;
+      if (typeof handleNativeServer !== 'undefined') handleNativeServer();
       return;
     }
     if (msg.event === 'open') {
       handleNativeOpen(msg);
+      return;
+    }
+    if (msg.event === 'queue') {
+      if (typeof handleNativeQueue !== 'undefined') handleNativeQueue(msg);
       return;
     }
     var pending = pendingQueue.shift();

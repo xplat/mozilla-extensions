@@ -758,14 +758,29 @@ html, body {
 #queue-list::-webkit-scrollbar-track { background: transparent; }
 #queue-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
+/* Focus indicator: queue pane header bar highlights like the selector divider */
+#viewer-screen[data-focus="queue"] #queue-pane-header {
+  border-bottom-color: var(--focus-ring);
+}
+
 /* Queue items reuse .file-item / .file-name / .file-icon styles.
-   .playing replaces .selected for the currently active item. */
+   .playing replaces .selected for the currently active item.
+   .queue-selected is the keyboard cursor (Tab → queue focusMode). */
 .queue-item.playing {
   background: var(--sel-bg);
   color: var(--sel-text);
 }
 .queue-item.playing .file-icon,
 .queue-item.playing .file-name { color: var(--sel-text); }
+
+.queue-item.queue-selected:not(.playing) {
+  background: var(--sel-bg);
+  opacity: 0.6;
+}
+.queue-item.playing.queue-selected {
+  outline: 1px solid rgba(255,255,255,0.35);
+  outline-offset: -2px;
+}
 
 /* ── RESPONSIVE ─────────────────────────────────────────────────────────── */
 

@@ -77,7 +77,7 @@ var ui = {
 };
 
 // Focus mode — NOT persisted (resets to selector on page load)
-var focusMode = 'selector'; // 'selector' | 'viewer'
+var focusMode = 'selector'; // 'selector' | 'viewer' | 'queue'
 
 // Selector pane width in pixels (adjusted with [ ] ~ and drag)
 var selectorWidthPx = 260;
@@ -124,6 +124,9 @@ function _qVideoItems() {
   try { return JSON.parse(localStorage.getItem('media-video-queue') || '{}').items || []; }
   catch (e) { return []; }
 }
+
+// Keyboard cursor position within the queue pane (used when focusMode === 'queue').
+var _queueSelIdx = 0;
 
 // Saved dir/file to restore when exiting video queue mode.
 var _preQueueDir  = null;
@@ -845,8 +848,11 @@ function _setQueueMode(mode) {
   var old = ui.queueMode;
   ui.queueMode = mode;
 
+  if (!mode && focusMode === 'queue') setFocusMode('selector');
+
   if (mode === 'video' && old !== 'video') {
     // Entering video queue mode: save current position, load first queue item.
+    _queueSelIdx  = _qState.video.index;
     _preQueueDir  = currentDir;
     _preQueueFile = currentFile;
     var item = _qVideoItems()[_qState.video.index];
@@ -859,6 +865,10 @@ function _setQueueMode(mode) {
     renderQueuePane();
     _updateChannelWiring();
     return;
+  }
+
+  if (mode === 'audio' && old !== 'audio') {
+    _queueSelIdx = _qState.audio.index;
   }
 
   if (old === 'video' && mode !== 'video') {
@@ -894,7 +904,8 @@ function renderQueuePane() {
   items.forEach(function(item, idx) {
     var el   = document.createElement('div');
     el.className = 'file-item queue-item' +
-                   (idx === q.index ? ' playing' : '');
+                   (idx === q.index ? ' playing' : '') +
+                   (focusMode === 'queue' && idx === _queueSelIdx ? ' queue-selected' : '');
     el.dataset.idx = String(idx);
 
     var icon = document.createElement('span');
@@ -918,9 +929,10 @@ function renderQueuePane() {
     queueListEl.appendChild(el);
   });
 
-  // Scroll current item into view.
-  var cur = queueListEl.querySelector('.playing');
-  if (cur) cur.scrollIntoView({ block: 'nearest' });
+  // Scroll keyboard-selected (or playing) item into view.
+  var sel = queueListEl.querySelector('.queue-selected') ||
+            queueListEl.querySelector('.playing');
+  if (sel) sel.scrollIntoView({ block: 'nearest' });
 }
 
 // Called when background broadcasts new queue state.
@@ -928,6 +940,7 @@ function _onQueueStateUpdate(prev) {
   if (ui.queueMode === 'video') {
     var newIdx = _qState.video.index;
     if (newIdx !== prev.video.index) {
+      _queueSelIdx = newIdx;
       var item = _qVideoItems()[newIdx];
       if (item) {
         currentDir  = item.dir;
@@ -935,6 +948,10 @@ function _onQueueStateUpdate(prev) {
         showMediaFile(item.file);
       }
     }
+  } else if (ui.queueMode === 'audio' && _qState.audio.index !== prev.audio.index) {
+    // Keep cursor in sync with auto-advances (end-of-track, skip) but not
+    // user-initiated jumps (those set _queueSelIdx before posting q-jump).
+    _queueSelIdx = _qState.audio.index;
   }
   renderQueuePane();
 }
@@ -1204,10 +1221,16 @@ document.addEventListener('keydown', function(e) {
         return;
       case 'v':
         e.preventDefault(); toggleThumbnails(); return;
-      case 'Tab':
+      case 'Tab': {
         e.preventDefault();
-        setFocusMode(focusMode === 'selector' ? 'viewer' : 'selector');
+        var tabModes = ui.queueMode ? ['selector', 'viewer', 'queue'] : ['selector', 'viewer'];
+        var tabNext  = (tabModes.indexOf(focusMode) + 1) % tabModes.length;
+        var nextMode = tabModes[tabNext];
+        if (nextMode === 'queue') _queueSelIdx = _qState[ui.queueMode === 'video' ? 'video' : 'audio'].index;
+        setFocusMode(nextMode);
+        renderQueuePane();
         return;
+      }
       case 'Escape':
         if (focusMode === 'viewer') { e.preventDefault(); setFocusMode('selector'); }
         return;
@@ -1241,7 +1264,9 @@ document.addEventListener('keydown', function(e) {
     }
   }
 
-  if (focusMode === 'selector') {
+  if (focusMode === 'queue') {
+    if (plain) handleQueueFocusKey(e, key);
+  } else if (focusMode === 'selector') {
     handleSelectorKey(e, key, ctrl, plain);
   } else {
     handleViewerKey(e, key, ctrl, plain);
@@ -1288,6 +1313,34 @@ function handleSelectorKey(e, key, ctrl, plain) {
     case 'b': prevImage(); break;
     case 's': cycleSortBy(); break;
     case 'z': toggleZoom(); break;
+  }
+}
+
+function handleQueueFocusKey(e, key) {
+  var isAudio = (ui.queueMode === 'audio');
+  var items   = isAudio ? _qAudioItems() : _qVideoItems();
+  if (!items.length) return;
+  switch (key) {
+    case 'ArrowDown': case 'j':
+      e.preventDefault();
+      _queueSelIdx = Math.min(items.length - 1, _queueSelIdx + 1);
+      renderQueuePane();
+      break;
+    case 'ArrowUp': case 'k':
+      e.preventDefault();
+      _queueSelIdx = Math.max(0, _queueSelIdx - 1);
+      renderQueuePane();
+      break;
+    case 'Enter': case ' ':
+      e.preventDefault();
+      _bcPost('media-queue', {
+        cmd: 'q-jump', type: isAudio ? 'audio' : 'video', index: _queueSelIdx
+      });
+      break;
+    case 'Escape': case 'ArrowLeft':
+      e.preventDefault();
+      setFocusMode('selector');
+      break;
   }
 }
 
@@ -1587,6 +1640,7 @@ var _posCheckpointTimer = null;  // setTimeout handle for position-save throttle
 var _autoplay           = true;  // if false, media loads but does not start playing
 var _shouldAnnounce     = false; // true when audio-bearing media loaded; cleared after first 'playing' event
 var _hasAnnounced       = false; // true after we've broadcast 'pause' to other tabs; cleared on stop/end
+var _pendingAutoFS      = false; // true when auto-fullscreen should fire on the next 'playing' event
 
 // Video color/quality filter state (reset on each new file; applied via CSS filter on videoEl)
 var _vContrast   = 1.0;  // CSS contrast()   — mplayer keys 1/2
@@ -1724,6 +1778,7 @@ function _endTransitionCover() {
 
 function _stopActiveMedia() {
   _clearPosCheckpoint();
+  _pendingAutoFS  = false;
   _shouldAnnounce = false;
   if (_hasAnnounced) {
     _hasAnnounced = false;
@@ -1860,20 +1915,13 @@ function _onMediaLoadedMetadata() {
   // Auto-fullscreen: widescreen video (≥ 3:2 aspect) played from the beginning.
   // Skipped when restoring a saved position (the user already watched part of it)
   // or when already fullscreen or when gif-loop mode.
-  if (mediaEl === videoEl &&
+  // The actual fullscreen request is deferred to the 'playing' event so it fires
+  // when the user actually starts playback rather than when the file loads.
+  _pendingAutoFS = (mediaEl === videoEl &&
       !imagePaneEl.classList.contains('media-gif') &&
       !document.fullscreenElement &&
       !(saved > 0) &&
-      FULLSCREEN_DIMS.has(videoEl.videoWidth + 'x' + videoEl.videoHeight)) {
-    selectorStateBeforeFS = ui.selectorVisible;
-    ui.selectorVisible = false;
-    applySelector();
-    document.documentElement.requestFullscreen().catch(function() {
-      // Fullscreen denied (gesture expired or policy); restore selector state.
-      ui.selectorVisible = selectorStateBeforeFS;
-      applySelector();
-    });
-  }
+      FULLSCREEN_DIMS.has(videoEl.videoWidth + 'x' + videoEl.videoHeight));
 
   _updateVideoControls();
   _endTransitionCover();
@@ -1921,6 +1969,16 @@ function _onMediaPlaying() {
     _shouldAnnounce = false;
     _hasAnnounced   = true;
     _bcPost('media-viewer', { cmd: 'pause' });
+  }
+  if (_pendingAutoFS && this === videoEl && !document.fullscreenElement) {
+    _pendingAutoFS = false;
+    selectorStateBeforeFS = ui.selectorVisible;
+    ui.selectorVisible = false;
+    applySelector();
+    document.documentElement.requestFullscreen().catch(function() {
+      ui.selectorVisible = selectorStateBeforeFS;
+      applySelector();
+    });
   }
   _updateChannelWiring();  // now playing
 }
