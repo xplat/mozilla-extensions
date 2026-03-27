@@ -96,6 +96,16 @@ var selectorStateBeforeFS = true;
 // In-flight preload image — used to avoid blanking/squishing on image navigation
 var _imgPendingLoad = null;
 
+// Deferred image↔media transition state:
+//   _deferredMediaType ('video'|'audio'|'gif'|null): set when starting an
+//     image→media load without adding the CSS class yet (the old image stays
+//     visible until loadedmetadata fires, then we do the swap).
+//   _pendingMediaStop (bool): set when starting a media→image preload without
+//     stopping the current media yet (the old media keeps playing until the
+//     image's load event fires, then we do the swap).
+var _deferredMediaType = null;
+var _pendingMediaStop  = false;
+
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
 var pickScreenEl    = document.getElementById('pick-screen');
@@ -470,6 +480,15 @@ mainImageEl.addEventListener('load', function() {
   imagePaneEl.classList.add('image-loaded');
   applyImageTransform();
   mainImageEl.style.visibility = '';
+  if (_pendingMediaStop) {
+    // media→image deferred swap: image is ready, now atomically stop media.
+    // transform-host was hidden (media class present); _stopActiveMedia()
+    // removes the class, making the already-transformed image visible.
+    _pendingMediaStop = false;
+    _startTransitionCover();
+    _stopActiveMedia();
+    // Cover fades out revealing the image.
+  }
   _endTransitionCover();
 });
 
@@ -1417,8 +1436,24 @@ function _onMediaLoadedMetadata() {
     if (isFinite(videoEl.duration) && videoEl.duration < 60 && !videoEl.mozHasAudio) {
       videoEl.loop  = true;
       videoEl.muted = true;
-      imagePaneEl.classList.replace('media-video', 'media-gif');
+      if (_deferredMediaType) {
+        _deferredMediaType = 'gif';  // class added below at swap time
+      } else {
+        imagePaneEl.classList.replace('media-video', 'media-gif');
+      }
     }
+  }
+
+  // image→media deferred swap: media is ready, now atomically replace the image.
+  if (_deferredMediaType) {
+    var dType = _deferredMediaType;
+    _deferredMediaType = null;
+    _startTransitionCover();
+    mainImageEl.src = '';
+    imagePaneEl.classList.remove('image-loaded');
+    imagePaneEl.classList.add(dType === 'gif'   ? 'media-gif'   :
+                              dType === 'video' ? 'media-video' : 'media-audio');
+    // Cover fades out below, after _updateVideoControls().
   }
 
   // Notify other tabs to pause before we start playing anything with audio
@@ -1684,44 +1719,72 @@ if (videoProgressEl) {
 function showMediaFile(filename) {
   if (!filename || !currentDir) return;
   var type = mediaType(filename);
+
+  // Cancel any in-flight image preload.
   if (_imgPendingLoad) {
     _imgPendingLoad.onload = _imgPendingLoad.onerror = null;
     _imgPendingLoad.src    = '';
     _imgPendingLoad        = null;
   }
+
+  // Cancel any in-progress deferred transition, restoring a clean slate.
+  if (_deferredMediaType) {
+    // Media was loading invisibly behind the old image; just stop it.
+    _deferredMediaType = null;
+    _stopActiveMedia();
+    // Old image state (src, image-loaded) is intact — no further cleanup.
+  } else if (_pendingMediaStop) {
+    // Image was preloading behind the old media; stop media now.
+    _pendingMediaStop = false;
+    _stopActiveMedia();
+    mainImageEl.style.visibility = '';
+    mainImageEl.src = '';
+    imagePaneEl.classList.remove('image-loaded');
+  }
+
   var wasMedia = imagePaneEl.classList.contains('media-video') ||
                  imagePaneEl.classList.contains('media-audio') ||
                  imagePaneEl.classList.contains('media-gif');
-  _stopActiveMedia();
+
   if (type === 'image') {
-    // image→image: leave mainImageEl.src and image-loaded intact so the old
-    // image remains visible while the new one preloads.  No cover needed —
-    // the preload+visibility:hidden swap is already seamless.
-    // media→image: cover the blank while the new image loads.
     if (wasMedia) {
+      // media→image: keep media playing while image preloads; stop it only
+      // once the image's load event fires (see mainImageEl 'load' handler).
+      _pendingMediaStop = true;
+      showImage(filename);
+    } else {
+      // image→image: preload+visibility:hidden is already seamless, no cover.
+      showImage(filename);
+    }
+  } else if (type === 'video' || type === 'audio') {
+    if (!wasMedia) {
+      // image→media: load media invisibly (no CSS class yet); old image stays
+      // visible until loadedmetadata fires (see _onMediaLoadedMetadata).
+      _deferredMediaType = type;
+      showMedia(filename, type, /*deferred=*/ true);
+    } else {
+      // media→media: a brief blank with cover is acceptable.
       _startTransitionCover();
+      _stopActiveMedia();
       mainImageEl.src = '';
       imagePaneEl.classList.remove('image-loaded');
+      showMedia(filename, type, /*deferred=*/ false);
     }
-    showImage(filename);
-  } else if (type === 'video' || type === 'audio') {
-    _startTransitionCover();
-    mainImageEl.src = '';
-    imagePaneEl.classList.remove('image-loaded');
-    showMedia(filename, type);
   } else {
     // Unknown type: show empty pane / no-content hint.
     _startTransitionCover();
+    _stopActiveMedia();
     mainImageEl.src = '';
     imagePaneEl.classList.remove('image-loaded');
-    // Nothing to wait for — fade out cover after one frame.
     requestAnimationFrame(function() {
       transitionCoverEl.classList.remove('covering');
     });
   }
 }
 
-function showMedia(filename, type) {
+// deferred=true: called from image→media path; don't add the CSS display class
+// yet — the old image stays visible.  _onMediaLoadedMetadata() will do the swap.
+function showMedia(filename, type, deferred) {
   var fileUrl  = currentDir.replace(/\/$/, '') + '/' + filename;
   var proxyUrl = toProxyFile(fileUrl);
 
@@ -1741,8 +1804,12 @@ function showMedia(filename, type) {
   _vSaturation = 1.0;
   videoEl.style.filter = '';
 
-  imgSpinnerEl.classList.remove('hidden');
-  imagePaneEl.classList.add(type === 'video' ? 'media-video' : 'media-audio');
+  if (!deferred) {
+    // Immediate mode: show spinner and media class right away.
+    imgSpinnerEl.classList.remove('hidden');
+    imagePaneEl.classList.add(type === 'video' ? 'media-video' : 'media-audio');
+  }
+  // Deferred: old image stays visible; no spinner, no class until ready.
 
   activeMediaEl.src = proxyUrl;
   // loadedmetadata fires next → _onMediaLoadedMetadata()
