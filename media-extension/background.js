@@ -10,6 +10,9 @@ const HOST_NAME   = 'media_viewer_host';
 // machine if redirect handling has a bug.
 const LOOPBACK = '127.7.203.98';
 
+// Proxy URL prefixes used by the viewer.  The background rewrites every
+// request to the real server URL (with port + token) on the fly, so neither
+// the port nor the token ever appear in the viewer page or its URL.
 const FILE_PROXY_PREFIX      = 'http://' + LOOPBACK + '/media-file/';
 const DIR_PROXY_PREFIX       = 'http://' + LOOPBACK + '/media-dir/';
 const THUMB_PROXY_PREFIX     = 'http://' + LOOPBACK + '/media-thumb/';
@@ -92,6 +95,9 @@ function handleNativeOpen(msg) {
 }
 
 // handleNativeOpen and HOST_NAME are defined above; load shared plumbing.
+// importScripts is only available in service-worker contexts (Chrome MV3);
+// in Firefox MV3 event-page contexts it is undefined, and native-messaging.js
+// is instead listed first in the manifest's background.scripts array.
 if (typeof importScripts !== 'undefined') importScripts('native-messaging.js');
 connectNative();
 
