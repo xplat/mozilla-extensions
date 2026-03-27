@@ -244,7 +244,17 @@ function _audioQueueSkip(delta) {
     }
   }
   var next = _aq.index + delta;
-  if (next < 0 || next >= _aq.items.length) return; // stop at ends, don't wrap
+  if (next >= _aq.items.length) {
+    // Skipped past end — stop and rewind to beginning, same as natural end-of-queue.
+    _queueAudio.pause();
+    _queueAudio.src = '';
+    _aqPlaying = false;
+    _aq.index  = 0;
+    _aq.time   = 0;
+    _broadcastState();
+    _saveQueueState();
+    return;
+  }
   _loadAudioItem(next, 0, _aqPlaying && !_aqSuppressed);
 }
 
