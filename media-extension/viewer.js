@@ -1603,9 +1603,13 @@ var _vHue        = 0;    // CSS hue-rotate() degrees — mplayer keys 5/6
 var _vSaturation = 1.0;  // CSS saturate()   — mplayer keys 7/8
 
 // Stereo balance (Web Audio API): _panValue, _audioCtx, _panNode defined in
-// media-shared.js; source wiring tracked per element here.
-var _videoGraphed  = false;  // whether videoEl has been wired into _audioCtx
-var _audioGraphed  = false;  // whether audioEl has been wired into _audioCtx
+// media-shared.js.  Both elements are wired into the graph eagerly so that
+// balance is always applied regardless of which element is active.
+_ensureAudioContext();
+try { _audioCtx.createMediaElementSource(audioEl).connect(_panNode); }
+catch (err) { console.warn('createMediaElementSource(audioEl) failed:', err); }
+try { _audioCtx.createMediaElementSource(videoEl).connect(_panNode); }
+catch (err) { console.warn('createMediaElementSource(videoEl) failed:', err); }
 
 // ── BroadcastChannel: pause other viewer tabs when we start playing audio ──
 
@@ -1945,36 +1949,12 @@ function seekRelative(secs) {
   _updateVideoControls();
 }
 
-// ── Stereo balance (Web Audio API) ──────────────────────────────────────────
-//
-// _ensureAudioContext() (media-shared.js) owns the AudioContext + PannerNode.
-// createMediaElementSource() permanently reroutes a media element's audio
-// through the AudioContext; calling it a second time on the same element
-// throws, so we track which elements have been connected here.
-
-function _ensureAudioGraph(mediaEl) {
-  _ensureAudioContext();
-  var already = (mediaEl === videoEl) ? _videoGraphed : _audioGraphed;
-  if (!already) {
-    // Mark as graphed first so a CORS-taint failure doesn't cause infinite retries.
-    if (mediaEl === videoEl) _videoGraphed = true;
-    else                     _audioGraphed = true;
-    try {
-      _audioCtx.createMediaElementSource(mediaEl).connect(_panNode);
-    } catch (err) {
-      console.warn('createMediaElementSource failed (CORS?):', err);
-    }
-  }
-}
-
 function adjustBalance(delta) {
   _panValue = +Math.max(-1, Math.min(1, _panValue + delta)).toFixed(1);
+  _panNode.pan.value = _panValue;
+  _ensureAudioContext();  // resume if suspended
   localStorage.setItem('media-balance', String(_panValue));
   _mediaChannel.postMessage({ cmd: 'av-settings', balance: _panValue });
-  if (activeMediaEl) {
-    _ensureAudioGraph(activeMediaEl);
-    _panNode.pan.value = _panValue;
-  }
   _updateVideoControls();
 }
 
