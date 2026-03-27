@@ -848,6 +848,9 @@ function _setQueueMode(mode) {
   var old = ui.queueMode;
   ui.queueMode = mode;
 
+  // When entering queue mode the selector pane hides; move focus off it.
+  // When leaving queue mode the queue pane hides; move focus off it.
+  if (mode && !old && focusMode === 'selector') setFocusMode('queue');
   if (!mode && focusMode === 'queue') setFocusMode('selector');
 
   if (mode === 'video' && old !== 'video') {
@@ -1223,12 +1226,14 @@ document.addEventListener('keydown', function(e) {
         e.preventDefault(); toggleThumbnails(); return;
       case 'Tab': {
         e.preventDefault();
-        var tabModes = ui.queueMode ? ['selector', 'viewer', 'queue'] : ['selector', 'viewer'];
-        var tabNext  = (tabModes.indexOf(focusMode) + 1) % tabModes.length;
-        var nextMode = tabModes[tabNext];
-        if (nextMode === 'queue') _queueSelIdx = _qState[ui.queueMode === 'video' ? 'video' : 'audio'].index;
-        setFocusMode(nextMode);
-        renderQueuePane();
+        if (ui.queueMode) {
+          var nextQF = (focusMode === 'viewer') ? 'queue' : 'viewer';
+          if (nextQF === 'queue') _queueSelIdx = _qState[ui.queueMode === 'video' ? 'video' : 'audio'].index;
+          setFocusMode(nextQF);
+          renderQueuePane();
+        } else {
+          setFocusMode(focusMode === 'selector' ? 'viewer' : 'selector');
+        }
         return;
       }
       case 'Escape':
