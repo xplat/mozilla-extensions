@@ -449,13 +449,12 @@ function showImage(filename) {
   pending.onload = function() {
     if (_imgPendingLoad !== pending) return;  // superseded
     _imgPendingLoad = null;
-    // Clear old size constraints before swap to prevent squishing.
-    mainImageEl.style.width     = '';
-    mainImageEl.style.height    = '';
-    mainImageEl.style.transform = '';
-    transformHostEl.style.width  = '';
-    transformHostEl.style.height = '';
-    mainImageEl.src = proxyUrl;   // fires 'load' from cache immediately
+    // Hide while swapping: prevents both the old-image-position flash (stale
+    // absolute margins land off-screen while transformHostEl is unsized) and
+    // squishing.  The load handler reveals the image after applyImageTransform()
+    // has set correct geometry.  One-frame blank is imperceptible.
+    mainImageEl.style.visibility = 'hidden';
+    mainImageEl.src = proxyUrl;
   };
   pending.onerror = function() {
     if (_imgPendingLoad !== pending) return;
@@ -469,6 +468,7 @@ mainImageEl.addEventListener('load', function() {
   imgSpinnerEl.classList.add('hidden');
   imagePaneEl.classList.add('image-loaded');
   applyImageTransform();
+  mainImageEl.style.visibility = '';
 });
 
 mainImageEl.addEventListener('error', function() {
@@ -1365,8 +1365,11 @@ function _updateVideoControls() {
     videoSeekFillEl.style.width = (cur / dur * 100).toFixed(2) + '%';
   }
   if (videoVolEl) {
-    var vol  = Math.round(activeMediaEl.volume * 100);
-    var text = activeMediaEl.muted ? 'MUTED' : ('VOL\u00a0' + vol);
+    var rawVol = activeMediaEl.volume;
+    var volStr = (rawVol <= 0)
+      ? '-\u221edB'
+      : (Math.round(20 * Math.log10(rawVol)) + 'dB');
+    var text = activeMediaEl.muted ? 'MUTED' : ('VOL\u00a0' + volStr);
     if (_panValue !== 0) {
       var side = _panValue > 0 ? 'R' : 'L';
       text += '\u2002' + side + Math.abs(_panValue).toFixed(1);
@@ -1532,7 +1535,7 @@ function adjustVolume(dBDelta) {
     vol = (dBDelta > 0) ? Math.pow(10, -40 / 20) : 0;
   } else {
     var newdB = 20 * Math.log10(current) + dBDelta;
-    vol = (newdB <= -60) ? 0 : Math.min(1, Math.pow(10, newdB / 20));
+    vol = (newdB <= -40) ? 0 : Math.min(1, Math.pow(10, newdB / 20));
   }
   vol = +vol.toFixed(4);
   if (activeMediaEl) {
