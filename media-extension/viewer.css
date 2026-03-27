@@ -345,9 +345,11 @@ html, body {
 
 #image-pane.mode-scroll {
   overflow: auto;
-  display: block;
-  align-items: unset;
-  justify-content: unset;
+  /* Keep display:flex from the base rule; alignment is handled by margin:auto
+     on transform-host, which centers the image when it fits and scrolls from
+     the edge (no empty space) when it overflows. */
+  align-items: flex-start;
+  justify-content: flex-start;
   cursor: grab;
 }
 
@@ -358,6 +360,12 @@ html, body {
 #transform-host {
   position: relative;
   flex-shrink: 0;
+}
+
+/* In scroll mode, margin:auto centers transform-host when smaller than the
+   viewport, and collapses to 0 when larger (so scroll starts at the edge). */
+#image-pane.mode-scroll #transform-host {
+  margin: auto;
 }
 
 #main-image {
@@ -407,6 +415,23 @@ html, body {
   line-height: 1.7;
   text-align: left;
   white-space: pre;
+}
+
+/* Transition cover — snaps opaque (no transition) to hide old content, then
+   fades out (0.15s) once new content is ready.  z-index 4: above content
+   layers (2–3) but below the spinner (5) so loading state stays visible. */
+#transition-cover {
+  position: absolute;
+  inset: 0;
+  background: #111111;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 4;
+}
+#transition-cover.covering {
+  opacity: 1;
+  transition: none;  /* snap opaque instantly */
 }
 
 /* No-image hint */
@@ -628,6 +653,8 @@ html, body {
 #image-pane.media-audio #transform-host    { display: none; }
 #image-pane.media-audio #video-controls    { display: flex; }
 #image-pane.media-audio #no-image-hint     { display: none; }
+/* Progress bar always visible for audio (no hover required) */
+#image-pane.media-audio #video-controls    { opacity: 1; pointer-events: auto; }
 
 /* — media error overlay — */
 #media-error {

@@ -101,6 +101,11 @@
           <div id="info-content"></div>
         </div>
 
+        <!-- Cross-fade cover: snaps opaque at mode-switch start, fades out when
+             new content is ready, hiding layout-reflow flashes. z-index below
+             the spinner so loading state remains visible. -->
+        <div id="transition-cover"></div>
+
         <!-- Empty-pane hint when nothing is selected -->
         <div id="no-image-hint">
           <span>Select a file · Enter or double-click</span>

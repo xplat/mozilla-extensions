@@ -93,6 +93,29 @@ var dragState = {};
 // Fullscreen bookkeeping — NOT persisted
 var selectorStateBeforeFS = true;
 
+// In-flight preload image — used to avoid blanking/squishing on image navigation
+var _imgPendingLoad = null;
+
+// Display size and full transform state from the most recent applyImageTransform()
+// call.  Used to recover the exact image pixel at the viewport centre before a
+// transform change so it can be repositioned afterwards.  Reset on new image.
+var _prevDisplayW = 0;
+var _prevDisplayH = 0;
+var _prevRot    = 0;
+var _prevScale  = 1;
+var _prevMirror = false;
+var _prevFlip   = false;
+
+// Deferred image↔media transition state:
+//   _deferredMediaType ('video'|'audio'|'gif'|null): set when starting an
+//     image→media load without adding the CSS class yet (the old image stays
+//     visible until loadedmetadata fires, then we do the swap).
+//   _pendingMediaStop (bool): set when starting a media→image preload without
+//     stopping the current media yet (the old media keeps playing until the
+//     image's load event fires, then we do the swap).
+var _deferredMediaType = null;
+var _pendingMediaStop  = false;
+
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
 var pickScreenEl    = document.getElementById('pick-screen');
@@ -103,10 +126,11 @@ var viewerScreenEl  = document.getElementById('viewer-screen');
 var dirPathEl       = document.getElementById('dir-path');
 var fileListEl      = document.getElementById('file-list');
 var selectorPaneEl  = document.getElementById('selector-pane');
-var imagePaneEl     = document.getElementById('image-pane');
-var transformHostEl = document.getElementById('transform-host');
-var mainImageEl     = document.getElementById('main-image');
-var imgSpinnerEl    = document.getElementById('img-spinner');
+var imagePaneEl       = document.getElementById('image-pane');
+var transformHostEl   = document.getElementById('transform-host');
+var mainImageEl       = document.getElementById('main-image');
+var imgSpinnerEl      = document.getElementById('img-spinner');
+var transitionCoverEl = document.getElementById('transition-cover');
 var infoOverlayEl   = document.getElementById('info-overlay');
 var infoContentEl   = document.getElementById('info-content');
 var noImageHintEl   = document.getElementById('no-image-hint');
@@ -392,7 +416,7 @@ function selectItem(idx, scroll) {
   var el = fileListEl.children[idx];
   if (!el) return;
   el.classList.add('selected');
-  if (scroll) el.scrollIntoView({ block: 'nearest' });
+  if (scroll) el.scrollIntoView({ block: 'center' });
 }
 
 function openItem(idx) {
@@ -415,27 +439,69 @@ function openItem(idx) {
 }
 
 // ── Image display ──────────────────────────────────────────────────────────
+//
+// We preload the new image in a scratch element before swapping mainImageEl.src
+// so the old image stays visible during loading (no blank flash).  Clearing the
+// old inline width/height/transform on mainImageEl before the swap prevents the
+// new image from briefly inheriting the previous image's dimensions (squishing).
 
 function showImage(filename) {
   if (!filename || !currentDir) return;
   var fileUrl  = currentDir.replace(/\/$/, '') + '/' + filename;
   var proxyUrl = toProxyFile(fileUrl);
 
+  // Cancel any previous in-flight preload.
+  if (_imgPendingLoad) {
+    _imgPendingLoad.onload = _imgPendingLoad.onerror = null;
+    _imgPendingLoad.src    = '';
+    _imgPendingLoad        = null;
+  }
+
   imgSpinnerEl.classList.remove('hidden');
-  imagePaneEl.classList.remove('image-loaded');
-  mainImageEl.src = proxyUrl;
 
   if (!infoOverlayEl.classList.contains('hidden')) {
     updateInfoOverlay(filename);
   }
-
   document.title = filename + ' — Media Viewer';
+
+  // Load new image off-screen; swap only when decoded (no blank during load).
+  var pending = new Image();
+  _imgPendingLoad = pending;
+  pending.onload = function() {
+    if (_imgPendingLoad !== pending) return;  // superseded
+    _imgPendingLoad = null;
+    // Hide while swapping: prevents both the old-image-position flash (stale
+    // absolute margins land off-screen while transformHostEl is unsized) and
+    // squishing.  The load handler reveals the image after applyImageTransform()
+    // has set correct geometry.  One-frame blank is imperceptible.
+    mainImageEl.style.visibility = 'hidden';
+    mainImageEl.src = proxyUrl;
+  };
+  pending.onerror = function() {
+    if (_imgPendingLoad !== pending) return;
+    _imgPendingLoad = null;
+    imgSpinnerEl.classList.add('hidden');
+  };
+  pending.src = proxyUrl;
 }
 
 mainImageEl.addEventListener('load', function() {
   imgSpinnerEl.classList.add('hidden');
   imagePaneEl.classList.add('image-loaded');
+  _prevDisplayW = 0;  // new image — don't inherit previous scroll centre
+  _prevDisplayH = 0;
   applyImageTransform();
+  mainImageEl.style.visibility = '';
+  if (_pendingMediaStop) {
+    // media→image deferred swap: image is ready, now atomically stop media.
+    // transform-host was hidden (media class present); _stopActiveMedia()
+    // removes the class, making the already-transformed image visible.
+    _pendingMediaStop = false;
+    _startTransitionCover();
+    _stopActiveMedia();
+    // Cover fades out revealing the image.
+  }
+  _endTransitionCover();
 });
 
 mainImageEl.addEventListener('error', function() {
@@ -450,6 +516,39 @@ mainImageEl.addEventListener('error', function() {
 //
 // For 90°/270° rotation, visual W and H are swapped relative to natural dims.
 
+// Forward: image-centre offset → visual-centre offset under the given transform.
+// CSS transform order is "rotate scaleX scaleY scale", which means transforms
+// apply right-to-left to a point: scale → flip (scaleY−1) → mirror (scaleX−1)
+// → rotate.
+function _imageOffsetToVisual(ox, oy, rot, mirror, flip, scale) {
+  ox *= scale;  oy *= scale;
+  if (flip)   oy = -oy;
+  if (mirror) ox = -ox;
+  var rx, ry;
+  switch (rot) {
+    case  90: rx = -oy; ry =  ox; break;
+    case 180: rx = -ox; ry = -oy; break;
+    case 270: rx =  oy; ry = -ox; break;
+    default:  rx =  ox; ry =  oy;
+  }
+  return { x: rx, y: ry };
+}
+
+// Inverse: visual-centre offset → image-centre offset (exact inverse of above).
+function _visualOffsetToImage(ox, oy, rot, mirror, flip, scale) {
+  var rx, ry;
+  switch (rot) {
+    case  90: rx =  oy; ry = -ox; break;
+    case 180: rx = -ox; ry = -oy; break;
+    case 270: rx = -oy; ry =  ox; break;
+    default:  rx =  ox; ry =  oy;
+  }
+  if (mirror) rx = -rx;
+  if (flip)   ry = -ry;
+  rx /= scale;  ry /= scale;
+  return { x: rx, y: ry };
+}
+
 function applyImageTransform() {
   var img  = mainImageEl;
   var host = transformHostEl;
@@ -458,6 +557,23 @@ function applyImageTransform() {
   var nw = img.naturalWidth;
   var nh = img.naturalHeight;
   if (!nw || !nh) return;
+
+  // Capture the exact image pixel at the viewport centre before any changes.
+  // Defaults to (0, 0) = image centre for new images (_prevDisplayW == 0).
+  var _snapIPX = 0, _snapIPY = 0;
+  if (!ui.zoomFit && _prevDisplayW > 0) {
+    var _snapPW = pane.clientWidth;
+    var _snapPH = pane.clientHeight;
+    var _snapOX = Math.max(0, (_snapPW - _prevDisplayW) / 2);
+    var _snapOY = Math.max(0, (_snapPH - _prevDisplayH) / 2);
+    // Viewport centre → transform-host-centre offset
+    var _vcOX = pane.scrollLeft + _snapPW / 2 - _snapOX - _prevDisplayW / 2;
+    var _vcOY = pane.scrollTop  + _snapPH / 2 - _snapOY - _prevDisplayH / 2;
+    var _snap = _visualOffsetToImage(_vcOX, _vcOY,
+                                     _prevRot, _prevMirror, _prevFlip, _prevScale);
+    _snapIPX = _snap.x;
+    _snapIPY = _snap.y;
+  }
 
   var rot = ui.rotation;
 
@@ -509,10 +625,38 @@ function applyImageTransform() {
     pane.style.justifyContent  = 'center';
     pane.classList.remove('mode-scroll');
   } else {
-    pane.style.overflow        = 'auto';
-    pane.style.display         = 'block';
+    pane.style.overflow       = 'auto';
+    pane.style.display        = '';           // use base-rule flex
+    pane.style.alignItems     = 'flex-start'; // margin:auto on host overrides
+    pane.style.justifyContent = 'flex-start'; //   when image fits; 0 when not
     pane.classList.add('mode-scroll');
   }
+
+  // Centre-preservation in scroll mode.  After any transform change (scale,
+  // rotation, mirror, flip) we restore the scroll so the image pixel that was
+  // at the viewport centre before the change is still at the centre after it.
+  //
+  // We recover the image pixel via the exact inverse transform, then re-apply
+  // the new forward transform to find where it lands.  Exact for all cases.
+  // When _prevDisplayW == 0 (new image) _snapIPX/Y default to (0,0) = image
+  // centre, which centres the image in the viewport.
+  if (!ui.zoomFit) {
+    var pW = pane.clientWidth;
+    var pH = pane.clientHeight;
+    var newOffX = Math.max(0, (pW - displayW) / 2);
+    var newOffY = Math.max(0, (pH - displayH) / 2);
+    var newVis  = _imageOffsetToVisual(_snapIPX, _snapIPY,
+                                       rot, ui.mirror, ui.flip, scale);
+    pane.scrollLeft = Math.max(0, displayW / 2 + newVis.x + newOffX - pW / 2);
+    pane.scrollTop  = Math.max(0, displayH / 2 + newVis.y + newOffY - pH / 2);
+  }
+
+  _prevDisplayW = displayW;
+  _prevDisplayH = displayH;
+  _prevRot    = rot;
+  _prevScale  = scale;
+  _prevMirror = ui.mirror;
+  _prevFlip   = ui.flip;
 }
 
 // Reapply transform on window resize (fit mode depends on pane size)
@@ -863,13 +1007,21 @@ document.addEventListener('keydown', function(e) {
       case '[': e.preventDefault(); adjustSelectorWidth(-16); return;
       case ']': e.preventDefault(); adjustSelectorWidth(+16); return;
       case '~': e.preventDefault(); setSelectorWidth(SELECTOR_W_DEFAULT); return;
-      // Global media keys (active only when video/audio is loaded)
-      case 'm': if (activeMediaEl) { e.preventDefault(); toggleMute();          return; } break;
-      case 'p': if (activeMediaEl) { e.preventDefault(); togglePlayPause();     return; } break;
-      case '9': if (activeMediaEl) { e.preventDefault(); adjustVolume(-0.1);    return; } break;
-      case '0': if (activeMediaEl) { e.preventDefault(); adjustVolume(+0.1);    return; } break;
-      case '(': if (activeMediaEl) { e.preventDefault(); adjustBalance(-0.1);   return; } break;
-      case ')': if (activeMediaEl) { e.preventDefault(); adjustBalance(+0.1);   return; } break;
+      // Global A/V keys — always active; adjust shared settings and broadcast.
+      case 'm': e.preventDefault(); toggleMute();        return;
+      case 'p':
+        e.preventDefault();
+        if (activeMediaEl) {
+          togglePlayPause();
+        } else {
+          // No local media — ask whichever other tab is playing audio to toggle.
+          _mediaChannel.postMessage({ cmd: 'pause-toggle' });
+        }
+        return;
+      case '9': e.preventDefault(); adjustVolume(-1.5);  return;
+      case '0': e.preventDefault(); adjustVolume(+1.5);  return;
+      case '(': e.preventDefault(); adjustBalance(-0.1); return;
+      case ')': e.preventDefault(); adjustBalance(+0.1); return;
       case 'A': e.preventDefault(); toggleAutoplay(); return;
     }
   }
@@ -918,8 +1070,7 @@ function handleSelectorKey(e, key, ctrl, plain) {
     case 'u':
       e.preventDefault(); goToParent(); break;
     case 'n': nextImage(); break;
-    case 'b':
-    case 'p': prevImage(); break;
+    case 'b': prevImage(); break;
     case 's': cycleSortBy(); break;
     case 'z': toggleZoom(); break;
   }
@@ -969,6 +1120,23 @@ function handleViewerKey(e, key, ctrl, plain) {
       case '_': e.preventDefault(); cycleVideoTrack(); return;
       // OSD / info
       case 'o': e.preventDefault(); toggleInfoOverlay(); return;
+      // Color/quality (video only; overrides image quick-zoom keys 1-4)
+      // mplayer layout: 1/2 contrast, 3/4 brightness, 5/6 hue, 7/8 saturation
+      case '1': case '2': case '3': case '4':
+      case '5': case '6': case '7': case '8':
+        if (imagePaneEl.classList.contains('media-video')) {
+          e.preventDefault();
+          if      (key === '1') adjustVideoFilter('contrast',   -0.1);
+          else if (key === '2') adjustVideoFilter('contrast',   +0.1);
+          else if (key === '3') adjustVideoFilter('brightness', -0.1);
+          else if (key === '4') adjustVideoFilter('brightness', +0.1);
+          else if (key === '5') adjustVideoFilter('hue',        -10);
+          else if (key === '6') adjustVideoFilter('hue',        +10);
+          else if (key === '7') adjustVideoFilter('saturation', -0.1);
+          else if (key === '8') adjustVideoFilter('saturation', +0.1);
+          return;
+        }
+        break;
     }
   }
 
@@ -1010,8 +1178,7 @@ function handleViewerKey(e, key, ctrl, plain) {
       // Image navigation
       case 'Enter':
       case ' ':  e.preventDefault(); nextImage(); break;
-      case 'b':
-      case 'p':  prevImage(); break;
+      case 'b':  prevImage(); break;
       // Rotation (xzgv r/R/N)
       case 'r': rotateBy(90);        break;
       case 'R': rotateBy(-90);       break;
@@ -1205,6 +1372,12 @@ var _posCheckpointTimer = null;  // setTimeout handle for position-save throttle
 var _autoplay           = true;  // if false, media loads but does not start playing
 var _shouldAnnounce     = false; // true when audio-bearing media loaded; cleared after first 'playing' event
 
+// Video color/quality filter state (reset on each new file; applied via CSS filter on videoEl)
+var _vContrast   = 1.0;  // CSS contrast()   — mplayer keys 1/2
+var _vBrightness = 1.0;  // CSS brightness() — mplayer keys 3/4
+var _vHue        = 0;    // CSS hue-rotate() degrees — mplayer keys 5/6
+var _vSaturation = 1.0;  // CSS saturate()   — mplayer keys 7/8
+
 // Stereo balance (Web Audio API); created lazily on first adjustBalance() call
 var _panValue      = 0;      // -1 (full left) … 0 (centre) … +1 (full right)
 var _audioCtx      = null;
@@ -1216,10 +1389,46 @@ var _audioGraphed  = false;  // whether audioEl has been wired into _audioCtx
 
 var _mediaChannel = new BroadcastChannel('media-viewer');
 _mediaChannel.onmessage = function(e) {
-  if (e.data && e.data.cmd === 'pause' && activeMediaEl) {
+  if (!e.data) return;
+  if (e.data.cmd === 'pause' && activeMediaEl) {
     activeMediaEl.pause();
+  } else if (e.data.cmd === 'pause-toggle' && activeMediaEl) {
+    togglePlayPause();
+  } else if (e.data.cmd === 'av-settings') {
+    // Persist and immediately apply volume/mute/balance from another tab.
+    var d = e.data;
+    if (d.volume  !== undefined) localStorage.setItem('media-volume',  String(d.volume));
+    if (d.muted   !== undefined) localStorage.setItem('media-muted',   String(d.muted));
+    if (d.balance !== undefined) localStorage.setItem('media-balance', String(d.balance));
+    if (activeMediaEl) {
+      if (d.volume  !== undefined) activeMediaEl.volume = d.volume;
+      if (d.muted   !== undefined) activeMediaEl.muted  = d.muted;
+      if (d.balance !== undefined) {
+        _panValue = d.balance;
+        if (_panNode) _panNode.pan.value = _panValue;
+      }
+      _updateVideoControls();
+    }
   }
 };
+
+// ── Transition cover ────────────────────────────────────────────────────────
+//
+// Used for image↔media mode switches.  Snaps opaque (transition:none) to hide
+// any intermediate layout state, then fades out (0.15s) when new content is
+// ready.  Calling _endTransitionCover() when no cover was started is harmless.
+
+function _startTransitionCover() {
+  transitionCoverEl.classList.add('covering');
+}
+
+function _endTransitionCover() {
+  // One rAF defers the fade until after the browser has painted the newly
+  // ready content at least once, so the fade reveals a stable frame.
+  requestAnimationFrame(function() {
+    transitionCoverEl.classList.remove('covering');
+  });
+}
 
 // ── Stop / tear-down ────────────────────────────────────────────────────────
 
@@ -1249,6 +1458,7 @@ function _posKey(fileUrl) {
 
 function _savePosition(mediaEl) {
   if (!currentFile || !currentDir || mediaEl.paused || mediaEl.ended) return;
+  if (imagePaneEl.classList.contains('media-gif')) return;
   var fileUrl = currentDir.replace(/\/$/, '') + '/' + currentFile;
   localStorage.setItem(_posKey(fileUrl), String(mediaEl.currentTime));
 }
@@ -1285,8 +1495,11 @@ function _updateVideoControls() {
     videoSeekFillEl.style.width = (cur / dur * 100).toFixed(2) + '%';
   }
   if (videoVolEl) {
-    var vol  = Math.round(activeMediaEl.volume * 100);
-    var text = activeMediaEl.muted ? 'MUTED' : ('VOL\u00a0' + vol);
+    var rawVol = activeMediaEl.volume;
+    var volStr = (rawVol <= 0)
+      ? '-\u221edB'
+      : (Math.round(20 * Math.log10(rawVol)) + 'dB');
+    var text = activeMediaEl.muted ? 'MUTED' : ('VOL\u00a0' + volStr);
     if (_panValue !== 0) {
       var side = _panValue > 0 ? 'R' : 'L';
       text += '\u2002' + side + Math.abs(_panValue).toFixed(1);
@@ -1303,19 +1516,42 @@ function _onMediaLoadedMetadata() {
   var mediaEl = this;
   var fileUrl = currentDir.replace(/\/$/, '') + '/' + currentFile;
 
-  // Restore saved position before playback starts
-  var saved = _getSavedPosition(fileUrl);
-  if (saved > 0 && isFinite(mediaEl.duration) && saved < mediaEl.duration) {
-    mediaEl.currentTime = saved;
-  }
-
-  // Detect gif-loop: short video with no audio → play silently in a loop
+  // Detect gif-loop first: short video with no audio → play silently in a loop.
+  // Must run before the position-restore below so we can skip restoring for gifs.
+  var isGif = false;
   if (mediaEl === videoEl) {
     if (isFinite(videoEl.duration) && videoEl.duration < 60 && !videoEl.mozHasAudio) {
+      isGif = true;
       videoEl.loop  = true;
       videoEl.muted = true;
-      imagePaneEl.classList.replace('media-video', 'media-gif');
+      if (_deferredMediaType) {
+        _deferredMediaType = 'gif';  // class added below at swap time
+      } else {
+        imagePaneEl.classList.replace('media-video', 'media-gif');
+      }
     }
+  }
+
+  // Restore saved position before playback starts (gif-loops are excluded:
+  // they have no meaningful temporal position to resume).
+  var saved = 0;
+  if (!isGif) {
+    saved = _getSavedPosition(fileUrl);
+    if (saved > 0 && isFinite(mediaEl.duration) && saved < mediaEl.duration) {
+      mediaEl.currentTime = saved;
+    }
+  }
+
+  // image→media deferred swap: media is ready, now atomically replace the image.
+  if (_deferredMediaType) {
+    var dType = _deferredMediaType;
+    _deferredMediaType = null;
+    _startTransitionCover();
+    mainImageEl.src = '';
+    imagePaneEl.classList.remove('image-loaded');
+    imagePaneEl.classList.add(dType === 'gif'   ? 'media-gif'   :
+                              dType === 'video' ? 'media-video' : 'media-audio');
+    // Cover fades out below, after _updateVideoControls().
   }
 
   // Notify other tabs to pause before we start playing anything with audio
@@ -1345,6 +1581,7 @@ function _onMediaLoadedMetadata() {
   }
 
   _updateVideoControls();
+  _endTransitionCover();
   // Gif-loops always play (they're treated as looping images, not video).
   // For real video/audio, respect the autoplay toggle.
   if (_autoplay || imagePaneEl.classList.contains('media-gif')) {
@@ -1423,8 +1660,15 @@ function togglePlayPause() {
 }
 
 function toggleMute() {
-  if (!activeMediaEl) return;
-  activeMediaEl.muted = !activeMediaEl.muted;
+  var muted;
+  if (activeMediaEl) {
+    activeMediaEl.muted = !activeMediaEl.muted;
+    muted = activeMediaEl.muted;
+  } else {
+    muted = !(localStorage.getItem('media-muted') === 'true');
+  }
+  localStorage.setItem('media-muted', String(muted));
+  _mediaChannel.postMessage({ cmd: 'av-settings', muted: muted });
   _updateVideoControls();
 }
 
@@ -1433,10 +1677,28 @@ function toggleAutoplay() {
   _updateVideoControls();
 }
 
-function adjustVolume(delta) {
-  if (!activeMediaEl) return;
-  activeMediaEl.volume = Math.max(0, Math.min(1, activeMediaEl.volume + delta));
-  activeMediaEl.muted  = false;
+// Adjust volume by dBDelta decibels.  Using dB steps gives perceptually uniform
+// increments (~1.5 dB ≈ a just-noticeable loudness change; ~20 steps full→silence).
+function adjustVolume(dBDelta) {
+  var current = activeMediaEl
+    ? activeMediaEl.volume
+    : parseFloat(localStorage.getItem('media-volume') || '1');
+  var vol;
+  if (current <= 0) {
+    // At zero, stepping up goes to a minimal audible level (~-40 dB).
+    vol = (dBDelta > 0) ? Math.pow(10, -40 / 20) : 0;
+  } else {
+    var newdB = 20 * Math.log10(current) + dBDelta;
+    vol = (newdB <= -40) ? 0 : Math.min(1, Math.pow(10, newdB / 20));
+  }
+  vol = +vol.toFixed(4);
+  if (activeMediaEl) {
+    activeMediaEl.volume = vol;
+    activeMediaEl.muted  = false;
+  }
+  localStorage.setItem('media-volume', String(vol));
+  localStorage.setItem('media-muted',  'false');
+  _mediaChannel.postMessage({ cmd: 'av-settings', volume: vol, muted: false });
   _updateVideoControls();
 }
 
@@ -1480,11 +1742,42 @@ function _ensureAudioGraph(mediaEl) {
 
 function adjustBalance(delta) {
   _panValue = +Math.max(-1, Math.min(1, _panValue + delta)).toFixed(1);
+  localStorage.setItem('media-balance', String(_panValue));
+  _mediaChannel.postMessage({ cmd: 'av-settings', balance: _panValue });
   if (activeMediaEl) {
     _ensureAudioGraph(activeMediaEl);
     _panNode.pan.value = _panValue;
   }
   _updateVideoControls();
+}
+
+// ── Video color/quality filter ───────────────────────────────────────────────
+//
+// Applies CSS filter to the video element.  mplayer key layout:
+//   1/2 contrast, 3/4 brightness, 5/6 hue-rotate, 7/8 saturate
+// Filter is reset to defaults when a new file is opened (showMedia).
+
+function _applyVideoFilter() {
+  var parts = [];
+  if (_vContrast   !== 1.0) parts.push('contrast('   + _vContrast.toFixed(2)   + ')');
+  if (_vBrightness !== 1.0) parts.push('brightness(' + _vBrightness.toFixed(2) + ')');
+  if (_vHue        !== 0)   parts.push('hue-rotate(' + _vHue                   + 'deg)');
+  if (_vSaturation !== 1.0) parts.push('saturate('   + _vSaturation.toFixed(2) + ')');
+  videoEl.style.filter = parts.join(' ');
+}
+
+function adjustVideoFilter(prop, delta) {
+  if (prop === 'contrast') {
+    _vContrast   = +Math.max(0, Math.min(3, _vContrast   + delta)).toFixed(2);
+  } else if (prop === 'brightness') {
+    _vBrightness = +Math.max(0, Math.min(3, _vBrightness + delta)).toFixed(2);
+  } else if (prop === 'hue') {
+    _vHue = ((_vHue + delta) % 360 + 360) % 360;
+    if (_vHue > 180) _vHue -= 360;
+  } else if (prop === 'saturation') {
+    _vSaturation = +Math.max(0, Math.min(3, _vSaturation + delta)).toFixed(2);
+  }
+  _applyVideoFilter();
 }
 
 // ── Track switching ──────────────────────────────────────────────────────────
@@ -1524,27 +1817,97 @@ if (videoProgressEl) {
 function showMediaFile(filename) {
   if (!filename || !currentDir) return;
   var type = mediaType(filename);
-  _stopActiveMedia();
-  mainImageEl.src = '';
-  imagePaneEl.classList.remove('image-loaded');
-  if (type === 'image') {
-    showImage(filename);
-  } else if (type === 'video' || type === 'audio') {
-    showMedia(filename, type);
+
+  // Cancel any in-flight image preload.
+  if (_imgPendingLoad) {
+    _imgPendingLoad.onload = _imgPendingLoad.onerror = null;
+    _imgPendingLoad.src    = '';
+    _imgPendingLoad        = null;
   }
-  // 'unknown': leave pane empty — no-content hint will be visible
+
+  // Cancel any in-progress deferred transition, restoring a clean slate.
+  if (_deferredMediaType) {
+    // Media was loading invisibly behind the old image; just stop it.
+    _deferredMediaType = null;
+    _stopActiveMedia();
+    // Old image state (src, image-loaded) is intact — no further cleanup.
+  } else if (_pendingMediaStop) {
+    // Image was preloading behind the old media; stop media now.
+    _pendingMediaStop = false;
+    _stopActiveMedia();
+    mainImageEl.style.visibility = '';
+    mainImageEl.src = '';
+    imagePaneEl.classList.remove('image-loaded');
+  }
+
+  var wasMedia = imagePaneEl.classList.contains('media-video') ||
+                 imagePaneEl.classList.contains('media-audio') ||
+                 imagePaneEl.classList.contains('media-gif');
+
+  if (type === 'image') {
+    if (wasMedia) {
+      // media→image: keep media playing while image preloads; stop it only
+      // once the image's load event fires (see mainImageEl 'load' handler).
+      _pendingMediaStop = true;
+      showImage(filename);
+    } else {
+      // image→image: preload+visibility:hidden is already seamless, no cover.
+      showImage(filename);
+    }
+  } else if (type === 'video' || type === 'audio') {
+    if (!wasMedia) {
+      // image→media: load media invisibly (no CSS class yet); old image stays
+      // visible until loadedmetadata fires (see _onMediaLoadedMetadata).
+      _deferredMediaType = type;
+      showMedia(filename, type, /*deferred=*/ true);
+    } else {
+      // media→media: a brief blank with cover is acceptable.
+      _startTransitionCover();
+      _stopActiveMedia();
+      mainImageEl.src = '';
+      imagePaneEl.classList.remove('image-loaded');
+      showMedia(filename, type, /*deferred=*/ false);
+    }
+  } else {
+    // Unknown type: show empty pane / no-content hint.
+    _startTransitionCover();
+    _stopActiveMedia();
+    mainImageEl.src = '';
+    imagePaneEl.classList.remove('image-loaded');
+    requestAnimationFrame(function() {
+      transitionCoverEl.classList.remove('covering');
+    });
+  }
 }
 
-function showMedia(filename, type) {
+// deferred=true: called from image→media path; don't add the CSS display class
+// yet — the old image stays visible.  _onMediaLoadedMetadata() will do the swap.
+function showMedia(filename, type, deferred) {
   var fileUrl  = currentDir.replace(/\/$/, '') + '/' + filename;
   var proxyUrl = toProxyFile(fileUrl);
 
   activeMediaEl      = (type === 'video') ? videoEl : audioEl;
-  activeMediaEl.loop  = false;
-  activeMediaEl.muted = false;
+  activeMediaEl.loop   = false;
+  activeMediaEl.volume = parseFloat(localStorage.getItem('media-volume') || '1');
+  activeMediaEl.muted  = localStorage.getItem('media-muted') === 'true';
+  var _savedBal = parseFloat(localStorage.getItem('media-balance') || '0');
+  if (_savedBal !== _panValue) {
+    _panValue = _savedBal;
+    if (_panNode) _panNode.pan.value = _panValue;
+  }
 
-  imgSpinnerEl.classList.remove('hidden');
-  imagePaneEl.classList.add(type === 'video' ? 'media-video' : 'media-audio');
+  // Reset per-file video filter to defaults.
+  _vContrast = _vBrightness = 1.0;
+  _vHue = 0;
+  _vSaturation = 1.0;
+  videoEl.style.filter = '';
+
+  if (!deferred) {
+    // Immediate mode: show spinner and media class right away.
+    imgSpinnerEl.classList.remove('hidden');
+    imagePaneEl.classList.add(type === 'video' ? 'media-video' : 'media-audio');
+  }
+  // Deferred: old image stays visible; no spinner, no class until ready.
 
   activeMediaEl.src = proxyUrl;
   // loadedmetadata fires next → _onMediaLoadedMetadata()
