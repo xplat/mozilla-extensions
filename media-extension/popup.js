@@ -14,15 +14,14 @@ function fmtTime(secs) {
   return h > 0 ? h + ':' + p(m) + ':' + p(s) : m + ':' + p(s);
 }
 
-// Items are included in every chrome.runtime.sendMessage response.
-// For BroadcastChannel 'q-changed' events (which omit items to keep the
-// channel lean) we cache the last known list here.
-var _cachedItems = [];
+function _qAudioItems() {
+  try { return JSON.parse(localStorage.getItem('media-audio-queue') || '{}').items || []; }
+  catch (e) { return []; }
+}
 
 function render(state) {
-  var a = state.audio;
-  if (Array.isArray(a.items)) _cachedItems = a.items;
-  var items = _cachedItems;
+  var a     = state.audio;
+  var items = _qAudioItems();
   if (!items.length) {
     statusEl.textContent = 'QUEUE EMPTY';
     statusEl.className   = '';
@@ -59,7 +58,7 @@ btnPlay.addEventListener('click', function() { sendCmd('q-toggle'); });
 // Initial state fetch.
 chrome.runtime.sendMessage({ cmd: 'q-get-state' }, render);
 
-// Live updates via BroadcastChannel (popup shares extension origin).
+// Live updates via BroadcastChannel (popup shares extension origin and localStorage).
 var ch = new BroadcastChannel('media-queue');
 ch.onmessage = function(e) {
   if (e.data && e.data.cmd === 'q-changed') render(e.data);

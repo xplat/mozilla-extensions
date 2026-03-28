@@ -446,8 +446,7 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 
   function state() {
     return {
-      audio: { index: _aq.index, time: _currentTime(), playing: _aqPlaying, suppressed: _aqSuppressed,
-               items: _aq.items },
+      audio: { index: _aq.index, time: _currentTime(), playing: _aqPlaying, suppressed: _aqSuppressed },
       video: { index: _vq.index, time: _vq.time }
     };
   }
