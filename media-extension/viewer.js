@@ -52,44 +52,11 @@ const FULLSCREEN_DIMS = new Set([
 const SCALE_STEPS = [0.1, 0.125, 0.167, 0.25, 0.333, 0.5, 0.667, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
 
 // ── Mutable state ──────────────────────────────────────────────────────────
-
-// currentDir / currentFile / listing / selectedIdx — owned by the selector
-// module (viewer-selector.js).  Access via selector.currentDir, etc.
-
-// UI state — most persisted in history.state
-var ui = {
-  zoomFit:         true,
-  zoomReduceOnly:  true,   // in fit mode: shrink large images but don't enlarge small ones
-  recursive:       false,  // off by default (not an xzgv concept)
-  selectorVisible: true,
-  showHidden:      false,
-  sortBy:          'name', // 'name' | 'mtime' | 'size'
-  // Selector display
-  thumbnails:      false,  // v — thumbnail grid vs filename list
-  // Image transform
-  rotation:        0,      // 0 | 90 | 180 | 270 (degrees)
-  mirror:          false,  // horizontal mirror (m key) — xzgv 'm'
-  flip:            false,  // vertical flip   (F key) — xzgv 'f'
-  scale:           1.0,    // scale factor when zoomFit=false
-  // Queue mode — NOT persisted (resets on page load)
-  queueMode:       null,   // null | 'audio' | 'video'
-};
-
-// Focus mode — NOT persisted (resets to selector on page load)
-var focusMode = 'selector'; // 'selector' | 'viewer' | 'queue'
-
-// Selector pane width in pixels (adjusted with [ ] ~ and drag)
-var selectorWidthPx = 260;
-var SELECTOR_W_DEFAULT = 260;
-var SELECTOR_W_MIN     = 80;
-var SELECTOR_W_MAX     = 600;
-
-// Drag state — shared across image-pan and divider-resize drags
-var dragMode  = null;  // null | 'image' | 'divider'
-var dragState = {};
-
-// Fullscreen bookkeeping — NOT persisted
-var selectorStateBeforeFS = true;
+//
+// ui, focusMode, selectorWidthPx / SELECTOR_W_*, dragMode, dragState,
+// selectorStateBeforeFS — declared in viewer-ui.js (loaded first).
+//
+// currentDir / currentFile / listing / selectedIdx — owned by viewer-selector.js.
 
 // In-flight preload image — used to avoid blanking/squishing on image navigation
 var _imgPendingLoad = null;
@@ -174,97 +141,16 @@ var _contentPath = null;
 var _isQueueContent = false;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
+// UI-framework refs (screens, selector, panes, buttons, queue) — viewer-ui.js.
+// Content-pane and media refs remain here pending viewer-content.js extraction.
 
-var pickScreenEl    = document.getElementById('pick-screen');
-var loadingScreenEl = document.getElementById('loading-screen');
-var errorScreenEl   = document.getElementById('error-screen');
-var viewerScreenEl  = document.getElementById('viewer-screen');
-
-var dirPathEl       = document.getElementById('dir-path');
-var fileListEl      = document.getElementById('file-list');
-var selectorPaneEl  = document.getElementById('selector-pane');
-var imagePaneEl       = document.getElementById('image-pane');
 var transformHostEl   = document.getElementById('transform-host');
 var mainImageEl       = document.getElementById('main-image');
 var imgSpinnerEl      = document.getElementById('img-spinner');
 var transitionCoverEl = document.getElementById('transition-cover');
-var infoOverlayEl   = document.getElementById('info-overlay');
-var infoContentEl   = document.getElementById('info-content');
-var noImageHintEl   = document.getElementById('no-image-hint');
-
-var paneDividerEl  = document.getElementById('pane-divider');
-
-var btnRecursive = document.getElementById('btn-recursive');
-var btnHidden    = document.getElementById('btn-hidden');
-var btnSort      = document.getElementById('btn-sort');
-
-var queuePaneEl      = document.getElementById('queue-pane');
-var queuePaneTitleEl = document.getElementById('queue-pane-title');
-var queueListEl      = document.getElementById('queue-list');
-var queueClearBtn    = document.getElementById('queue-clear-btn');
-
-// ── Screen helpers ─────────────────────────────────────────────────────────
-
-function showScreen(name) {
-  pickScreenEl.classList.add('hidden');
-  loadingScreenEl.classList.add('hidden');
-  errorScreenEl.classList.add('hidden');
-  viewerScreenEl.classList.add('hidden');
-  document.getElementById(name + '-screen').classList.remove('hidden');
-}
-
-// ── URL & history state ────────────────────────────────────────────────────
-
-function getUrlParams() {
-  var p = new URLSearchParams(window.location.search);
-  return { dir: p.get('dir'), file: p.get('file') };
-}
-
-function buildPageUrl(dir, file) {
-  var url = '?dir=' + encodeURIComponent(dir);
-  if (file) url += '&file=' + encodeURIComponent(file);
-  return url;
-}
-
-function persistState(push, newDir, newFile) {
-  var dir  = (newDir  !== undefined) ? newDir  : selector.currentDir;
-  var file = (newFile !== undefined) ? newFile : selector.currentFile;
-  var state = {
-    zoomFit:         ui.zoomFit,
-    zoomReduceOnly:  ui.zoomReduceOnly,
-    recursive:       ui.recursive,
-    selectorVisible: ui.selectorVisible,
-    showHidden:      ui.showHidden,
-    sortBy:          ui.sortBy,
-    thumbnails:      ui.thumbnails,
-    rotation:        ui.rotation,
-    mirror:          ui.mirror,
-    flip:            ui.flip,
-    scale:           ui.scale,
-  };
-  var url = buildPageUrl(dir, file);
-  if (push) {
-    history.pushState(state, '', url);
-  } else {
-    history.replaceState(state, '', url);
-  }
-}
-
-function applyHistoryState(state) {
-  if (!state || typeof state !== 'object') return;
-  if (typeof state.zoomFit         === 'boolean') ui.zoomFit         = state.zoomFit;
-  if (typeof state.zoomReduceOnly  === 'boolean') ui.zoomReduceOnly  = state.zoomReduceOnly;
-  if (typeof state.recursive       === 'boolean') ui.recursive       = state.recursive;
-  if (typeof state.selectorVisible === 'boolean') ui.selectorVisible = state.selectorVisible;
-  if (typeof state.showHidden      === 'boolean') ui.showHidden      = state.showHidden;
-  if (typeof state.thumbnails      === 'boolean') ui.thumbnails      = state.thumbnails;
-  if (typeof state.mirror          === 'boolean') ui.mirror          = state.mirror;
-  if (typeof state.flip            === 'boolean') ui.flip            = state.flip;
-  if (['name','mtime','size'].indexOf(state.sortBy) !== -1) ui.sortBy = state.sortBy;
-  if (state.rotation === 0 || state.rotation === 90 ||
-      state.rotation === 180 || state.rotation === 270) ui.rotation = state.rotation;
-  if (typeof state.scale === 'number' && state.scale > 0) ui.scale  = state.scale;
-}
+var infoOverlayEl     = document.getElementById('info-overlay');
+var infoContentEl     = document.getElementById('info-content');
+var noImageHintEl     = document.getElementById('no-image-hint');
 
 // ── Proxy URL helpers ──────────────────────────────────────────────────────
 // toProxyFile() is defined in media-shared.js.
@@ -636,35 +522,6 @@ function scrollImage(dx, dy) {
   imagePaneEl.scrollTop  += dy;
 }
 
-// ── Pane width ────────────────────────────────────────────────────────────
-// Keyboard: [ narrows, ] widens, ~ resets.  Also set by divider drag.
-
-function setSelectorWidth(w) {
-  selectorWidthPx = Math.max(SELECTOR_W_MIN, Math.min(SELECTOR_W_MAX, Math.round(w)));
-  document.documentElement.style.setProperty('--selector-w', selectorWidthPx + 'px');
-}
-
-function adjustSelectorWidth(delta) {
-  setSelectorWidth(selectorWidthPx + delta);
-}
-
-// ── Selector visibility ───────────────────────────────────────────────────
-
-function applySelector() {
-  viewerScreenEl.classList.toggle('no-selector', !ui.selectorVisible);
-  viewerScreenEl.classList.toggle('queue-mode',  !!ui.queueMode);
-  if (ui.queueMode && queuePaneTitleEl) {
-    queuePaneTitleEl.textContent = (ui.queueMode === 'video') ? 'VIDEO QUEUE' : 'AUDIO QUEUE';
-  }
-  if (btnRecursive) btnRecursive.classList.toggle('active', ui.recursive);
-}
-
-function toggleSelector() {
-  ui.selectorVisible = !ui.selectorVisible;
-  applySelector();
-  persistState(false);
-}
-
 // ── Queue mode ─────────────────────────────────────────────────────────────
 
 // Cycle: null → 'audio' → 'video' → null
@@ -823,29 +680,6 @@ if (queueClearBtn) {
   });
 }
 
-// ── Browser fullscreen ─────────────────────────────────────────────────────
-
-function toggleFullscreen() {
-  if (!document.fullscreenElement) {
-    selectorStateBeforeFS = ui.selectorVisible;
-    ui.selectorVisible = false;
-    applySelector();
-    document.documentElement.requestFullscreen().catch(function() {
-      ui.selectorVisible = selectorStateBeforeFS;
-      applySelector();
-    });
-  } else {
-    document.exitFullscreen();
-  }
-}
-
-document.addEventListener('fullscreenchange', function() {
-  if (!document.fullscreenElement) {
-    ui.selectorVisible = selectorStateBeforeFS;
-    applySelector();
-  }
-});
-
 // ── Image navigation / toggle helpers ─────────────────────────────────────
 // Delegated to selector module (viewer-selector.js):
 //   selector.nextFile(), selector.prevFile(), selector.goToParent(),
@@ -887,108 +721,8 @@ function updateInfoOverlay(filename) {
   infoContentEl.textContent = lines.join('\n');
 }
 
-// ── Focus mode ─────────────────────────────────────────────────────────────
-
-function setFocusMode(mode) {
-  focusMode = mode;
-  viewerScreenEl.dataset.focus = mode;
-}
-
-// ── Apply full UI state ────────────────────────────────────────────────────
-
-function applyUiState() {
-  applySelector();
-  if (mainImageEl.naturalWidth) applyImageTransform();
-
-  if (btnRecursive) btnRecursive.classList.toggle('active', ui.recursive);
-  if (btnHidden)    btnHidden.classList.toggle('active', ui.showHidden);
-  var labels = { name: 'NAME', mtime: 'DATE', size: 'SIZE' };
-  if (btnSort) btnSort.textContent = labels[ui.sortBy] || 'NAME';
-}
-
-// ── Keyboard shortcuts ─────────────────────────────────────────────────────
-
-document.addEventListener('keydown', function(e) {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
-  var key  = e.key;
-  var ctrl = e.ctrlKey && !e.altKey && !e.metaKey;
-  var plain = !e.ctrlKey && !e.altKey && !e.metaKey;
-
-  if (plain) {
-    // Global keys regardless of focus mode
-    switch (key) {
-      case 'Z':
-        e.preventDefault(); toggleSelector(); return;
-      case 'f':
-        e.preventDefault(); toggleFullscreen(); return;
-      case 'i':
-        e.preventDefault(); toggleInfoOverlay(); return;
-      case '.':
-        e.preventDefault();
-        // In video/audio viewer focus: step forward one frame; elsewhere: toggle hidden files
-        if (focusMode === 'viewer' && activeMediaEl) {
-          activeMediaEl.currentTime =
-            Math.min(activeMediaEl.duration, activeMediaEl.currentTime + 1 / 30);
-          _updateVideoControls();
-        } else {
-          selector.toggleHidden();
-        }
-        return;
-      case 'v':
-        e.preventDefault(); selector.toggleThumbnails(); return;
-      case 'Tab': {
-        e.preventDefault();
-        if (ui.queueMode) {
-          var nextQF = (focusMode === 'viewer') ? 'queue' : 'viewer';
-          if (nextQF === 'queue') _queueSelIdx = _qState[ui.queueMode === 'video' ? 'video' : 'audio'].index;
-          setFocusMode(nextQF);
-          renderQueuePane();
-        } else {
-          setFocusMode(focusMode === 'selector' ? 'viewer' : 'selector');
-        }
-        return;
-      }
-      case 'Escape':
-        if (focusMode === 'viewer') { e.preventDefault(); setFocusMode('selector'); }
-        return;
-      // Pane-width adjustment (xzgv [ ] ~)
-      case '[': e.preventDefault(); adjustSelectorWidth(-16); return;
-      case ']': e.preventDefault(); adjustSelectorWidth(+16); return;
-      case '~': e.preventDefault(); setSelectorWidth(SELECTOR_W_DEFAULT); return;
-      // Global A/V keys — always active; adjust shared settings and broadcast.
-      case 'm': e.preventDefault(); toggleMute();        return;
-      case 'p':
-        e.preventDefault();
-        if (activeMediaEl) {
-          togglePlayPause();
-        } else {
-          // No local media — ask whichever other tab is playing audio to toggle.
-          _bcPost('media-viewer', { cmd: 'pause-toggle' });
-        }
-        return;
-      case '9': e.preventDefault(); adjustVolume(-1.5);  return;
-      case '0': e.preventDefault(); adjustVolume(+1.5);  return;
-      case '(': e.preventDefault(); adjustBalance(-0.1); return;
-      case ')': e.preventDefault(); adjustBalance(+0.1); return;
-      case 'A': e.preventDefault(); toggleAutoplay(); return;
-      // Queue
-      case 'Q': e.preventDefault(); cycleQueueMode();     return;
-      case '\\':
-        e.preventDefault();
-        _bcPost('media-queue', { cmd: 'q-toggle' });
-        return;
-    }
-  }
-
-  if (focusMode === 'queue') {
-    if (plain) handleQueueFocusKey(e, key);
-  } else if (focusMode === 'selector') {
-    selector.handleKey(e, key, ctrl, plain);
-  } else {
-    handleViewerKey(e, key, ctrl, plain);
-  }
-});
+// ── Focus mode, applyUiState, global keydown ──────────────────────────────
+// Moved to viewer-ui.js.
 
 function handleQueueFocusKey(e, key) {
   var isAudio = (ui.queueMode === 'audio');
@@ -1173,71 +907,6 @@ function handleViewerKey(e, key, ctrl, plain) {
     }
   }
 }
-
-// ── Mouse: image-pane drag-to-scroll and divider drag-to-resize ───────────
-
-imagePaneEl.addEventListener('mousedown', function(e) {
-  if (e.button !== 0) return;
-  // Clicks inside the controls overlay (progress bar, HUD) are handled there;
-  // don't treat them as image-pane drag or play/pause clicks.
-  if (videoProgressEl && videoProgressEl.contains(e.target)) return;
-  dragMode = 'image';
-  dragState.wasDrag = false;
-  dragState.startX  = e.clientX;
-  dragState.startY  = e.clientY;
-  dragState.scrollX = imagePaneEl.scrollLeft;
-  dragState.scrollY = imagePaneEl.scrollTop;
-  e.preventDefault();
-});
-
-if (paneDividerEl) {
-  paneDividerEl.addEventListener('mousedown', function(e) {
-    if (e.button !== 0) return;
-    dragMode = 'divider';
-    dragState.startX = e.clientX;
-    dragState.startW = selectorWidthPx;
-    paneDividerEl.classList.add('dragging');
-    e.preventDefault();
-  });
-}
-
-document.addEventListener('mousemove', function(e) {
-  if (dragMode === 'image') {
-    var dx = e.clientX - dragState.startX;
-    var dy = e.clientY - dragState.startY;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragState.wasDrag = true;
-    imagePaneEl.scrollLeft = dragState.scrollX - dx;
-    imagePaneEl.scrollTop  = dragState.scrollY - dy;
-  } else if (dragMode === 'divider') {
-    setSelectorWidth(dragState.startW + (e.clientX - dragState.startX));
-  }
-});
-
-document.addEventListener('mouseup', function() {
-  if (dragMode === 'image' && !dragState.wasDrag) {
-    setFocusMode('viewer');
-    if (activeMediaEl) {
-      if (activeMediaEl.ended) {
-        activeMediaEl.currentTime = 0;
-        activeMediaEl.play().catch(function() {});
-      } else if (activeMediaEl.paused) {
-        activeMediaEl.play().catch(function() {});
-      } else {
-        activeMediaEl.pause();
-      }
-      _updateVideoControls();
-    }
-  }
-  if (dragMode === 'divider' && paneDividerEl) {
-    paneDividerEl.classList.remove('dragging');
-  }
-  dragMode = null;
-});
-
-// Clicking on the selector switches to selector focus
-selectorPaneEl.addEventListener('mousedown', function() {
-  setFocusMode('selector');
-});
 
 // ── Button listeners ───────────────────────────────────────────────────────
 
