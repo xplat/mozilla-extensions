@@ -15,8 +15,10 @@
 //   ui, imagePaneEl, persistState,                         (viewer-ui.js)
 //   _startTransitionCover, _endTransitionCover,            (viewer-media-playable.js)
 //   _stopActiveMedia,                                      (viewer-media-playable.js)
+//   ImageContent, PlayableContent, GifContent,             (viewer-media.js)
+//   content,                                               (viewer-content.js)
 //   toProxyFile,                                           (media-shared.js)
-//   _contentPath, _pendingMediaStop,                       (viewer.js)
+//   _contentPath,                                          (viewer.js)
 //   infoOverlayEl, updateInfoOverlay.                      (viewer.js)
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
@@ -98,15 +100,17 @@ mainImageEl.addEventListener('load', function() {
   _prevDisplayH = 0;
   applyImageTransform();
   mainImageEl.style.visibility = '';
-  if (_pendingMediaStop) {
-    // media→image deferred swap: image is ready, now atomically stop media.
-    // transform-host was hidden (media class present); _stopActiveMedia()
-    // removes the class, making the already-transformed image visible.
-    _pendingMediaStop = false;
+  var fut = content.future;
+  if (fut instanceof ImageContent &&
+      (content.current instanceof PlayableContent ||
+       content.current instanceof GifContent)) {
+    // media→image deferred swap: image is ready, atomically stop the media.
+    // transform-host was hidden (media class present); surrender() →
+    // _stopActiveMedia() removes the media class, revealing the image.
     _startTransitionCover();
-    _stopActiveMedia();
-    // Cover fades out revealing the image.
+    content.current.surrender();
   }
+  content.commitFuture(fut);
   _endTransitionCover();
 });
 

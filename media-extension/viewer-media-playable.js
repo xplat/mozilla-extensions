@@ -22,7 +22,10 @@
 //   _hasAnnounced, _bcPost, _updateChannelWiring,          (viewer-audio.js)
 //   _qState, _vqLoad,                                      (viewer-queue-mgt.js)
 //   _panValue,                                             (media-shared.js)
-//   _contentPath, _deferredMediaType, _isQueueContent,     (viewer.js)
+//   ImageContent, GifContent, PlayableContent,
+//   VideoContent,                                          (viewer-media.js)
+//   content,                                               (viewer-content.js)
+//   _contentPath,                                          (viewer.js)
 //   FULLSCREEN_DIMS,                                       (viewer.js)
 //   transitionCoverEl, mainImageEl, imgSpinnerEl,          (viewer-media-image.js)
 //   mediaErrorEl, mediaErrorMsgEl.                         (viewer.js)
@@ -197,11 +200,16 @@ function _onMediaLoadedMetadata() {
       isGif = true;
       videoEl.loop  = true;
       videoEl.muted = true;
-      if (_deferredMediaType) {
-        _deferredMediaType = 'gif';  // class added below at swap time
-      } else {
+      // Reclassify the future occupant from VideoContent to GifContent so
+      // ContentPane deduplication and CSS-class logic use the correct type.
+      if (content.future instanceof VideoContent) {
+        content.redirect(new GifContent(content.future.fullPath));
+      }
+      if (!content._isDeferred()) {
+        // Immediate mode (media→gif): swap the CSS class right now.
         imagePaneEl.classList.replace('media-video', 'media-gif');
       }
+      // Deferred mode (image→gif): class is added below in the deferred-swap block.
     }
   }
 
@@ -212,24 +220,25 @@ function _onMediaLoadedMetadata() {
   // pollute the file's own resume point.
   var saved = 0;
   if (!isGif) {
-    saved = _isQueueContent ? (_qState.video.time || 0)
-                            : _getSavedPosition(fileUrl);
+    saved = content.isQueueContent ? (_qState.video.time || 0)
+                                   : _getSavedPosition(fileUrl);
     if (saved > 0 && isFinite(mediaEl.duration) && saved < mediaEl.duration) {
       mediaEl.currentTime = saved;
     }
   }
 
   // image→media deferred swap: media is ready, now atomically replace the image.
-  if (_deferredMediaType) {
-    var dType = _deferredMediaType;
-    _deferredMediaType = null;
+  if (content._isDeferred()) {
+    var fut = content.future;
+    var cssClass = (fut instanceof GifContent)   ? 'media-gif'   :
+                   (fut instanceof VideoContent)  ? 'media-video' : 'media-audio';
     _startTransitionCover();
     mainImageEl.src = '';
     imagePaneEl.classList.remove('image-loaded');
-    imagePaneEl.classList.add(dType === 'gif'   ? 'media-gif'   :
-                              dType === 'video' ? 'media-video' : 'media-audio');
+    imagePaneEl.classList.add(cssClass);
     // Cover fades out below, after _updateVideoControls().
   }
+  content.commitFuture(content.future);
 
   // Schedule cross-tab pause for the moment playback actually starts,
   // not here — otherwise loading without autoplay still pauses other tabs.
@@ -266,7 +275,7 @@ function _onTimeUpdate() {
   var el = this;
   _posCheckpointTimer = setTimeout(function() {
     _posCheckpointTimer = null;
-    if (_isQueueContent && el === videoEl && !el.paused && !el.ended) {
+    if (content.isQueueContent && el === videoEl && !el.paused && !el.ended) {
       // In video queue mode, track position in background's queue state rather
       // than the file's own saved position so queue watching doesn't affect normal
       // resume behaviour when the file is opened outside the queue.
@@ -283,7 +292,7 @@ function _onMediaEnded() {
     _bcPost('media-viewer', { cmd: 'media-stopped' });
   }
   // In video queue mode, auto-advance to the next queue item.
-  if (_isQueueContent) {
+  if (content.isQueueContent) {
     var next = _qState.video.index + 1;
     _vqLoad(next);  // no-op if past end; sets _pendingQueuePlay for autoplay
     _updateChannelWiring();  // no longer playing

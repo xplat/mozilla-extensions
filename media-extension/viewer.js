@@ -64,26 +64,14 @@ const FULLSCREEN_DIMS = new Set([
 
 // _updateChannelWiring, _bcPost, _mediaListenCh — defined in viewer-audio.js.
 
-// Deferred image↔media transition state:
-//   _deferredMediaType ('video'|'audio'|'gif'|null): set when starting an
-//     image→media load without adding the CSS class yet (the old image stays
-//     visible until loadedmetadata fires, then we do the swap).
-//   _pendingMediaStop (bool): set when starting a media→image preload without
-//     stopping the current media yet (the old media keeps playing until the
-//     image's load event fires, then we do the swap).
-var _deferredMediaType = null;
-var _pendingMediaStop  = false;
-
 // Full path of whatever is currently loaded (or being loaded) in the content
-// pane.  Set by showMediaFile() from either an explicit fullPath argument or
-// from selector globals (currentDir + filename).  Queue-item loads pass
-// fullPath explicitly so they never need to mutate currentDir / currentFile.
+// pane.  Kept in sync by content._syncLegacyGlobals() (viewer-content.js).
+// Also written directly by _stopActiveMedia() for compatibility when that
+// function is called outside the ContentPane (e.g. the popstate handler).
 var _contentPath = null;
 
-// True when the content pane is playing a video queue item (set by showMediaFile
-// when called from _vqLoad).  Event handlers use this — not ui.queueMode — so
-// that the playback source identity survives queue mode changes (e.g. cycling
-// back to selector or audio-queue mode while the queue video keeps playing).
+// True when the content pane is playing a video queue item.
+// Kept in sync by content._syncLegacyGlobals().
 var _isQueueContent = false;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
@@ -468,77 +456,20 @@ function cycleVideoTrack() {
 // isQueueItem: true when called from _vqLoad — suppresses per-file position
 // persistence and routes time tracking through the video queue state instead.
 function showMediaFile(filename, fullPath, isQueueItem) {
-  _contentPath    = fullPath || (selector.currentDir ? selector.currentDir.replace(/\/$/, '') + '/' + filename : null);
-  _isQueueContent = !!isQueueItem;
-  if (!_contentPath) return;
-  var type = mediaType(filename);
-
-  // Cancel any in-flight image preload.
-  if (_imgPendingLoad) {
-    _imgPendingLoad.onload = _imgPendingLoad.onerror = null;
-    _imgPendingLoad.src    = '';
-    _imgPendingLoad        = null;
-  }
-
-  // Cancel any in-progress deferred transition, restoring a clean slate.
-  if (_deferredMediaType) {
-    // Media was loading invisibly behind the old image; just stop it.
-    _deferredMediaType = null;
-    _stopActiveMedia();
-    // Old image state (src, image-loaded) is intact — no further cleanup.
-  } else if (_pendingMediaStop) {
-    // Image was preloading behind the old media; stop media now.
-    _pendingMediaStop = false;
-    _stopActiveMedia();
-    mainImageEl.style.visibility = '';
-    mainImageEl.src = '';
-    imagePaneEl.classList.remove('image-loaded');
-  }
-
-  var wasMedia = imagePaneEl.classList.contains('media-video') ||
-                 imagePaneEl.classList.contains('media-audio') ||
-                 imagePaneEl.classList.contains('media-gif');
-
-  if (type === 'image') {
-    if (wasMedia) {
-      // media→image: keep media playing while image preloads; stop it only
-      // once the image's load event fires (see mainImageEl 'load' handler).
-      _pendingMediaStop = true;
-      showImage(filename);
-    } else {
-      // image→image: preload+visibility:hidden is already seamless, no cover.
-      showImage(filename);
-    }
-  } else if (type === 'video' || type === 'audio') {
-    if (!wasMedia) {
-      // image→media: load media invisibly (no CSS class yet); old image stays
-      // visible until loadedmetadata fires (see _onMediaLoadedMetadata).
-      _deferredMediaType = type;
-      showMedia(filename, type, /*deferred=*/ true);
-    } else {
-      // media→media: a brief blank with cover is acceptable.
-      _startTransitionCover();
-      _stopActiveMedia();
-      mainImageEl.src = '';
-      imagePaneEl.classList.remove('image-loaded');
-      showMedia(filename, type, /*deferred=*/ false);
-    }
-  } else {
-    // Unknown type: show empty pane / no-content hint.
-    _startTransitionCover();
-    _stopActiveMedia();
-    mainImageEl.src = '';
-    imagePaneEl.classList.remove('image-loaded');
-    requestAnimationFrame(function() {
-      transitionCoverEl.classList.remove('covering');
-    });
-  }
+  var fp = fullPath ||
+    (selector.currentDir
+      ? selector.currentDir.replace(/\/$/, '') + '/' + filename
+      : null);
+  if (!fp) return;
+  content.load(makeContentOccupant(fp, !!isQueueItem,
+    isQueueItem ? _queueSelIdx : undefined));
 }
 
-// deferred=true: called from image→media path; don't add the CSS display class
-// yet — the old image stays visible.  _onMediaLoadedMetadata() will do the swap.
+// Called by AudioContent.load() and VideoContent.load() via the ContentPane.
+// deferred=true (image→media path): don't add the CSS class yet — old image
+// stays visible.  _onMediaLoadedMetadata() does the atomic swap.
 function showMedia(filename, type, deferred) {
-  // _contentPath is always set by showMediaFile() before showMedia() is called.
+  // _contentPath is kept in sync by content._syncLegacyGlobals().
   var proxyUrl = toProxyFile(_contentPath);
 
   activeMediaEl      = (type === 'video') ? videoEl : audioEl;
