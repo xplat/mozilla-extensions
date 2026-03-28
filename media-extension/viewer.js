@@ -134,8 +134,9 @@ function _qVideoItems() {
 function _vqLoad(index) {
   var items = _qVideoItems();
   if (index < 0 || index >= items.length) return;
-  _pendingQueuePlay = true;
-  _queueSelIdx      = index;
+  _pendingQueuePlay      = true;
+  _queueSelIdx           = index;
+  _qState.video.time     = 0;  // reset locally; background confirms via q-changed
   var item     = items[index];
   var fullPath = item.dir.replace(/\/$/, '') + '/' + item.file;
   showMediaFile(item.file, fullPath);
@@ -147,9 +148,9 @@ function _vqPrev() { _vqLoad(_qState.video.index - 1); }
 // Keyboard cursor position within the queue pane (used when focusMode === 'queue').
 var _queueSelIdx = 0;
 
-// Saved dir/file to restore when exiting video queue mode.
-var _preQueueDir  = null;
-var _preQueueFile = null;
+// Pre-queue-mode selector snapshot — owned by the selector module.
+// viewer.js entry/exit paths call selector.savePreQueueState() /
+// selector.restorePreQueueState() and keep no references of their own.
 
 // _queueChannel / _mediaChannel: see _updateChannelWiring() below.
 
@@ -684,8 +685,7 @@ function _setQueueMode(mode) {
     // in the queue pane.  This prevents a video starting every time the user
     // passes through video-queue mode on the way to audio-queue mode.
     _queueSelIdx  = _qState.video.index;
-    _preQueueDir  = selector.currentDir;
-    _preQueueFile = selector.currentFile;
+    selector.savePreQueueState();
     applySelector();
     renderQueuePane();
     _updateChannelWiring();
@@ -697,19 +697,12 @@ function _setQueueMode(mode) {
   }
 
   if (old === 'video' && mode !== 'video') {
-    // Leaving video queue mode: save current time, stop video, restore saved position.
+    // Leaving video queue mode: save current time, stop video, restore selector.
     if (activeMediaEl && !activeMediaEl.ended)
       _bcPost('media-queue', { cmd: 'q-vtime', time: activeMediaEl.currentTime });
     _stopActiveMedia();
-    var savedDir  = _preQueueDir;
-    var savedFile = _preQueueFile;
-    _preQueueDir  = null;
-    _preQueueFile = null;
-    if (savedDir) {
-      selector.setFromHistory(savedDir, savedFile);
-      selector.loadDir(savedDir, false);  // reloads listing and shows savedFile
-      return;  // loadDir calls applySelector / applyUiState
-    }
+    if (selector.restorePreQueueState()) return;
+    // No pre-queue state saved (unusual): fall through to normal applySelector.
   }
 
   applySelector();
@@ -779,27 +772,8 @@ function _onQueueStateUpdate(prev) {
   renderQueuePane();
 }
 
-// Queue the currently highlighted selector item (or a directory's contents).
-// On a file: add to queue and advance to next item.
-// On a directory: collect all audio/video files (and CD/Disc subdirs) and
-//   add them in sorted order; don't advance the cursor.
-function _handleQueueKey() {
-  var selIdx = selector.selectedIdx;
-  if (selIdx < 0 || !selector.listing[selIdx]) return;
-  var item = selector.listing[selIdx];
-  if (item.t === 'd') {
-    var dirUrl = selector.currentDir.replace(/\/$/, '') + '/' + item.u;
-    _collectAndQueueDir(dirUrl).catch(function() {});
-  } else {
-    var mt = mediaType(item.u);
-    if (mt !== 'audio' && mt !== 'video') return;
-    _bcPost('media-queue', {
-      cmd: 'q-add', type: mt,
-      items: [{ dir: selector.currentDir, file: item.u }]
-    });
-    selector.nextFile();
-  }
-}
+// _collectAndQueueDir / _collectQueueables are called by selector.handleQueueKey()
+// and remain in viewer.js as globals because they depend on _bcPost and toProxyDir.
 
 async function _collectAndQueueDir(dirUrl) {
   var audioItems = [], videoItems = [];
@@ -1003,7 +977,7 @@ document.addEventListener('keydown', function(e) {
       case ')': e.preventDefault(); adjustBalance(+0.1); return;
       case 'A': e.preventDefault(); toggleAutoplay(); return;
       // Queue
-      case 'q': e.preventDefault(); _handleQueueKey();    return;
+      case 'q': e.preventDefault(); selector.handleQueueKey(); return;
       case 'Q': e.preventDefault(); cycleQueueMode();     return;
       case '\\':
         e.preventDefault();

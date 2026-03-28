@@ -9,7 +9,8 @@
 // Calls into globals that remain in viewer.js for now (will migrate in later
 // refactor passes): showMediaFile, persistState, applyUiState, setFocusMode,
 // toggleZoom, showScreen, mediaType, toProxyDir, toProxyQueueDir, toProxyThumb,
-// fmtSize, ui, fileListEl, dirPathEl, btnRecursive, btnHidden, btnSort.
+// fmtSize, _bcPost, _collectAndQueueDir,
+// ui, fileListEl, dirPathEl, btnRecursive, btnHidden, btnSort.
 
 var selector = (function() {
 
@@ -19,6 +20,10 @@ var selector = (function() {
   var _file    = null;  // selected filename within _dir (or null)
   var _listing = [];    // sorted/filtered entry objects from latest fetch
   var _selIdx  = -1;    // DOM index of highlighted item (-1 = none)
+
+  // Pre-queue-mode snapshot: saved when entering video queue, cleared on restore.
+  var _preQueueDir  = null;
+  var _preQueueFile = null;
 
   // ── Listing utilities ───────────────────────────────────────────────────────
 
@@ -377,6 +382,62 @@ var selector = (function() {
     }
   }
 
+  // ── Queue key handling ──────────────────────────────────────────────────────
+
+  // Called when the user presses 'q' with selector focus.
+  // On a file: add it to the appropriate queue and advance to the next item.
+  // On a directory: collect all queueable files (respecting CD/Disc subdirs)
+  // and add them without advancing the cursor.
+  function handleQueueKey() {
+    if (_selIdx < 0 || !_listing[_selIdx]) return;
+    var item = _listing[_selIdx];
+    if (item.t === 'd') {
+      var dirUrl = _dir.replace(/\/$/, '') + '/' + item.u;
+      _collectAndQueueDir(dirUrl).catch(function() {});
+    } else {
+      var mt = mediaType(item.u);
+      if (mt !== 'audio' && mt !== 'video') return;
+      _bcPost('media-queue', {
+        cmd: 'q-add', type: mt,
+        items: [{ dir: _dir, file: item.u }]
+      });
+      nextFile();
+    }
+  }
+
+  // ── Video queue mode save / restore ─────────────────────────────────────────
+
+  // Snapshot current selector position before entering video queue mode.
+  function savePreQueueState() {
+    _preQueueDir  = _dir;
+    _preQueueFile = _file;
+  }
+
+  // Restore selector display from the pre-queue snapshot without re-fetching
+  // the directory listing (the listing is already in memory).
+  // Returns true if a snapshot existed and was applied; false if there was
+  // nothing to restore (caller should fall through to normal post-queue logic).
+  function restorePreQueueState() {
+    if (!_preQueueDir) return false;
+    _dir  = _preQueueDir;
+    _file = _preQueueFile;
+    _preQueueDir  = null;
+    _preQueueFile = null;
+    persistState(false);
+    renderSelector();
+    updateDirPath();
+    applyUiState();
+    showScreen('viewer');
+    if (_file) {
+      var idx = _listing.findIndex(function(i) { return i.u === _file; });
+      if (idx >= 0) selectItem(idx, false);
+      showMediaFile(_file);
+    } else if (_selIdx >= 0 && _selIdx < _listing.length) {
+      selectItem(_selIdx, true);
+    }
+    return true;
+  }
+
   // ── Initialisation helpers ──────────────────────────────────────────────────
 
   // Set dir + file from URL params / history state without triggering a load.
@@ -405,12 +466,15 @@ var selector = (function() {
     renderSelector:   renderSelector,
     updateDirPath:    updateDirPath,
     displayableFiles: displayableFiles,
-    handleKey:        handleKey,
-    toggleThumbnails: toggleThumbnails,
-    toggleRecursive:  toggleRecursive,
-    toggleHidden:     toggleHidden,
-    cycleSortBy:      cycleSortBy,
-    setFromHistory:   setFromHistory,
+    handleKey:           handleKey,
+    handleQueueKey:      handleQueueKey,
+    toggleThumbnails:    toggleThumbnails,
+    toggleRecursive:     toggleRecursive,
+    toggleHidden:        toggleHidden,
+    cycleSortBy:         cycleSortBy,
+    setFromHistory:      setFromHistory,
+    savePreQueueState:   savePreQueueState,
+    restorePreQueueState: restorePreQueueState,
   };
 
 })();
