@@ -134,13 +134,14 @@ function _qVideoItems() {
 function _vqLoad(index) {
   var items = _qVideoItems();
   if (index < 0 || index >= items.length) return;
-  _pendingQueuePlay      = true;
-  _queueSelIdx           = index;
-  _qState.video.time     = 0;  // reset now; background confirms via q-changed
-  var item     = items[index];
-  var fullPath = item.dir.replace(/\/$/, '') + '/' + item.file;
+  _pendingQueuePlay = true;
+  _queueSelIdx      = index;
+  var item          = items[index];
+  var fullPath      = item.dir.replace(/\/$/, '') + '/' + item.file;
+  var newItem       = (index !== _qState.video.index);
+  if (newItem) _qState.video.time = 0;  // new item — start from beginning
   showMediaFile(item.file, fullPath, /*isQueueItem=*/ true);
-  _bcPost('media-queue', { cmd: 'q-jump', type: 'video', index: index });
+  if (newItem) _bcPost('media-queue', { cmd: 'q-jump', type: 'video', index: index });
 }
 function _vqNext() { _vqLoad(_qState.video.index + 1); }
 function _vqPrev() { _vqLoad(_qState.video.index - 1); }
@@ -972,7 +973,6 @@ document.addEventListener('keydown', function(e) {
       case ')': e.preventDefault(); adjustBalance(+0.1); return;
       case 'A': e.preventDefault(); toggleAutoplay(); return;
       // Queue
-      case 'q': e.preventDefault(); selector.handleQueueKey(); return;
       case 'Q': e.preventDefault(); cycleQueueMode();     return;
       case '\\':
         e.preventDefault();

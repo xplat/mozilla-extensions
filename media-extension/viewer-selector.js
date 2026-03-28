@@ -373,6 +373,7 @@ var selector = (function() {
       case 'u':          e.preventDefault(); goToParent(); break;
       case 'n':          nextFile(); break;
       case 'b':          prevFile(); break;
+      case 'q':          handleQueueKey(); break;
       case 's':          cycleSortBy(); break;
       case 'z':          toggleZoom(); break;
     }
