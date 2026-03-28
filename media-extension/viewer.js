@@ -129,15 +129,17 @@ function _qVideoItems() {
 // currentDir (from queue) with currentFile (from selector) when in queue mode.
 // These load the item directly rather than waiting for the q-changed round-trip,
 // and set _pendingQueuePlay so the new item autoplays.
+// NOTE: deliberately do NOT set currentDir/currentFile — those are selector
+// state.  We pass fullPath explicitly so persistState() never bakes the queue
+// item's directory into the browser URL.
 function _vqLoad(index) {
   var items = _qVideoItems();
   if (index < 0 || index >= items.length) return;
   _pendingQueuePlay = true;
   _queueSelIdx      = index;
-  var item = items[index];
-  currentDir  = item.dir;
-  currentFile = item.file;
-  showMediaFile(item.file);
+  var item     = items[index];
+  var fullPath = item.dir.replace(/\/$/, '') + '/' + item.file;
+  showMediaFile(item.file, fullPath);
   _bcPost('media-queue', { cmd: 'q-jump', type: 'video', index: index });
 }
 function _vqNext() { _vqLoad(_qState.video.index + 1); }
@@ -161,6 +163,12 @@ var _preQueueFile = null;
 //     image's load event fires, then we do the swap).
 var _deferredMediaType = null;
 var _pendingMediaStop  = false;
+
+// Full path of whatever is currently loaded (or being loaded) in the content
+// pane.  Set by showMediaFile() from either an explicit fullPath argument or
+// from selector globals (currentDir + filename).  Queue-item loads pass
+// fullPath explicitly so they never need to mutate currentDir / currentFile.
+var _contentPath = null;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
@@ -492,9 +500,9 @@ function openItem(idx) {
 // new image from briefly inheriting the previous image's dimensions (squishing).
 
 function showImage(filename) {
-  if (!filename || !currentDir) return;
-  var fileUrl  = currentDir.replace(/\/$/, '') + '/' + filename;
-  var proxyUrl = toProxyFile(fileUrl);
+  // _contentPath is always set by showMediaFile() before showImage() is called.
+  if (!_contentPath) return;
+  var proxyUrl = toProxyFile(_contentPath);
 
   // Cancel any previous in-flight preload.
   if (_imgPendingLoad) {
@@ -1154,7 +1162,11 @@ function cycleSortBy() {
 function toggleInfoOverlay() {
   var hidden = infoOverlayEl.classList.contains('hidden');
   if (hidden) {
-    updateInfoOverlay(currentFile);
+    // Use the content-pane path if something is loaded; fall back to the
+    // selector's currentFile (e.g. when no media has loaded yet).
+    var filename = _contentPath ? _contentPath.replace(/.*\//, '')
+                                : currentFile;
+    updateInfoOverlay(filename);
     infoOverlayEl.classList.remove('hidden');
   } else {
     infoOverlayEl.classList.add('hidden');
@@ -1823,6 +1835,7 @@ function _stopActiveMedia() {
   activeMediaEl.pause();
   activeMediaEl.src = '';
   activeMediaEl     = null;
+  _contentPath      = null;
   imagePaneEl.classList.remove('media-video', 'media-audio', 'media-gif');
   _updateChannelWiring();  // activeMediaEl just cleared
 }
@@ -1841,10 +1854,9 @@ function _posKey(fileUrl) {
 }
 
 function _savePosition(mediaEl) {
-  if (!currentFile || !currentDir || mediaEl.paused || mediaEl.ended) return;
+  if (!_contentPath || mediaEl.paused || mediaEl.ended) return;
   if (imagePaneEl.classList.contains('media-gif')) return;
-  var fileUrl = currentDir.replace(/\/$/, '') + '/' + currentFile;
-  localStorage.setItem(_posKey(fileUrl), String(mediaEl.currentTime));
+  localStorage.setItem(_posKey(_contentPath), String(mediaEl.currentTime));
 }
 
 function _getSavedPosition(fileUrl) {
@@ -1898,7 +1910,7 @@ function _updateVideoControls() {
 function _onMediaLoadedMetadata() {
   imgSpinnerEl.classList.add('hidden');
   var mediaEl = this;
-  var fileUrl = currentDir.replace(/\/$/, '') + '/' + currentFile;
+  var fileUrl = _contentPath;
 
   // Detect gif-loop first: short video with no audio → play silently in a loop.
   // Must run before the position-restore below so we can skip restoring for gifs.
@@ -2001,9 +2013,7 @@ function _onMediaEnded() {
     _updateChannelWiring();  // no longer playing
     return;
   }
-  if (currentFile && currentDir) {
-    _clearSavedPosition(currentDir.replace(/\/$/, '') + '/' + currentFile);
-  }
+  if (_contentPath) _clearSavedPosition(_contentPath);
   _updateVideoControls();
   _updateChannelWiring();  // no longer playing
 }
@@ -2030,8 +2040,8 @@ function _onMediaPlaying() {
 function _onMediaError() {
   imgSpinnerEl.classList.add('hidden');
   // Guard: if src was cleared during navigation activeMediaEl is already null.
-  if (!activeMediaEl || !currentFile) return;
-  var ext = currentFile.slice(currentFile.lastIndexOf('.') + 1).toLowerCase();
+  if (!activeMediaEl || !_contentPath) return;
+  var ext = _contentPath.slice(_contentPath.lastIndexOf('.') + 1).toLowerCase();
   var code = activeMediaEl.error ? activeMediaEl.error.code : 0;
   var msg;
   if (ext === 'mkv' && code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
@@ -2196,8 +2206,11 @@ if (videoProgressEl) {
 
 // ── Show media file (dispatcher) ────────────────────────────────────────────
 
-function showMediaFile(filename) {
-  if (!filename || !currentDir) return;
+// fullPath: optional explicit path (e.g. for video-queue items).  When omitted,
+// the path is constructed from currentDir + filename as usual.
+function showMediaFile(filename, fullPath) {
+  _contentPath = fullPath || (currentDir ? currentDir.replace(/\/$/, '') + '/' + filename : null);
+  if (!_contentPath) return;
   var type = mediaType(filename);
 
   // Cancel any in-flight image preload.
@@ -2265,8 +2278,8 @@ function showMediaFile(filename) {
 // deferred=true: called from image→media path; don't add the CSS display class
 // yet — the old image stays visible.  _onMediaLoadedMetadata() will do the swap.
 function showMedia(filename, type, deferred) {
-  var fileUrl  = currentDir.replace(/\/$/, '') + '/' + filename;
-  var proxyUrl = toProxyFile(fileUrl);
+  // _contentPath is always set by showMediaFile() before showMedia() is called.
+  var proxyUrl = toProxyFile(_contentPath);
 
   activeMediaEl      = (type === 'video') ? videoEl : audioEl;
   activeMediaEl.loop   = false;
