@@ -8,9 +8,11 @@ Usage:
   media-queue [--play] /path/to/directory    # all audio+video files, recursing
                                              # into CD/Disc subdirectories
   media-queue [--play] path [path ...]       # multiple files/directories
+  media-queue --play                         # restart a finished queue from the top
 
 Audio files go into the audio queue; video files into the video queue.
---play / -p starts the audio queue playing immediately if it was empty.
+--play starts the audio queue playing; if the queue has just finished it
+restarts from the beginning.  Paths are optional when --play is used alone.
 
   Linux  : $XDG_CACHE_HOME/media-viewer/queue/   (default ~/.cache/media-viewer/queue/)
   macOS  : ~/Library/Caches/media-viewer/queue/
@@ -76,10 +78,13 @@ def main():
         description='Add audio/video files to the Media Viewer queue.',
     )
     ap.add_argument('--play', '-p', action='store_true',
-                    help='start playing the audio queue immediately if it was empty')
-    ap.add_argument('paths', nargs='+', metavar='path',
+                    help='start (or restart) the audio queue; paths are optional')
+    ap.add_argument('paths', nargs='*', metavar='path',
                     help='files or directories to add to the queue')
     args = ap.parse_args()
+
+    if not args.paths and not args.play:
+        ap.error('provide at least one path, or use --play to restart a finished queue')
 
     audio_items, video_items = [], []
     error = False
@@ -104,7 +109,7 @@ def main():
     if error:
         sys.exit(1)
 
-    if not audio_items and not video_items:
+    if args.paths and not audio_items and not video_items:
         print('error: no supported audio/video files found', file=sys.stderr)
         sys.exit(1)
 

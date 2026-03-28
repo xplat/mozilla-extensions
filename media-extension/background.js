@@ -96,11 +96,18 @@ function handleNativeServer() {
 function handleNativeQueue(msg) {
   var newAudio = msg.audio || [];
   var newVideo = msg.video || [];
+  // Decide whether to start playing *before* extending the list so that the
+  // past-end sentinel (_aq.index == old length) lines up with the first
+  // newly-added item after the concat.
+  var shouldPlay = msg.play && !_aqPlaying;
   if (newAudio.length) _aq.items = _aq.items.concat(newAudio);
   if (newVideo.length) _vq.items = _vq.items.concat(newVideo);
   _saveQueueState();
   _broadcastState();
-  if (msg.play && !_aqPlaying && newAudio.length) _toggleAudioQueue();
+  // With no new items, --play still restarts a finished queue from the top
+  // (via _toggleAudioQueue's past-end reset), so we only require the queue
+  // to be non-empty, not that new items were added.
+  if (shouldPlay && _aq.items.length) _toggleAudioQueue();
 }
 
 // handleNativeOpen and HOST_NAME are defined above; load shared plumbing.
