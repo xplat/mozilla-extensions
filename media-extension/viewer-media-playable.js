@@ -1,10 +1,13 @@
 'use strict';
 // ── viewer-media-playable.js ──────────────────────────────────────────────────
 //
-// Common audio+video playback infrastructure: autoplay flag, seek, saved-position
-// persistence, controls HUD, transition cover, and stop/tear-down.
+// Common audio+video playback infrastructure: media element refs, lifecycle
+// flags, event handlers, autoplay, seek, saved-position persistence, controls
+// HUD, transition cover, and stop/tear-down.
 //
 // Declares these globals used by other modules:
+//   videoEl, audioEl, activeMediaEl,
+//   _shouldAnnounce, _pendingAutoFS, _pendingQueuePlay,
 //   _autoplay, _posCheckpointTimer,
 //   _clearPosCheckpoint,
 //   _posKey, _savePosition, _getSavedPosition, _clearSavedPosition,
@@ -15,12 +18,14 @@
 //   videoProgressEl, videoSeekFillEl, videoTimeEl, videoVolEl.
 //
 // Calls into globals defined in earlier / later modules:
-//   imagePaneEl,                                     (viewer-ui.js)
-//   _hasAnnounced, _bcPost, _updateChannelWiring,    (viewer-audio.js)
-//   _panValue,                                       (media-shared.js)
-//   activeMediaEl, _contentPath,                     (viewer.js)
-//   _pendingAutoFS, _pendingQueuePlay, _shouldAnnounce, (viewer.js)
-//   transitionCoverEl, mainImageEl, mediaErrorEl.    (viewer.js)
+//   imagePaneEl, selectorStateBeforeFS, ui, applySelector, (viewer-ui.js)
+//   _hasAnnounced, _bcPost, _updateChannelWiring,          (viewer-audio.js)
+//   _qState, _vqLoad,                                      (viewer-queue-mgt.js)
+//   _panValue,                                             (media-shared.js)
+//   _contentPath, _deferredMediaType, _isQueueContent,     (viewer.js)
+//   FULLSCREEN_DIMS,                                       (viewer.js)
+//   transitionCoverEl, mainImageEl, imgSpinnerEl,          (viewer-media-image.js)
+//   mediaErrorEl, mediaErrorMsgEl.                         (viewer.js)
 
 // ── HUD DOM refs ──────────────────────────────────────────────────────────────
 
@@ -163,3 +168,178 @@ function seekRelative(secs) {
     Math.max(0, Math.min(activeMediaEl.duration, activeMediaEl.currentTime + secs));
   _updateVideoControls();
 }
+
+// ── Media element refs and playback lifecycle flags ───────────────────────────
+
+var videoEl   = document.getElementById('main-video');
+var audioEl   = document.getElementById('main-audio');
+
+var activeMediaEl     = null;   // currently active <video> or <audio>, or null
+var _shouldAnnounce   = false;  // true when audio-bearing media loaded; cleared after first 'playing' event
+var _pendingAutoFS    = false;  // true when auto-fullscreen should fire on the next 'playing' event
+var _pendingQueuePlay = false;  // true when a video-queue advance should autoplay regardless of _autoplay
+
+// ── Media element event handlers ─────────────────────────────────────────────
+//
+// Temporarily in this module pending content-object refactoring, which will
+// let loadedmetadata/ended/playing/error be split by media type.
+
+function _onMediaLoadedMetadata() {
+  imgSpinnerEl.classList.add('hidden');
+  var mediaEl = this;
+  var fileUrl = _contentPath;
+
+  // Detect gif-loop first: short video with no audio → play silently in a loop.
+  // Must run before the position-restore below so we can skip restoring for gifs.
+  var isGif = false;
+  if (mediaEl === videoEl) {
+    if (isFinite(videoEl.duration) && videoEl.duration < 60 && !videoEl.mozHasAudio) {
+      isGif = true;
+      videoEl.loop  = true;
+      videoEl.muted = true;
+      if (_deferredMediaType) {
+        _deferredMediaType = 'gif';  // class added below at swap time
+      } else {
+        imagePaneEl.classList.replace('media-video', 'media-gif');
+      }
+    }
+  }
+
+  // Restore saved position before playback starts (gif-loops are excluded:
+  // they have no meaningful temporal position to resume).
+  // Video queue uses its own per-queue time (_qState.video.time broadcast from
+  // background), not the file's general saved position, so queue watching doesn't
+  // pollute the file's own resume point.
+  var saved = 0;
+  if (!isGif) {
+    saved = _isQueueContent ? (_qState.video.time || 0)
+                            : _getSavedPosition(fileUrl);
+    if (saved > 0 && isFinite(mediaEl.duration) && saved < mediaEl.duration) {
+      mediaEl.currentTime = saved;
+    }
+  }
+
+  // image→media deferred swap: media is ready, now atomically replace the image.
+  if (_deferredMediaType) {
+    var dType = _deferredMediaType;
+    _deferredMediaType = null;
+    _startTransitionCover();
+    mainImageEl.src = '';
+    imagePaneEl.classList.remove('image-loaded');
+    imagePaneEl.classList.add(dType === 'gif'   ? 'media-gif'   :
+                              dType === 'video' ? 'media-video' : 'media-audio');
+    // Cover fades out below, after _updateVideoControls().
+  }
+
+  // Schedule cross-tab pause for the moment playback actually starts,
+  // not here — otherwise loading without autoplay still pauses other tabs.
+  var hasAudio = mediaEl === audioEl ||
+                 (mediaEl === videoEl && videoEl.mozHasAudio &&
+                  !imagePaneEl.classList.contains('media-gif'));
+  _shouldAnnounce = hasAudio;
+
+  // Auto-fullscreen: widescreen video (≥ 3:2 aspect) played from the beginning.
+  // Skipped when restoring a saved position (the user already watched part of it)
+  // or when already fullscreen or when gif-loop mode.
+  // The actual fullscreen request is deferred to the 'playing' event so it fires
+  // when the user actually starts playback rather than when the file loads.
+  _pendingAutoFS = (mediaEl === videoEl &&
+      !imagePaneEl.classList.contains('media-gif') &&
+      !document.fullscreenElement &&
+      !(saved > 0) &&
+      FULLSCREEN_DIMS.has(videoEl.videoWidth + 'x' + videoEl.videoHeight));
+
+  _updateVideoControls();
+  _endTransitionCover();
+  // Gif-loops always play (they're treated as looping images, not video).
+  // For real video/audio, respect the autoplay toggle; video-queue advances
+  // always play regardless (_pendingQueuePlay) to keep the queue running.
+  if (_autoplay || imagePaneEl.classList.contains('media-gif') || _pendingQueuePlay) {
+    _pendingQueuePlay = false;
+    mediaEl.play().catch(function() {});
+  }
+}
+
+function _onTimeUpdate() {
+  _updateVideoControls();
+  if (_posCheckpointTimer !== null) return;
+  var el = this;
+  _posCheckpointTimer = setTimeout(function() {
+    _posCheckpointTimer = null;
+    if (_isQueueContent && el === videoEl && !el.paused && !el.ended) {
+      // In video queue mode, track position in background's queue state rather
+      // than the file's own saved position so queue watching doesn't affect normal
+      // resume behaviour when the file is opened outside the queue.
+      _bcPost('media-queue', { cmd: 'q-vtime', time: el.currentTime });
+    } else {
+      _savePosition(el);
+    }
+  }, 5000);
+}
+
+function _onMediaEnded() {
+  if (_hasAnnounced) {
+    _hasAnnounced = false;
+    _bcPost('media-viewer', { cmd: 'media-stopped' });
+  }
+  // In video queue mode, auto-advance to the next queue item.
+  if (_isQueueContent) {
+    var next = _qState.video.index + 1;
+    _vqLoad(next);  // no-op if past end; sets _pendingQueuePlay for autoplay
+    _updateChannelWiring();  // no longer playing
+    return;
+  }
+  if (_contentPath) _clearSavedPosition(_contentPath);
+  _updateVideoControls();
+  _updateChannelWiring();  // no longer playing
+}
+
+function _onMediaPlaying() {
+  if (_shouldAnnounce) {
+    _shouldAnnounce = false;
+    _hasAnnounced   = true;
+    _bcPost('media-viewer', { cmd: 'pause' });
+  }
+  if (_pendingAutoFS && this === videoEl && !document.fullscreenElement) {
+    _pendingAutoFS = false;
+    selectorStateBeforeFS = ui.selectorVisible;
+    ui.selectorVisible = false;
+    applySelector();
+    document.documentElement.requestFullscreen().catch(function() {
+      ui.selectorVisible = selectorStateBeforeFS;
+      applySelector();
+    });
+  }
+  _updateChannelWiring();  // now playing
+}
+
+function _onMediaError() {
+  imgSpinnerEl.classList.add('hidden');
+  // Guard: if src was cleared during navigation activeMediaEl is already null.
+  if (!activeMediaEl || !_contentPath) return;
+  var ext = _contentPath.slice(_contentPath.lastIndexOf('.') + 1).toLowerCase();
+  var code = activeMediaEl.error ? activeMediaEl.error.code : 0;
+  var msg;
+  if (ext === 'mkv' && code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+    msg = 'MKV playback is not supported in this version of Firefox.\n' +
+          'Try enabling media.mkv.enabled in about:config, or upgrade to a newer Firefox.';
+  } else if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
+             code === MediaError.MEDIA_ERR_DECODE) {
+    msg = 'This file format is not supported by your browser (' + ext.toUpperCase() + ').';
+  } else {
+    msg = 'Error loading media.';
+  }
+  if (mediaErrorMsgEl) mediaErrorMsgEl.textContent = msg;
+  if (mediaErrorEl)    mediaErrorEl.classList.remove('hidden');
+}
+
+videoEl.addEventListener('loadedmetadata', _onMediaLoadedMetadata);
+audioEl.addEventListener('loadedmetadata', _onMediaLoadedMetadata);
+videoEl.addEventListener('playing',        _onMediaPlaying);
+audioEl.addEventListener('playing',        _onMediaPlaying);
+videoEl.addEventListener('timeupdate',     _onTimeUpdate);
+audioEl.addEventListener('timeupdate',     _onTimeUpdate);
+videoEl.addEventListener('ended',          _onMediaEnded);
+audioEl.addEventListener('ended',          _onMediaEnded);
+videoEl.addEventListener('error',          _onMediaError);
+audioEl.addEventListener('error',          _onMediaError);
