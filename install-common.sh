@@ -66,9 +66,11 @@ PKG_SPEC="$PKG_NAME @ file://$PKG_DIR"
 SHARED_SPEC="viewer_host_utils @ file://$SHARED_DIR"
 
 if command -v pipx >/dev/null 2>&1; then
-  pip cache remove "$PKG_NAME"
-  pip cache remove viewer_host_utils
-  pipx install --force "$PKG_SPEC" --preinstall "$SHARED_SPEC"
+  # Uninstall first so --preinstall is always re-processed from scratch.
+  # pipx install --force does not reliably re-install --preinstall packages
+  # when upgrading over an existing install.
+  pipx uninstall "$PKG_NAME" 2>/dev/null || true
+  pipx install "$PKG_SPEC" --preinstall "$SHARED_SPEC"
   echo "Installed package via pipx"
 elif pip3 install --user --no-cache-dir "$SHARED_SPEC" "$PKG_SPEC"; then
   echo "Installed package via pip"

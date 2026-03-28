@@ -943,7 +943,8 @@ function _onQueueStateUpdate(prev) {
   if (ui.queueMode === 'video') {
     var newIdx = _qState.video.index;
     if (newIdx !== prev.video.index) {
-      _queueSelIdx = newIdx;
+      _queueSelIdx      = newIdx;
+      _pendingQueuePlay = true;  // always autoplay queue advances
       var item = _qVideoItems()[newIdx];
       if (item) {
         currentDir  = item.dir;
@@ -1341,6 +1342,9 @@ function handleQueueFocusKey(e, key) {
       _bcPost('media-queue', {
         cmd: 'q-jump', type: isAudio ? 'audio' : 'video', index: _queueSelIdx
       });
+      // Video queue: switch to viewer pane so the user can control playback.
+      // Audio queue: audio plays in the background; panes are unconnected.
+      if (!isAudio) setFocusMode('viewer');
       break;
     case 'Escape': case 'ArrowLeft':
       e.preventDefault();
@@ -1646,6 +1650,7 @@ var _autoplay           = true;  // if false, media loads but does not start pla
 var _shouldAnnounce     = false; // true when audio-bearing media loaded; cleared after first 'playing' event
 var _hasAnnounced       = false; // true after we've broadcast 'pause' to other tabs; cleared on stop/end
 var _pendingAutoFS      = false; // true when auto-fullscreen should fire on the next 'playing' event
+var _pendingQueuePlay   = false; // true when a video-queue advance should autoplay regardless of _autoplay
 
 // Video color/quality filter state (reset on each new file; applied via CSS filter on videoEl)
 var _vContrast   = 1.0;  // CSS contrast()   — mplayer keys 1/2
@@ -1783,8 +1788,9 @@ function _endTransitionCover() {
 
 function _stopActiveMedia() {
   _clearPosCheckpoint();
-  _pendingAutoFS  = false;
-  _shouldAnnounce = false;
+  _pendingAutoFS    = false;
+  _pendingQueuePlay = false;
+  _shouldAnnounce   = false;
   if (_hasAnnounced) {
     _hasAnnounced = false;
     _bcPost('media-viewer', { cmd: 'media-stopped' });
@@ -1931,8 +1937,10 @@ function _onMediaLoadedMetadata() {
   _updateVideoControls();
   _endTransitionCover();
   // Gif-loops always play (they're treated as looping images, not video).
-  // For real video/audio, respect the autoplay toggle.
-  if (_autoplay || imagePaneEl.classList.contains('media-gif')) {
+  // For real video/audio, respect the autoplay toggle; video-queue advances
+  // always play regardless (_pendingQueuePlay) to keep the queue running.
+  if (_autoplay || imagePaneEl.classList.contains('media-gif') || _pendingQueuePlay) {
+    _pendingQueuePlay = false;
     mediaEl.play().catch(function() {});
   }
 }

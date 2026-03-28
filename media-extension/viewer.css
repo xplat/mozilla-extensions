@@ -764,8 +764,9 @@ html, body {
 }
 
 /* Queue items reuse .file-item / .file-name / .file-icon styles.
-   .playing replaces .selected for the currently active item.
-   .queue-selected is the keyboard cursor (Tab → queue focusMode). */
+   .playing  — currently active item (same look as .selected in the file list).
+   .queue-selected — keyboard cursor; shown with a focus-ring left border so it
+                     reads distinctly from .playing even when both apply. */
 .queue-item.playing {
   background: var(--sel-bg);
   color: var(--sel-text);
@@ -773,13 +774,11 @@ html, body {
 .queue-item.playing .file-icon,
 .queue-item.playing .file-name { color: var(--sel-text); }
 
-.queue-item.queue-selected:not(.playing) {
-  background: var(--sel-bg);
-  opacity: 0.6;
+.queue-item.queue-selected {
+  box-shadow: inset 2px 0 0 var(--focus-ring);
 }
-.queue-item.playing.queue-selected {
-  outline: 1px solid rgba(255,255,255,0.35);
-  outline-offset: -2px;
+.queue-item.queue-selected:not(.playing) {
+  background: var(--surface-2);
 }
 
 /* ── RESPONSIVE ─────────────────────────────────────────────────────────── */
