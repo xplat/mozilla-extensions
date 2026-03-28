@@ -136,10 +136,10 @@ function _vqLoad(index) {
   if (index < 0 || index >= items.length) return;
   _pendingQueuePlay      = true;
   _queueSelIdx           = index;
-  _qState.video.time     = 0;  // reset locally; background confirms via q-changed
+  _qState.video.time     = 0;  // reset now; background confirms via q-changed
   var item     = items[index];
   var fullPath = item.dir.replace(/\/$/, '') + '/' + item.file;
-  showMediaFile(item.file, fullPath);
+  showMediaFile(item.file, fullPath, /*isQueueItem=*/ true);
   _bcPost('media-queue', { cmd: 'q-jump', type: 'video', index: index });
 }
 function _vqNext() { _vqLoad(_qState.video.index + 1); }
@@ -147,10 +147,6 @@ function _vqPrev() { _vqLoad(_qState.video.index - 1); }
 
 // Keyboard cursor position within the queue pane (used when focusMode === 'queue').
 var _queueSelIdx = 0;
-
-// Pre-queue-mode selector snapshot — owned by the selector module.
-// viewer.js entry/exit paths call selector.savePreQueueState() /
-// selector.restorePreQueueState() and keep no references of their own.
 
 // _queueChannel / _mediaChannel: see _updateChannelWiring() below.
 
@@ -169,6 +165,12 @@ var _pendingMediaStop  = false;
 // from selector globals (currentDir + filename).  Queue-item loads pass
 // fullPath explicitly so they never need to mutate currentDir / currentFile.
 var _contentPath = null;
+
+// True when the content pane is playing a video queue item (set by showMediaFile
+// when called from _vqLoad).  Event handlers use this — not ui.queueMode — so
+// that the playback source identity survives queue mode changes (e.g. cycling
+// back to selector or audio-queue mode while the queue video keeps playing).
+var _isQueueContent = false;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
@@ -680,12 +682,11 @@ function _setQueueMode(mode) {
   if (!mode && focusMode === 'queue') setFocusMode('selector');
 
   if (mode === 'video' && old !== 'video') {
-    // Entering video queue mode: save selector position, show queue pane.
-    // The item is NOT loaded here — user must explicitly press Enter/Space
-    // in the queue pane.  This prevents a video starting every time the user
-    // passes through video-queue mode on the way to audio-queue mode.
+    // Entering video queue mode: show queue pane with cursor at current index.
+    // The item is NOT loaded here — user must press Enter/Space in the queue
+    // pane.  This prevents a video starting every time the user passes through
+    // video-queue mode cycling toward audio-queue mode.
     _queueSelIdx  = _qState.video.index;
-    selector.savePreQueueState();
     applySelector();
     renderQueuePane();
     _updateChannelWiring();
@@ -696,14 +697,8 @@ function _setQueueMode(mode) {
     _queueSelIdx = _qState.audio.index;
   }
 
-  if (old === 'video' && mode !== 'video') {
-    // Leaving video queue mode: save current time, stop video, restore selector.
-    if (activeMediaEl && !activeMediaEl.ended)
-      _bcPost('media-queue', { cmd: 'q-vtime', time: activeMediaEl.currentTime });
-    _stopActiveMedia();
-    if (selector.restorePreQueueState()) return;
-    // No pre-queue state saved (unusual): fall through to normal applySelector.
-  }
+  // Leaving video queue mode: the queue video (if any) keeps playing.
+  // The selector pane reappears unchanged — nothing was mutated.
 
   applySelector();
   renderQueuePane();
@@ -1552,8 +1547,8 @@ function _onMediaLoadedMetadata() {
   // pollute the file's own resume point.
   var saved = 0;
   if (!isGif) {
-    saved = (ui.queueMode === 'video') ? (_qState.video.time || 0)
-                                       : _getSavedPosition(fileUrl);
+    saved = _isQueueContent ? (_qState.video.time || 0)
+                            : _getSavedPosition(fileUrl);
     if (saved > 0 && isFinite(mediaEl.duration) && saved < mediaEl.duration) {
       mediaEl.currentTime = saved;
     }
@@ -1607,7 +1602,7 @@ function _onTimeUpdate() {
   var el = this;
   _posCheckpointTimer = setTimeout(function() {
     _posCheckpointTimer = null;
-    if (ui.queueMode === 'video' && el === videoEl && !el.paused && !el.ended) {
+    if (_isQueueContent && el === videoEl && !el.paused && !el.ended) {
       // In video queue mode, track position in background's queue state rather
       // than the file's own saved position so queue watching doesn't affect normal
       // resume behaviour when the file is opened outside the queue.
@@ -1624,7 +1619,7 @@ function _onMediaEnded() {
     _bcPost('media-viewer', { cmd: 'media-stopped' });
   }
   // In video queue mode, auto-advance to the next queue item.
-  if (ui.queueMode === 'video') {
+  if (_isQueueContent) {
     var next = _qState.video.index + 1;
     _vqLoad(next);  // no-op if past end; sets _pendingQueuePlay for autoplay
     _updateChannelWiring();  // no longer playing
@@ -1824,9 +1819,12 @@ if (videoProgressEl) {
 // ── Show media file (dispatcher) ────────────────────────────────────────────
 
 // fullPath: optional explicit path (e.g. for video-queue items).  When omitted,
-// the path is constructed from currentDir + filename as usual.
-function showMediaFile(filename, fullPath) {
-  _contentPath = fullPath || (selector.currentDir ? selector.currentDir.replace(/\/$/, '') + '/' + filename : null);
+// the path is constructed from selector.currentDir + filename as usual.
+// isQueueItem: true when called from _vqLoad — suppresses per-file position
+// persistence and routes time tracking through the video queue state instead.
+function showMediaFile(filename, fullPath, isQueueItem) {
+  _contentPath    = fullPath || (selector.currentDir ? selector.currentDir.replace(/\/$/, '') + '/' + filename : null);
+  _isQueueContent = !!isQueueItem;
   if (!_contentPath) return;
   var type = mediaType(filename);
 

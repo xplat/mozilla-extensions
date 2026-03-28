@@ -21,10 +21,6 @@ var selector = (function() {
   var _listing = [];    // sorted/filtered entry objects from latest fetch
   var _selIdx  = -1;    // DOM index of highlighted item (-1 = none)
 
-  // Pre-queue-mode snapshot: saved when entering video queue, cleared on restore.
-  var _preQueueDir  = null;
-  var _preQueueFile = null;
-
   // ── Listing utilities ───────────────────────────────────────────────────────
 
   function isSelectable(item) {
@@ -405,39 +401,6 @@ var selector = (function() {
     }
   }
 
-  // ── Video queue mode save / restore ─────────────────────────────────────────
-
-  // Snapshot current selector position before entering video queue mode.
-  function savePreQueueState() {
-    _preQueueDir  = _dir;
-    _preQueueFile = _file;
-  }
-
-  // Restore selector display from the pre-queue snapshot without re-fetching
-  // the directory listing (the listing is already in memory).
-  // Returns true if a snapshot existed and was applied; false if there was
-  // nothing to restore (caller should fall through to normal post-queue logic).
-  function restorePreQueueState() {
-    if (!_preQueueDir) return false;
-    _dir  = _preQueueDir;
-    _file = _preQueueFile;
-    _preQueueDir  = null;
-    _preQueueFile = null;
-    persistState(false);
-    renderSelector();
-    updateDirPath();
-    applyUiState();
-    showScreen('viewer');
-    if (_file) {
-      var idx = _listing.findIndex(function(i) { return i.u === _file; });
-      if (idx >= 0) selectItem(idx, false);
-      showMediaFile(_file);
-    } else if (_selIdx >= 0 && _selIdx < _listing.length) {
-      selectItem(_selIdx, true);
-    }
-    return true;
-  }
-
   // ── Initialisation helpers ──────────────────────────────────────────────────
 
   // Set dir + file from URL params / history state without triggering a load.
@@ -467,14 +430,12 @@ var selector = (function() {
     updateDirPath:    updateDirPath,
     displayableFiles: displayableFiles,
     handleKey:           handleKey,
-    handleQueueKey:      handleQueueKey,
-    toggleThumbnails:    toggleThumbnails,
-    toggleRecursive:     toggleRecursive,
-    toggleHidden:        toggleHidden,
-    cycleSortBy:         cycleSortBy,
-    setFromHistory:      setFromHistory,
-    savePreQueueState:   savePreQueueState,
-    restorePreQueueState: restorePreQueueState,
+    handleQueueKey:   handleQueueKey,
+    toggleThumbnails: toggleThumbnails,
+    toggleRecursive:  toggleRecursive,
+    toggleHidden:     toggleHidden,
+    cycleSortBy:      cycleSortBy,
+    setFromHistory:   setFromHistory,
   };
 
 })();
