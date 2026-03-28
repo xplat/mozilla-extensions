@@ -84,10 +84,11 @@ function handleNativeOpen(msg) {
 }
 
 // Called once the native host's 'server' event arrives and serverPort is valid.
-// We defer audio preloading to here so the proxy redirect is ready.
+// We defer audio loading to here because _bgAudioUrl() needs serverPort.
+// Also resumes playback if _aqPlaying was true before a reconnect.
 function handleNativeServer() {
   if (_aq.items.length > 0) {
-    _loadAudioItem(_aq.index, _aq.time, false);
+    _loadAudioItem(_aq.index, _aq.time, _aqPlaying && !_aqSuppressed);
   }
 }
 
@@ -113,7 +114,10 @@ connectNative();
 //
 // The audio queue plays here in the background script (Firefox MV3 event
 // pages have a full DOM, including HTMLAudioElement).  Files are served via
-// the same loopback proxy used by the viewer tabs.
+// direct requests to the native HTTP server — NOT via the proxy prefix used
+// by viewer tabs.  The background's own requests are not intercepted by its
+// own webRequest.onBeforeRequest listener, so the proxy redirect never fires;
+// the background must therefore use the real port + token URL directly.
 //
 // State layout:
 //   _aq  { items: [{dir, file}, …], index, time }  — audio queue
@@ -131,6 +135,11 @@ var _aqPlaying    = false;
 var _aqSuppressed = false;
 
 var _queueAudio = new Audio();
+// crossOrigin = 'anonymous' is required so the CORS headers returned by the
+// native HTTP server are honoured by the Web Audio graph (otherwise the
+// AudioContext reports a cross-origin resource and outputs silence for the
+// panner node).
+_queueAudio.crossOrigin = 'anonymous';
 // Initialise volume/mute/balance from persisted settings.
 // _ensureAudioContext, initMediaElVolume, and _panNode come from media-shared.js.
 initMediaElVolume(_queueAudio);
@@ -191,7 +200,20 @@ function _broadcastState() {
 
 // ── Audio item loader ─────────────────────────────────────────────────────
 
+// Build the real server URL for a file path or file:// URL.
+// Background cannot use toProxyFile() because it bypasses the webRequest
+// redirect (background scripts don't intercept their own requests).
+function _bgAudioUrl(fileOrUrl) {
+  var path    = fileOrUrl.replace(/^file:\/\//, '');
+  var encoded = path.split('/').map(encodeURIComponent).join('/');
+  return 'http://' + LOOPBACK + ':' + serverPort + '/' + serverToken + '/media-file/' + encoded;
+}
+
 function _loadAudioItem(index, timeOffset, autoPlay) {
+  if (!serverPort || !serverToken) {
+    // Server not ready yet; handleNativeServer() will retry once it fires.
+    return;
+  }
   if (!_aq.items.length || index < 0 || index >= _aq.items.length) {
     _queueAudio.pause();
     _queueAudio.src = '';
@@ -206,7 +228,7 @@ function _loadAudioItem(index, timeOffset, autoPlay) {
   _aq.index = index;
   _aq.time  = timeOffset;
 
-  _queueAudio.src = toProxyFile(fileUrl);
+  _queueAudio.src = _bgAudioUrl(fileUrl);
 
   if (timeOffset > 0) {
     _queueAudio.addEventListener('loadedmetadata', function() {
@@ -404,7 +426,8 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 
   function state() {
     return {
-      audio: { index: _aq.index, time: _currentTime(), playing: _aqPlaying, suppressed: _aqSuppressed },
+      audio: { index: _aq.index, time: _currentTime(), playing: _aqPlaying, suppressed: _aqSuppressed,
+               items: _aq.items },
       video: { index: _vq.index }
     };
   }

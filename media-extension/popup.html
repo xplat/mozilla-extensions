@@ -135,14 +135,15 @@
       return h > 0 ? h + ':' + p(m) + ':' + p(s) : m + ':' + p(s);
     }
 
-    function getItems() {
-      try { return JSON.parse(localStorage.getItem('media-audio-queue') || '{}').items || []; }
-      catch (e) { return []; }
-    }
+    // Items are included in every chrome.runtime.sendMessage response.
+    // For BroadcastChannel 'q-changed' events (which omit items to keep the
+    // channel lean) we cache the last known list here.
+    var _cachedItems = [];
 
     function render(state) {
-      var a     = state.audio;
-      var items = getItems();
+      var a = state.audio;
+      if (Array.isArray(a.items)) _cachedItems = a.items;
+      var items = _cachedItems;
       if (!items.length) {
         statusEl.textContent = 'QUEUE EMPTY';
         statusEl.className   = '';
