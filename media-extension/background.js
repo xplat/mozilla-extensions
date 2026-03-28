@@ -154,7 +154,8 @@ function _loadQueueState() {
     if (as) _aq = JSON.parse(as);
   } catch (e) {}
   _aq.items = Array.isArray(_aq.items) ? _aq.items : [];
-  _aq.index = (_aq.index > 0 && _aq.index < _aq.items.length) ? _aq.index : 0;
+  // Allow index == items.length as the "done / past-end" sentinel.
+  _aq.index = (_aq.index >= 0 && _aq.index <= _aq.items.length) ? _aq.index : 0;
   _aq.time  = _aq.time  > 0 ? _aq.time  : 0;
 
   try {
@@ -258,6 +259,8 @@ function _toggleAudioQueue() {
     _aqSuppressed = false;
   } else {
     if (!_aq.items.length) return;
+    // If parked at past-end sentinel, restart from the top.
+    if (_aq.index >= _aq.items.length) { _aq.index = 0; _aq.time = 0; }
     _aqPlaying    = true;
     _aqSuppressed = false;
     if (!_queueAudio.src || _queueAudio.readyState === HTMLMediaElement.HAVE_NOTHING) {
@@ -288,11 +291,11 @@ function _audioQueueSkip(delta) {
   }
   var next = _aq.index + delta;
   if (next >= _aq.items.length) {
-    // Skipped past end — stop and rewind to beginning, same as natural end-of-queue.
+    // Skipped past end — stop and park at the past-end sentinel.
     _queueAudio.pause();
     _queueAudio.src = '';
     _aqPlaying = false;
-    _aq.index  = 0;
+    _aq.index  = _aq.items.length;
     _aq.time   = 0;
     _broadcastState();
     _saveQueueState();
@@ -306,10 +309,10 @@ function _audioQueueSkip(delta) {
 _queueAudio.addEventListener('ended', function() {
   var next = _aq.index + 1;
   if (next >= _aq.items.length) {
-    // End of queue — stop and rewind to beginning.
+    // End of queue — stop and park at the past-end sentinel.
     _queueAudio.src = '';
     _aqPlaying = false;
-    _aq.index  = 0;
+    _aq.index  = _aq.items.length;
     _aq.time   = 0;
     _broadcastState();
     _saveQueueState();
@@ -328,6 +331,7 @@ _queueAudio.addEventListener('error', function() {
   } else {
     _queueAudio.src = '';
     _aqPlaying = false;
+    _aq.index  = _aq.items.length;
     _broadcastState();
     _saveQueueState();
   }

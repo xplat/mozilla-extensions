@@ -125,6 +125,19 @@ function _qVideoItems() {
   catch (e) { return []; }
 }
 
+// Video-queue navigation helpers — used by handleViewerKey to avoid mixing
+// currentDir (from queue) with currentFile (from selector) when in queue mode.
+function _vqNext() {
+  var next = _qState.video.index + 1;
+  if (next < _qVideoItems().length)
+    _bcPost('media-queue', { cmd: 'q-jump', type: 'video', index: next });
+}
+function _vqPrev() {
+  var prev = _qState.video.index - 1;
+  if (prev >= 0)
+    _bcPost('media-queue', { cmd: 'q-jump', type: 'video', index: prev });
+}
+
 // Keyboard cursor position within the queue pane (used when focusMode === 'queue').
 var _queueSelIdx = 0;
 
@@ -1370,12 +1383,15 @@ function handleViewerKey(e, key, ctrl, plain) {
       case 'Backspace':  e.preventDefault();
         activeMediaEl.playbackRate = 1; return;
       // Navigation
-      case 'Enter': e.preventDefault(); nextImage(); return;
-      case 'b':     e.preventDefault(); prevImage(); return;
+      case 'Enter': e.preventDefault();
+        ui.queueMode === 'video' ? _vqNext() : nextImage(); return;
+      case 'b': e.preventDefault();
+        ui.queueMode === 'video' ? _vqPrev() : prevImage(); return;
       // Play / pause
       case ' ':
         e.preventDefault();
-        activeMediaEl.ended ? nextImage() : togglePlayPause();
+        if (activeMediaEl.ended) { ui.queueMode === 'video' ? _vqNext() : nextImage(); }
+        else                     { togglePlayPause(); }
         return;
       // Playback rate  (</>: ±0.1 step, matching mplayer's [/] moved to angle brackets)
       //                ({/}: halve/double, as in mplayer)
@@ -1454,8 +1470,13 @@ function handleViewerKey(e, key, ctrl, plain) {
         break;
       // Image navigation
       case 'Enter':
-      case ' ':  e.preventDefault(); nextImage(); break;
-      case 'b':  prevImage(); break;
+      case ' ':
+        e.preventDefault();
+        ui.queueMode === 'video' ? _vqNext() : nextImage();
+        break;
+      case 'b':
+        ui.queueMode === 'video' ? _vqPrev() : prevImage();
+        break;
       // Rotation (xzgv r/R/N)
       case 'r': rotateBy(90);        break;
       case 'R': rotateBy(-90);       break;
