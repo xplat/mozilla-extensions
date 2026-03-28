@@ -53,9 +53,8 @@ const SCALE_STEPS = [0.1, 0.125, 0.167, 0.25, 0.333, 0.5, 0.667, 1.0, 1.5, 2.0, 
 
 // ── Mutable state ──────────────────────────────────────────────────────────
 
-var currentDir   = null;   // current directory as a file:// URL
-var currentFile  = null;   // selected filename within currentDir (or null)
-var listing      = [];     // sorted array of entry objects from latest dir load
+// currentDir / currentFile / listing / selectedIdx — owned by the selector
+// module (viewer-selector.js).  Access via selector.currentDir, etc.
 
 // UI state — most persisted in history.state
 var ui = {
@@ -224,8 +223,8 @@ function buildPageUrl(dir, file) {
 }
 
 function persistState(push, newDir, newFile) {
-  var dir  = (newDir  !== undefined) ? newDir  : currentDir;
-  var file = (newFile !== undefined) ? newFile : currentFile;
+  var dir  = (newDir  !== undefined) ? newDir  : selector.currentDir;
+  var file = (newFile !== undefined) ? newFile : selector.currentFile;
   var state = {
     zoomFit:         ui.zoomFit,
     zoomReduceOnly:  ui.zoomReduceOnly,
@@ -287,210 +286,10 @@ function toProxyQueueDir(dirUrl) {
 }
 
 // ── Directory loading ──────────────────────────────────────────────────────
-
-function isSelectable(item) {
-  if (item.t === 'd') return true;
-  if (item.r === 0)   return false;
-  return mediaType(item.u) !== 'unknown';
-}
-
-function sortItems(items) {
-  var dirs  = items.filter(function(i) { return i.t === 'd'; });
-  var files = items.filter(function(i) { return i.t !== 'd'; });
-
-  function cmp(a, b) {
-    if (ui.sortBy === 'mtime') return (b.m || 0) - (a.m || 0);
-    if (ui.sortBy === 'size')  return (b.s || 0) - (a.s || 0);
-    return a.u.toLowerCase().localeCompare(b.u.toLowerCase());
-  }
-  dirs.sort(cmp);
-  files.sort(cmp);
-  return dirs.concat(files);
-}
-
-function filterItems(items) {
-  if (ui.showHidden) return items;
-  return items.filter(function(i) {
-    var base = i.u.replace(/\/$/, '').split('/').pop();
-    return base.charAt(0) !== '.';
-  });
-}
-
-async function loadDir(dirUrl, push) {
-  showScreen('loading');
-
-  var proxyUrl = toProxyDir(dirUrl, ui.recursive);
-  var data;
-  try {
-    var resp = await fetch(proxyUrl);
-    if (!resp.ok) throw new Error('Server returned HTTP ' + resp.status);
-    data = await resp.json();
-  } catch (err) {
-    document.getElementById('error-message').textContent = String(err);
-    showScreen('error');
-    return;
-  }
-
-  var items = filterItems(data.files || []);
-  listing    = sortItems(items);
-  currentDir = dirUrl;
-
-  if (currentFile && !listing.some(function(i) { return i.u === currentFile; })) {
-    currentFile = null;
-  }
-
-  persistState(push, dirUrl, currentFile);
-  renderSelector();
-  if (ui.thumbnails) fetch(toProxyQueueDir(dirUrl)).catch(function() {});
-  updateDirPath();
-  applyUiState();
-  showScreen('viewer');
-
-  if (currentFile) {
-    var selIdx = listing.findIndex(function(i) { return i.u === currentFile; });
-    if (selIdx >= 0) selectItem(selIdx, false);
-    showMediaFile(currentFile);
-  } else {
-    var firstFile = listing.findIndex(function(i) { return isSelectable(i) && i.t !== 'd'; });
-    if (firstFile >= 0) selectItem(firstFile, false);
-    else if (listing.length > 0) selectItem(0, false);
-  }
-}
+// Delegated to selector module (viewer-selector.js).
 
 // ── Selector rendering ─────────────────────────────────────────────────────
-
-var selectedIdx = -1;
-
-function renderSelector() {
-  fileListEl.innerHTML = '';
-  selectedIdx = -1;
-  fileListEl.classList.toggle('thumbnails', ui.thumbnails);
-
-  listing.forEach(function(item, idx) {
-    var el = document.createElement('div');
-    el.className = 'file-item';
-    el.dataset.idx = String(idx);
-
-    var sel  = isSelectable(item);
-    var mtype = mediaType(item.u);
-    if (!sel)              el.classList.add('dimmed');
-    if (item.t === 'd')    el.classList.add('is-dir');
-    if (mtype === 'video') el.classList.add('is-video');
-    if (mtype === 'audio') el.classList.add('is-audio');
-
-    if (ui.thumbnails) {
-      _renderThumbItem(el, item);
-    } else {
-      _renderListItem(el, item);
-    }
-
-    if (sel) {
-      el.addEventListener('click', function() {
-        setFocusMode('selector');
-        selectItem(idx, false);
-      });
-      el.addEventListener('dblclick', function() {
-        openItem(idx);
-      });
-    }
-
-    fileListEl.appendChild(el);
-  });
-}
-
-function _renderListItem(el, item) {
-  var type   = mediaType(item.u);
-  var iconEl = document.createElement('span');
-  iconEl.className = 'file-icon';
-  iconEl.textContent = item.t === 'd' ? '>' : type === 'video' ? '▶' : type === 'audio' ? '♪' : ' ';
-
-  var nameEl = document.createElement('span');
-  nameEl.className = 'file-name';
-  nameEl.textContent = item.u;
-
-  var metaEl = document.createElement('span');
-  metaEl.className = 'file-meta';
-  if (item.s !== undefined) metaEl.textContent = fmtSize(item.s);
-
-  el.appendChild(iconEl);
-  el.appendChild(nameEl);
-  el.appendChild(metaEl);
-}
-
-function _renderThumbItem(el, item) {
-  var type = mediaType(item.u);
-  if (item.t === 'd' || type === 'unknown') {
-    // Directory or unrecognised type: icon + name as a compact tile
-    var iconEl = document.createElement('span');
-    iconEl.className = 'file-icon';
-    iconEl.textContent = (item.t === 'd') ? '>' : ' ';
-    var labelEl = document.createElement('span');
-    labelEl.className = 'thumb-label';
-    labelEl.textContent = item.u;
-    el.appendChild(iconEl);
-    el.appendChild(labelEl);
-  } else {
-    // Any known media type: attempt thumbnail; fall back to a text icon on error
-    var fallback = type === 'video' ? '▶' : type === 'audio' ? '♪' : null;
-    var fileUrl  = currentDir.replace(/\/$/, '') + '/' + item.u;
-    var imgEl = document.createElement('img');
-    imgEl.className = 'thumb-img thumb-loading';
-    imgEl.src = toProxyThumb(fileUrl);
-    imgEl.alt = '';
-    imgEl.draggable = false;
-    imgEl.loading = 'lazy';
-    imgEl.addEventListener('load', function() { imgEl.classList.remove('thumb-loading'); });
-    imgEl.addEventListener('error', function() {
-      imgEl.classList.remove('thumb-loading');
-      if (fallback) {
-        // Replace broken img with a text icon for video/audio
-        var fbEl = document.createElement('span');
-        fbEl.className = 'thumb-img-fallback';
-        fbEl.textContent = fallback;
-        el.replaceChild(fbEl, imgEl);
-      } else {
-        imgEl.classList.add('thumb-missing');
-      }
-    });
-    var labelEl = document.createElement('span');
-    labelEl.className = 'thumb-label';
-    labelEl.textContent = item.u;
-    el.appendChild(imgEl);
-    el.appendChild(labelEl);
-  }
-}
-
-function selectItem(idx, scroll) {
-  if (idx < 0 || idx >= listing.length) return;
-
-  var prev = fileListEl.querySelector('.file-item.selected');
-  if (prev) prev.classList.remove('selected');
-
-  selectedIdx = idx;
-  var el = fileListEl.children[idx];
-  if (!el) return;
-  el.classList.add('selected');
-  if (scroll) el.scrollIntoView({ block: 'center' });
-}
-
-function openItem(idx) {
-  if (idx < 0 || idx >= listing.length) return;
-  var item = listing[idx];
-  if (!isSelectable(item)) return;
-
-  if (item.t === 'd') {
-    var sub    = item.u.replace(/\/$/, '');
-    var newDir = currentDir.replace(/\/$/, '') + '/' + sub;
-    currentFile = null;
-    loadDir(newDir, true);
-    setFocusMode('selector');
-  } else {
-    currentFile = item.u;
-    persistState(false);
-    showMediaFile(item.u);
-    setFocusMode('viewer');
-  }
-}
+// Delegated to selector module (viewer-selector.js).
 
 // ── Image display ──────────────────────────────────────────────────────────
 //
@@ -885,8 +684,8 @@ function _setQueueMode(mode) {
     // in the queue pane.  This prevents a video starting every time the user
     // passes through video-queue mode on the way to audio-queue mode.
     _queueSelIdx  = _qState.video.index;
-    _preQueueDir  = currentDir;
-    _preQueueFile = currentFile;
+    _preQueueDir  = selector.currentDir;
+    _preQueueFile = selector.currentFile;
     applySelector();
     renderQueuePane();
     _updateChannelWiring();
@@ -907,9 +706,8 @@ function _setQueueMode(mode) {
     _preQueueDir  = null;
     _preQueueFile = null;
     if (savedDir) {
-      currentDir  = savedDir;
-      currentFile = savedFile;
-      loadDir(savedDir, false);  // reloads listing and shows savedFile
+      selector.setFromHistory(savedDir, savedFile);
+      selector.loadDir(savedDir, false);  // reloads listing and shows savedFile
       return;  // loadDir calls applySelector / applyUiState
     }
   }
@@ -986,19 +784,20 @@ function _onQueueStateUpdate(prev) {
 // On a directory: collect all audio/video files (and CD/Disc subdirs) and
 //   add them in sorted order; don't advance the cursor.
 function _handleQueueKey() {
-  if (selectedIdx < 0 || !listing[selectedIdx]) return;
-  var item = listing[selectedIdx];
+  var selIdx = selector.selectedIdx;
+  if (selIdx < 0 || !selector.listing[selIdx]) return;
+  var item = selector.listing[selIdx];
   if (item.t === 'd') {
-    var dirUrl = currentDir.replace(/\/$/, '') + '/' + item.u;
+    var dirUrl = selector.currentDir.replace(/\/$/, '') + '/' + item.u;
     _collectAndQueueDir(dirUrl).catch(function() {});
   } else {
     var mt = mediaType(item.u);
     if (mt !== 'audio' && mt !== 'video') return;
     _bcPost('media-queue', {
       cmd: 'q-add', type: mt,
-      items: [{ dir: currentDir, file: item.u }]
+      items: [{ dir: selector.currentDir, file: item.u }]
     });
-    nextImage();
+    selector.nextFile();
   }
 }
 
@@ -1077,85 +876,11 @@ document.addEventListener('fullscreenchange', function() {
   }
 });
 
-// ── Image navigation ───────────────────────────────────────────────────────
-
-function displayableFiles() {
-  return listing.filter(function(i) { return i.t !== 'd' && isSelectable(i); });
-}
-
-function nextImage() {
-  var files = displayableFiles();
-  if (files.length === 0) return;
-  var idx  = files.findIndex(function(i) { return i.u === currentFile; });
-  var next = files[(idx + 1) % files.length];
-  var li   = listing.findIndex(function(i) { return i.u === next.u; });
-  selectItem(li, true);
-  currentFile = next.u;
-  persistState(false);
-  showMediaFile(next.u);
-}
-
-function prevImage() {
-  var files = displayableFiles();
-  if (files.length === 0) return;
-  var idx  = files.findIndex(function(i) { return i.u === currentFile; });
-  var prev = files[(idx - 1 + files.length) % files.length];
-  var li   = listing.findIndex(function(i) { return i.u === prev.u; });
-  selectItem(li, true);
-  currentFile = prev.u;
-  persistState(false);
-  showMediaFile(prev.u);
-}
-
-function goToParent() {
-  var path       = currentDir.replace(/^file:\/\//, '').replace(/\/$/, '');
-  var parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
-  currentFile    = null;
-  loadDir('file://' + parentPath, true);
-}
-
-// ── Toggle helpers ─────────────────────────────────────────────────────────
-
-function toggleThumbnails() {
-  ui.thumbnails = !ui.thumbnails;
-  persistState(false);
-  renderSelector();
-  if (ui.thumbnails && currentDir) fetch(toProxyQueueDir(currentDir)).catch(function() {});
-  // Re-scroll to keep selected item visible after layout change.
-  if (selectedIdx >= 0) {
-    var el = fileListEl.children[selectedIdx];
-    if (el) el.scrollIntoView({ block: 'nearest' });
-  }
-}
-
-function toggleRecursive() {
-  ui.recursive = !ui.recursive;
-  if (btnRecursive) btnRecursive.classList.toggle('active', ui.recursive);
-  persistState(false);
-  if (currentDir) loadDir(currentDir, false);
-}
-
-function toggleHidden() {
-  ui.showHidden = !ui.showHidden;
-  if (btnHidden) btnHidden.classList.toggle('active', ui.showHidden);
-  persistState(false);
-  if (currentDir) loadDir(currentDir, false);
-}
-
-function cycleSortBy() {
-  var orders = ['name', 'mtime', 'size'];
-  var idx    = orders.indexOf(ui.sortBy);
-  ui.sortBy  = orders[(idx + 1) % orders.length];
-  persistState(false);
-  listing    = sortItems(listing);
-  renderSelector();
-  var labels = { name: 'NAME', mtime: 'DATE', size: 'SIZE' };
-  if (btnSort) btnSort.textContent = labels[ui.sortBy] || 'NAME';
-  if (currentFile) {
-    var i = listing.findIndex(function(x) { return x.u === currentFile; });
-    if (i >= 0) selectItem(i, true);
-  }
-}
+// ── Image navigation / toggle helpers ─────────────────────────────────────
+// Delegated to selector module (viewer-selector.js):
+//   selector.nextFile(), selector.prevFile(), selector.goToParent(),
+//   selector.toggleThumbnails(), selector.toggleRecursive(),
+//   selector.toggleHidden(), selector.cycleSortBy()
 
 // ── Info overlay ───────────────────────────────────────────────────────────
 
@@ -1165,7 +890,7 @@ function toggleInfoOverlay() {
     // Use the content-pane path if something is loaded; fall back to the
     // selector's currentFile (e.g. when no media has loaded yet).
     var filename = _contentPath ? _contentPath.replace(/.*\//, '')
-                                : currentFile;
+                                : selector.currentFile;
     updateInfoOverlay(filename);
     infoOverlayEl.classList.remove('hidden');
   } else {
@@ -1175,7 +900,7 @@ function toggleInfoOverlay() {
 
 function updateInfoOverlay(filename) {
   if (!filename) { infoContentEl.textContent = ''; return; }
-  var item  = listing.find(function(i) { return i.u === filename; });
+  var item  = selector.listing.find(function(i) { return i.u === filename; });
   var lines = [filename];
   if (item) {
     if (item.s !== undefined) lines.push(fmtSize(item.s));
@@ -1211,14 +936,6 @@ function applyUiState() {
   if (btnSort) btnSort.textContent = labels[ui.sortBy] || 'NAME';
 }
 
-function updateDirPath() {
-  if (!dirPathEl || !currentDir) return;
-  var path = currentDir.replace(/^file:\/\//, '');
-  dirPathEl.textContent = path;
-  dirPathEl.title       = path;
-  document.title        = path + ' — Media Viewer';
-}
-
 // ── Keyboard shortcuts ─────────────────────────────────────────────────────
 
 document.addEventListener('keydown', function(e) {
@@ -1245,11 +962,11 @@ document.addEventListener('keydown', function(e) {
             Math.min(activeMediaEl.duration, activeMediaEl.currentTime + 1 / 30);
           _updateVideoControls();
         } else {
-          toggleHidden();
+          selector.toggleHidden();
         }
         return;
       case 'v':
-        e.preventDefault(); toggleThumbnails(); return;
+        e.preventDefault(); selector.toggleThumbnails(); return;
       case 'Tab': {
         e.preventDefault();
         if (ui.queueMode) {
@@ -1298,54 +1015,11 @@ document.addEventListener('keydown', function(e) {
   if (focusMode === 'queue') {
     if (plain) handleQueueFocusKey(e, key);
   } else if (focusMode === 'selector') {
-    handleSelectorKey(e, key, ctrl, plain);
+    selector.handleKey(e, key, ctrl, plain);
   } else {
     handleViewerKey(e, key, ctrl, plain);
   }
 });
-
-function handleSelectorKey(e, key, ctrl, plain) {
-  // R: rescan directory (xzgv Ctrl-r; Ctrl-r unavailable in browser)
-  if (!ctrl && key === 'R') {
-    if (currentDir) loadDir(currentDir, false);
-    return;
-  }
-  if (ctrl) return; // don't intercept Ctrl shortcuts
-  switch (key) {
-    case 'ArrowDown':  e.preventDefault(); moveSelectionBy(1);   break;
-    case 'ArrowUp':    e.preventDefault(); moveSelectionBy(-1);  break;
-    case 'j':          moveSelectionBy(1);   break;
-    case 'k':          moveSelectionBy(-1);  break;
-    case 'PageDown':   e.preventDefault(); moveSelectionBy(10);  break;
-    case 'PageUp':     e.preventDefault(); moveSelectionBy(-10); break;
-    case 'Home':       e.preventDefault(); jumpToEdge(1);        break;
-    case 'End':        e.preventDefault(); jumpToEdge(-1);       break;
-    case 'Enter':
-      e.preventDefault();
-      if (selectedIdx >= 0) openItem(selectedIdx);
-      break;
-    case ' ':
-      e.preventDefault();
-      if (selectedIdx >= 0) openItem(selectedIdx);
-      break;
-    case 'ArrowRight':
-      e.preventDefault();
-      if (selectedIdx >= 0 && listing[selectedIdx] && listing[selectedIdx].t === 'd') {
-        openItem(selectedIdx);
-      } else {
-        nextImage();
-      }
-      break;
-    case 'ArrowLeft':
-    case 'Backspace':
-    case 'u':
-      e.preventDefault(); goToParent(); break;
-    case 'n': nextImage(); break;
-    case 'b': prevImage(); break;
-    case 's': cycleSortBy(); break;
-    case 'z': toggleZoom(); break;
-  }
-}
 
 function handleQueueFocusKey(e, key) {
   var isAudio = (ui.queueMode === 'audio');
@@ -1398,13 +1072,13 @@ function handleViewerKey(e, key, ctrl, plain) {
         activeMediaEl.playbackRate = 1; return;
       // Navigation
       case 'Enter': e.preventDefault();
-        ui.queueMode === 'video' ? _vqNext() : nextImage(); return;
+        ui.queueMode === 'video' ? _vqNext() : selector.nextFile(); return;
       case 'b': e.preventDefault();
-        ui.queueMode === 'video' ? _vqPrev() : prevImage(); return;
+        ui.queueMode === 'video' ? _vqPrev() : selector.prevFile(); return;
       // Play / pause
       case ' ':
         e.preventDefault();
-        if (activeMediaEl.ended) { ui.queueMode === 'video' ? _vqNext() : nextImage(); }
+        if (activeMediaEl.ended) { ui.queueMode === 'video' ? _vqNext() : selector.nextFile(); }
         else                     { togglePlayPause(); }
         return;
       // Playback rate  (</>: ±0.1 step, matching mplayer's [/] moved to angle brackets)
@@ -1486,10 +1160,10 @@ function handleViewerKey(e, key, ctrl, plain) {
       case 'Enter':
       case ' ':
         e.preventDefault();
-        ui.queueMode === 'video' ? _vqNext() : nextImage();
+        ui.queueMode === 'video' ? _vqNext() : selector.nextFile();
         break;
       case 'b':
-        ui.queueMode === 'video' ? _vqPrev() : prevImage();
+        ui.queueMode === 'video' ? _vqPrev() : selector.prevFile();
         break;
       // Rotation (xzgv r/R/N)
       case 'r': rotateBy(90);        break;
@@ -1527,37 +1201,6 @@ function handleViewerKey(e, key, ctrl, plain) {
       case 'ArrowDown':  e.preventDefault(); scrollImage(0, +10);  break;
       case 'ArrowLeft':  e.preventDefault(); scrollImage(-10,  0); break;
       case 'ArrowRight': e.preventDefault(); scrollImage(+10,  0); break;
-    }
-  }
-}
-
-// ── Selector navigation helpers ────────────────────────────────────────────
-
-function moveSelectionBy(delta) {
-  if (listing.length === 0) return;
-  var start = selectedIdx < 0 ? (delta > 0 ? -1 : listing.length) : selectedIdx;
-  var step  = delta > 0 ? 1 : -1;
-  var count = Math.abs(delta);
-  var cur   = start;
-  for (var moved = 0; moved < count; ) {
-    var next = cur + step;
-    if (next < 0 || next >= listing.length) break;
-    cur = next;
-    if (isSelectable(listing[cur])) moved++;
-  }
-  if (cur !== start && cur >= 0 && cur < listing.length) {
-    selectItem(cur, true);
-  }
-}
-
-function jumpToEdge(dir) {
-  if (dir > 0) {
-    for (var i = 0; i < listing.length; i++) {
-      if (isSelectable(listing[i])) { selectItem(i, true); return; }
-    }
-  } else {
-    for (var i = listing.length - 1; i >= 0; i--) {
-      if (isSelectable(listing[i])) { selectItem(i, true); return; }
     }
   }
 }
@@ -1629,9 +1272,9 @@ selectorPaneEl.addEventListener('mousedown', function() {
 
 // ── Button listeners ───────────────────────────────────────────────────────
 
-if (btnRecursive) btnRecursive.addEventListener('click', toggleRecursive);
-if (btnHidden)    btnHidden.addEventListener('click', toggleHidden);
-if (btnSort)      btnSort.addEventListener('click', cycleSortBy);
+if (btnRecursive) btnRecursive.addEventListener('click', selector.toggleRecursive);
+if (btnHidden)    btnHidden.addEventListener('click', selector.toggleHidden);
+if (btnSort)      btnSort.addEventListener('click', selector.cycleSortBy);
 
 // ── History (back/forward) ─────────────────────────────────────────────────
 
@@ -1640,16 +1283,16 @@ window.addEventListener('popstate', function(e) {
   applyHistoryState(e.state);
   var params = getUrlParams();
 
-  if (params.dir !== currentDir) {
-    currentFile = params.file;
-    loadDir(params.dir, false);
+  if (params.dir !== selector.currentDir) {
+    selector.setFromHistory(params.dir, params.file || null);
+    selector.loadDir(params.dir, false);
   } else {
-    currentFile = params.file;
+    selector.setFromHistory(params.dir, params.file || null);
     applyUiState();
-    if (currentFile) {
-      var idx = listing.findIndex(function(i) { return i.u === currentFile; });
-      if (idx >= 0) selectItem(idx, true);
-      showMediaFile(currentFile);
+    if (params.file) {
+      var idx = selector.listing.findIndex(function(i) { return i.u === params.file; });
+      if (idx >= 0) selector.selectItem(idx, true);
+      showMediaFile(params.file);
     }
   }
 });
@@ -2209,7 +1852,7 @@ if (videoProgressEl) {
 // fullPath: optional explicit path (e.g. for video-queue items).  When omitted,
 // the path is constructed from currentDir + filename as usual.
 function showMediaFile(filename, fullPath) {
-  _contentPath = fullPath || (currentDir ? currentDir.replace(/\/$/, '') + '/' + filename : null);
+  _contentPath = fullPath || (selector.currentDir ? selector.currentDir.replace(/\/$/, '') + '/' + filename : null);
   if (!_contentPath) return;
   var type = mediaType(filename);
 
@@ -2323,9 +1966,8 @@ function init() {
     return;
   }
 
-  currentDir  = params.dir;
-  currentFile = params.file || null;
-  loadDir(params.dir, false);
+  selector.setFromHistory(params.dir, params.file || null);
+  selector.loadDir(params.dir, false);
 }
 
 init();
