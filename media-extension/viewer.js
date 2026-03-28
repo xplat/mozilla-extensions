@@ -113,7 +113,7 @@ var _prevFlip   = false;
 
 var _qState = {
   audio: { index: 0, time: 0, playing: false, suppressed: false },
-  video: { index: 0 }
+  video: { index: 0, time: 0 }
 };
 
 function _qAudioItems() {
@@ -127,16 +127,21 @@ function _qVideoItems() {
 
 // Video-queue navigation helpers — used by handleViewerKey to avoid mixing
 // currentDir (from queue) with currentFile (from selector) when in queue mode.
-function _vqNext() {
-  var next = _qState.video.index + 1;
-  if (next < _qVideoItems().length)
-    _bcPost('media-queue', { cmd: 'q-jump', type: 'video', index: next });
+// These load the item directly rather than waiting for the q-changed round-trip,
+// and set _pendingQueuePlay so the new item autoplays.
+function _vqLoad(index) {
+  var items = _qVideoItems();
+  if (index < 0 || index >= items.length) return;
+  _pendingQueuePlay = true;
+  _queueSelIdx      = index;
+  var item = items[index];
+  currentDir  = item.dir;
+  currentFile = item.file;
+  showMediaFile(item.file);
+  _bcPost('media-queue', { cmd: 'q-jump', type: 'video', index: index });
 }
-function _vqPrev() {
-  var prev = _qState.video.index - 1;
-  if (prev >= 0)
-    _bcPost('media-queue', { cmd: 'q-jump', type: 'video', index: prev });
-}
+function _vqNext() { _vqLoad(_qState.video.index + 1); }
+function _vqPrev() { _vqLoad(_qState.video.index - 1); }
 
 // Keyboard cursor position within the queue pane (used when focusMode === 'queue').
 var _queueSelIdx = 0;
@@ -867,16 +872,13 @@ function _setQueueMode(mode) {
   if (!mode && focusMode === 'queue') setFocusMode('selector');
 
   if (mode === 'video' && old !== 'video') {
-    // Entering video queue mode: save current position, load first queue item.
+    // Entering video queue mode: save selector position, show queue pane.
+    // The item is NOT loaded here — user must explicitly press Enter/Space
+    // in the queue pane.  This prevents a video starting every time the user
+    // passes through video-queue mode on the way to audio-queue mode.
     _queueSelIdx  = _qState.video.index;
     _preQueueDir  = currentDir;
     _preQueueFile = currentFile;
-    var item = _qVideoItems()[_qState.video.index];
-    if (item) {
-      currentDir  = item.dir;
-      currentFile = item.file;
-      showMediaFile(item.file);
-    }
     applySelector();
     renderQueuePane();
     _updateChannelWiring();
@@ -888,7 +890,9 @@ function _setQueueMode(mode) {
   }
 
   if (old === 'video' && mode !== 'video') {
-    // Leaving video queue mode: stop queue video, restore saved position.
+    // Leaving video queue mode: save current time, stop video, restore saved position.
+    if (activeMediaEl && !activeMediaEl.ended)
+      _bcPost('media-queue', { cmd: 'q-vtime', time: activeMediaEl.currentTime });
     _stopActiveMedia();
     var savedDir  = _preQueueDir;
     var savedFile = _preQueueFile;
@@ -956,14 +960,10 @@ function _onQueueStateUpdate(prev) {
   if (ui.queueMode === 'video') {
     var newIdx = _qState.video.index;
     if (newIdx !== prev.video.index) {
-      _queueSelIdx      = newIdx;
-      _pendingQueuePlay = true;  // always autoplay queue advances
-      var item = _qVideoItems()[newIdx];
-      if (item) {
-        currentDir  = item.dir;
-        currentFile = item.file;
-        showMediaFile(item.file);
-      }
+      // Sync cursor only.  Actual loading is done by _vqLoad(), handleQueueFocusKey(),
+      // and _onMediaEnded() — not here — so that _pendingQueuePlay is only set when
+      // a human action or auto-advance intends playback.
+      _queueSelIdx = newIdx;
     }
   } else if (ui.queueMode === 'audio' && _qState.audio.index !== prev.audio.index) {
     // Keep cursor in sync with auto-advances (end-of-track, skip) but not
@@ -1352,12 +1352,14 @@ function handleQueueFocusKey(e, key) {
       break;
     case 'Enter': case ' ':
       e.preventDefault();
-      _bcPost('media-queue', {
-        cmd: 'q-jump', type: isAudio ? 'audio' : 'video', index: _queueSelIdx
-      });
-      // Video queue: switch to viewer pane so the user can control playback.
-      // Audio queue: audio plays in the background; panes are unconnected.
-      if (!isAudio) setFocusMode('viewer');
+      if (isAudio) {
+        _bcPost('media-queue', { cmd: 'q-jump', type: 'audio', index: _queueSelIdx });
+      } else {
+        // Load directly (don't wait for q-changed round-trip) so it works even
+        // when the queue index doesn't change (first Enter after entering queue mode).
+        _vqLoad(_queueSelIdx);
+        setFocusMode('viewer');
+      }
       break;
     case 'Escape': case 'ArrowLeft':
       e.preventDefault();
@@ -1916,9 +1918,13 @@ function _onMediaLoadedMetadata() {
 
   // Restore saved position before playback starts (gif-loops are excluded:
   // they have no meaningful temporal position to resume).
+  // Video queue uses its own per-queue time (_qState.video.time broadcast from
+  // background), not the file's general saved position, so queue watching doesn't
+  // pollute the file's own resume point.
   var saved = 0;
   if (!isGif) {
-    saved = _getSavedPosition(fileUrl);
+    saved = (ui.queueMode === 'video') ? (_qState.video.time || 0)
+                                       : _getSavedPosition(fileUrl);
     if (saved > 0 && isFinite(mediaEl.duration) && saved < mediaEl.duration) {
       mediaEl.currentTime = saved;
     }
@@ -1972,7 +1978,14 @@ function _onTimeUpdate() {
   var el = this;
   _posCheckpointTimer = setTimeout(function() {
     _posCheckpointTimer = null;
-    _savePosition(el);
+    if (ui.queueMode === 'video' && el === videoEl && !el.paused && !el.ended) {
+      // In video queue mode, track position in background's queue state rather
+      // than the file's own saved position so queue watching doesn't affect normal
+      // resume behaviour when the file is opened outside the queue.
+      _bcPost('media-queue', { cmd: 'q-vtime', time: el.currentTime });
+    } else {
+      _savePosition(el);
+    }
   }, 5000);
 }
 
@@ -1984,10 +1997,7 @@ function _onMediaEnded() {
   // In video queue mode, auto-advance to the next queue item.
   if (ui.queueMode === 'video') {
     var next = _qState.video.index + 1;
-    if (next < _qVideoItems().length) {
-      _bcPost('media-queue', { cmd: 'q-jump', type: 'video', index: next });
-      // _onQueueStateUpdate fires when the broadcast comes back and loads it.
-    }
+    _vqLoad(next);  // no-op if past end; sets _pendingQueuePlay for autoplay
     _updateChannelWiring();  // no longer playing
     return;
   }

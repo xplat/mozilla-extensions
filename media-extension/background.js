@@ -128,8 +128,8 @@ connectNative();
 //
 // State layout:
 //   _aq  { items: [{dir, file}, …], index, time }  — audio queue
-//   _vq  { items: [{dir, file}, …], index }         — video queue
-//     (video plays in the viewer tab; we only track list + position here)
+//   _vq  { items: [{dir, file}, …], index, time }  — video queue
+//     (video plays in the viewer tab; background only tracks list + position)
 //
 // _aqPlaying   = true  means the user wants the queue to be playing.
 //                It stays true even while _aqSuppressed is true.
@@ -137,7 +137,7 @@ connectNative();
 //                temporarily; will auto-resume on 'media-stopped'.
 
 var _aq = { items: [], index: 0, time: 0 };
-var _vq = { items: [], index: 0 };
+var _vq = { items: [], index: 0, time: 0 };
 var _aqPlaying    = false;
 var _aqSuppressed = false;
 
@@ -171,6 +171,7 @@ function _loadQueueState() {
   } catch (e) {}
   _vq.items = Array.isArray(_vq.items) ? _vq.items : [];
   _vq.index = (_vq.index > 0 && _vq.index < _vq.items.length) ? _vq.index : 0;
+  _vq.time  = _vq.time  > 0 ? _vq.time  : 0;
 }
 
 function _saveQueueState() {
@@ -202,7 +203,7 @@ function _broadcastState() {
   _queueChannel.postMessage({
     cmd:   'q-changed',
     audio: { index: _aq.index, time: _currentTime(), playing: _aqPlaying, suppressed: _aqSuppressed },
-    video: { index: _vq.index }
+    video: { index: _vq.index, time: _vq.time }
   });
 }
 
@@ -373,6 +374,7 @@ _queueChannel.onmessage = function(e) {
         _loadAudioItem(d.index, 0, _aqPlaying && !_aqSuppressed);
       } else if (d.type === 'video') {
         _vq.index = Math.max(0, Math.min(_vq.items.length - 1, d.index));
+        _vq.time  = 0;  // new item always starts from the beginning
         _saveQueueState();
         _broadcastState();
       }
@@ -386,10 +388,17 @@ _queueChannel.onmessage = function(e) {
         _aqSuppressed = false;
         _aq = { items: [], index: 0, time: 0 };
       } else if (d.type === 'video') {
-        _vq = { items: [], index: 0 };
+        _vq = { items: [], index: 0, time: 0 };
       }
       _saveQueueState();
       _broadcastState();
+      break;
+
+    case 'q-vtime':
+      // Viewer sends its current video position periodically so it survives
+      // extension restarts.  Not broadcast — just saved to storage.
+      _vq.time = d.time > 0 ? d.time : 0;
+      _saveQueueState();
       break;
 
     case 'q-sync':
@@ -439,7 +448,7 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
     return {
       audio: { index: _aq.index, time: _currentTime(), playing: _aqPlaying, suppressed: _aqSuppressed,
                items: _aq.items },
-      video: { index: _vq.index }
+      video: { index: _vq.index, time: _vq.time }
     };
   }
 
