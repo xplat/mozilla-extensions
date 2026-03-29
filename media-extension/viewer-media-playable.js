@@ -22,12 +22,9 @@
 //   _hasAnnounced, _bcPost, _updateChannelWiring,          (viewer-audio.js)
 //   _qState, _vqLoad,                                      (viewer-queue-mgt.js)
 //   _panValue,                                             (media-shared.js)
-//   ImageContent, GifContent, PlayableContent,
-//   VideoContent,                                          (viewer-media.js)
 //   content,                                               (viewer-content.js)
 //   _contentPath,                                          (viewer.js)
-//   FULLSCREEN_DIMS,                                       (viewer.js)
-//   transitionCoverEl, mainImageEl, imgSpinnerEl,          (viewer-media-image.js)
+//   transitionCoverEl,                                     (viewer.js)
 //   mediaErrorEl, mediaErrorMsgEl.                         (viewer.js)
 
 // ── HUD DOM refs ──────────────────────────────────────────────────────────────
@@ -184,90 +181,9 @@ var _pendingQueuePlay = false;  // true when a video-queue advance should autopl
 
 // ── Media element event handlers ─────────────────────────────────────────────
 //
-// Temporarily in this module pending content-object refactoring, which will
-// let loadedmetadata/ended/playing/error be split by media type.
-
-function _onMediaLoadedMetadata() {
-  imgSpinnerEl.classList.add('hidden');
-  var mediaEl = this;
-  var fileUrl = _contentPath;
-
-  // Detect gif-loop first: short video with no audio → play silently in a loop.
-  // Must run before the position-restore below so we can skip restoring for gifs.
-  var isGif = false;
-  if (mediaEl === videoEl) {
-    if (isFinite(videoEl.duration) && videoEl.duration < 60 && !videoEl.mozHasAudio) {
-      isGif = true;
-      videoEl.loop  = true;
-      videoEl.muted = true;
-      // Reclassify the future occupant from VideoContent to GifContent so
-      // ContentPane deduplication and CSS-class logic use the correct type.
-      if (content.future instanceof VideoContent) {
-        content.redirect(new GifContent(content.future.fullPath));
-      }
-      if (!content._isDeferred()) {
-        // Immediate mode (media→gif): swap the CSS class right now.
-        imagePaneEl.classList.replace('media-video', 'media-gif');
-      }
-      // Deferred mode (image→gif): class is added below in the deferred-swap block.
-    }
-  }
-
-  // Restore saved position before playback starts (gif-loops are excluded:
-  // they have no meaningful temporal position to resume).
-  // Video queue uses its own per-queue time (_qState.video.time broadcast from
-  // background), not the file's general saved position, so queue watching doesn't
-  // pollute the file's own resume point.
-  var saved = 0;
-  if (!isGif) {
-    saved = content.isQueueContent ? (_qState.video.time || 0)
-                                   : _getSavedPosition(fileUrl);
-    if (saved > 0 && isFinite(mediaEl.duration) && saved < mediaEl.duration) {
-      mediaEl.currentTime = saved;
-    }
-  }
-
-  // image→media deferred swap: media is ready, now atomically replace the image.
-  if (content._isDeferred()) {
-    var fut = content.future;
-    var cssClass = (fut instanceof GifContent)   ? 'media-gif'   :
-                   (fut instanceof VideoContent)  ? 'media-video' : 'media-audio';
-    _startTransitionCover();
-    mainImageEl.src = '';
-    imagePaneEl.classList.remove('image-loaded');
-    imagePaneEl.classList.add(cssClass);
-    // Cover fades out below, after _updateVideoControls().
-  }
-  content.commitFuture(content.future);
-
-  // Schedule cross-tab pause for the moment playback actually starts,
-  // not here — otherwise loading without autoplay still pauses other tabs.
-  var hasAudio = mediaEl === audioEl ||
-                 (mediaEl === videoEl && videoEl.mozHasAudio &&
-                  !imagePaneEl.classList.contains('media-gif'));
-  _shouldAnnounce = hasAudio;
-
-  // Auto-fullscreen: widescreen video (≥ 3:2 aspect) played from the beginning.
-  // Skipped when restoring a saved position (the user already watched part of it)
-  // or when already fullscreen or when gif-loop mode.
-  // The actual fullscreen request is deferred to the 'playing' event so it fires
-  // when the user actually starts playback rather than when the file loads.
-  _pendingAutoFS = (mediaEl === videoEl &&
-      !imagePaneEl.classList.contains('media-gif') &&
-      !document.fullscreenElement &&
-      !(saved > 0) &&
-      FULLSCREEN_DIMS.has(videoEl.videoWidth + 'x' + videoEl.videoHeight));
-
-  _updateVideoControls();
-  _endTransitionCover();
-  // Gif-loops always play (they're treated as looping images, not video).
-  // For real video/audio, respect the autoplay toggle; video-queue advances
-  // always play regardless (_pendingQueuePlay) to keep the queue running.
-  if (_autoplay || imagePaneEl.classList.contains('media-gif') || _pendingQueuePlay) {
-    _pendingQueuePlay = false;
-    mediaEl.play().catch(function() {});
-  }
-}
+// loadedmetadata is handled by _loadPlayable() in viewer-media.js, which
+// awaits it via LoadContext.waitFor().  The handlers below manage ongoing
+// playback state after a load has committed.
 
 function _onTimeUpdate() {
   _updateVideoControls();
@@ -342,8 +258,6 @@ function _onMediaError() {
   if (mediaErrorEl)    mediaErrorEl.classList.remove('hidden');
 }
 
-videoEl.addEventListener('loadedmetadata', _onMediaLoadedMetadata);
-audioEl.addEventListener('loadedmetadata', _onMediaLoadedMetadata);
 videoEl.addEventListener('playing',        _onMediaPlaying);
 audioEl.addEventListener('playing',        _onMediaPlaying);
 videoEl.addEventListener('timeupdate',     _onTimeUpdate);

@@ -6,20 +6,14 @@
 //
 // Declares these globals used by other modules:
 //   transformHostEl, mainImageEl, imgSpinnerEl,
-//   applyImageTransform, showImage,
+//   _imgPendingLoad, _prevDisplayW, _prevDisplayH,
+//   applyImageTransform,
 //   toggleZoom, rotateBy, toggleMirror, toggleFlip, resetOrientation,
 //   scaleDouble, scaleHalve, scaleStep, scaleTo1,
 //   scrollImage.
 //
 // Calls into globals defined in earlier / later modules:
-//   ui, imagePaneEl, persistState,                         (viewer-ui.js)
-//   _startTransitionCover, _endTransitionCover,            (viewer-media-playable.js)
-//   _stopActiveMedia,                                      (viewer-media-playable.js)
-//   ImageContent, PlayableContent, GifContent,             (viewer-media.js)
-//   content,                                               (viewer-content.js)
-//   toProxyFile,                                           (media-shared.js)
-//   _contentPath,                                          (viewer.js)
-//   infoOverlayEl, updateInfoOverlay.                      (viewer.js)
+//   ui, imagePaneEl, persistState.                        (viewer-ui.js)
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 
@@ -46,74 +40,11 @@ var _prevScale  = 1;
 var _prevMirror = false;
 var _prevFlip   = false;
 
-// ── Image display ─────────────────────────────────────────────────────────────
+// Image preload and display is handled by ImageContent.load() in viewer-media.js.
+// _imgPendingLoad, _prevDisplayW, _prevDisplayH are declared above and used there.
 //
-// We preload the new image in a scratch element before swapping mainImageEl.src
-// so the old image stays visible during loading (no blank flash).  Clearing the
-// old inline width/height/transform on mainImageEl before the swap prevents the
-// new image from briefly inheriting the previous image's dimensions (squishing).
-
-function showImage(filename) {
-  // _contentPath is always set by showMediaFile() before showImage() is called.
-  if (!_contentPath) return;
-  var proxyUrl = toProxyFile(_contentPath);
-
-  // Cancel any previous in-flight preload.
-  if (_imgPendingLoad) {
-    _imgPendingLoad.onload = _imgPendingLoad.onerror = null;
-    _imgPendingLoad.src    = '';
-    _imgPendingLoad        = null;
-  }
-
-  imgSpinnerEl.classList.remove('hidden');
-
-  if (!infoOverlayEl.classList.contains('hidden')) {
-    updateInfoOverlay(filename);
-  }
-  document.title = filename + ' — Media Viewer';
-
-  // Load new image off-screen; swap only when decoded (no blank during load).
-  var pending = new Image();
-  _imgPendingLoad = pending;
-  pending.onload = function() {
-    if (_imgPendingLoad !== pending) return;  // superseded
-    _imgPendingLoad = null;
-    // Hide while swapping: prevents both the old-image-position flash (stale
-    // absolute margins land off-screen while transformHostEl is unsized) and
-    // squishing.  The load handler reveals the image after applyImageTransform()
-    // has set correct geometry.  One-frame blank is imperceptible.
-    mainImageEl.style.visibility = 'hidden';
-    mainImageEl.src = proxyUrl;
-  };
-  pending.onerror = function() {
-    if (_imgPendingLoad !== pending) return;
-    _imgPendingLoad = null;
-    imgSpinnerEl.classList.add('hidden');
-  };
-  pending.src = proxyUrl;
-}
-
-mainImageEl.addEventListener('load', function() {
-  imgSpinnerEl.classList.add('hidden');
-  imagePaneEl.classList.add('image-loaded');
-  _prevDisplayW = 0;  // new image — don't inherit previous scroll centre
-  _prevDisplayH = 0;
-  applyImageTransform();
-  mainImageEl.style.visibility = '';
-  var fut = content.future;
-  if (fut instanceof ImageContent &&
-      (content.current instanceof PlayableContent ||
-       content.current instanceof GifContent)) {
-    // media→image deferred swap: image is ready, atomically stop the media.
-    // transform-host was hidden (media class present); surrender() →
-    // _stopActiveMedia() removes the media class, revealing the image.
-    _startTransitionCover();
-    content.current.surrender();
-  }
-  content.commitFuture(fut);
-  _endTransitionCover();
-});
-
+// Belt-and-suspenders: hide the spinner on any mainImageEl error not already
+// caught by an active LoadContext (e.g. a stale src attribute).
 mainImageEl.addEventListener('error', function() {
   imgSpinnerEl.classList.add('hidden');
 });

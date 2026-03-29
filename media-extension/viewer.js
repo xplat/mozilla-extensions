@@ -56,7 +56,7 @@ const FULLSCREEN_DIMS = new Set([
 // currentDir / currentFile / listing / selectedIdx — owned by viewer-selector.js.
 
 // transformHostEl, mainImageEl, imgSpinnerEl — declared in viewer-media-image.js.
-// applyImageTransform, showImage, zoom/rotate/scale/scroll — viewer-media-image.js.
+// applyImageTransform, zoom/rotate/scale/scroll — viewer-media-image.js.
 
 // _qState, _queueSelIdx, _vqLoad/_vqNext/_vqPrev, cycleQueueMode,
 // renderQueuePane, handleQueueFocusKey, _collectAndQueueDir —
@@ -391,9 +391,10 @@ catch (err) { console.warn('createMediaElementSource(videoEl) failed:', err); }
 // _clearSavedPosition, fmtTime, _updateVideoControls,
 // progress-bar click listener — moved to viewer-media-playable.js.
 
-// ── Media element event handlers, addEventListener registrations ─────────────
-// _onMediaLoadedMetadata, _onTimeUpdate, _onMediaEnded, _onMediaPlaying,
-// _onMediaError — moved to viewer-media-playable.js.
+// ── Media element event handlers ─────────────────────────────────────────────
+// loadedmetadata — handled by _loadPlayable() in viewer-media.js (async).
+// _onTimeUpdate, _onMediaEnded, _onMediaPlaying, _onMediaError
+//   — ongoing playback handlers in viewer-media-playable.js.
 
 // ── Media control helpers ────────────────────────────────────────────────────
 // togglePlayPause, toggleMute, adjustVolume, adjustBalance — moved to viewer-audio.js.
@@ -403,7 +404,7 @@ catch (err) { console.warn('createMediaElementSource(videoEl) failed:', err); }
 //
 // Applies CSS filter to the video element.  mplayer key layout:
 //   1/2 contrast, 3/4 brightness, 5/6 hue-rotate, 7/8 saturate
-// Filter is reset to defaults when a new file is opened (showMedia).
+// Filter is reset to defaults when a new file is opened (_loadPlayable).
 
 function _applyVideoFilter() {
   var parts = [];
@@ -465,43 +466,6 @@ function showMediaFile(filename, fullPath, isQueueItem) {
     isQueueItem ? _queueSelIdx : undefined));
 }
 
-// Called by AudioContent.load() and VideoContent.load() via the ContentPane.
-// deferred=true (image→media path): don't add the CSS class yet — old image
-// stays visible.  _onMediaLoadedMetadata() does the atomic swap.
-function showMedia(filename, type, deferred) {
-  // _contentPath is kept in sync by content._syncLegacyGlobals().
-  var proxyUrl = toProxyFile(_contentPath);
-
-  activeMediaEl      = (type === 'video') ? videoEl : audioEl;
-  activeMediaEl.loop   = false;
-  activeMediaEl.volume = parseFloat(localStorage.getItem('media-volume') || '1');
-  activeMediaEl.muted  = localStorage.getItem('media-muted') === 'true';
-  // Balance is applied via _panNode (shared, initialised from localStorage in
-  // media-shared.js) and kept in sync on every adjustBalance() / av-settings
-  // message, so no per-file re-sync is needed here.
-  _updateChannelWiring();  // activeMediaEl just changed
-
-  // Reset per-file video filter to defaults.
-  _vContrast = _vBrightness = 1.0;
-  _vHue = 0;
-  _vSaturation = 1.0;
-  videoEl.style.filter = '';
-
-  if (!deferred) {
-    // Immediate mode: show spinner and media class right away.
-    imgSpinnerEl.classList.remove('hidden');
-    imagePaneEl.classList.add(type === 'video' ? 'media-video' : 'media-audio');
-  }
-  // Deferred: old image stays visible; no spinner, no class until ready.
-
-  activeMediaEl.src = proxyUrl;
-  // loadedmetadata fires next → _onMediaLoadedMetadata()
-
-  if (!infoOverlayEl.classList.contains('hidden')) {
-    updateInfoOverlay(filename);
-  }
-  document.title = filename + ' — Media Viewer';
-}
 
 // ── Initialisation ─────────────────────────────────────────────────────────
 

@@ -1,149 +1,140 @@
 'use strict';
 // ── viewer-content.js ─────────────────────────────────────────────────────────
 //
-// ContentPane: manages the current and future content-pane occupants, drives
-// load transitions, and exposes state queries used by event handlers.
+// ContentPane: manages current and future content-pane occupants, drives
+// transitions, and exposes state queries used by event handlers.
 //
 // Declares these globals:
 //   content                                               (ContentPane instance)
 //
-// Also maintains the legacy globals _contentPath and _isQueueContent in sync
-// for event handlers not yet migrated to content.* directly.
+// Maintains legacy globals _contentPath and _isQueueContent in sync for
+// event handlers that read them directly.
 //
 // Calls into globals defined in earlier / later modules:
+//   CancelledError, LoadContext,                         (viewer-load-context.js)
 //   ImageContent, GifContent, PlayableContent,
 //   VideoContent, QueuedVideoContent,                    (viewer-media.js)
 //   imagePaneEl,                                         (viewer-ui.js)
-//   mainImageEl, _imgPendingLoad,                        (viewer-media-image.js)
+//   mainImageEl,                                         (viewer-media-image.js)
 //   _startTransitionCover, _endTransitionCover,
 //   _stopActiveMedia.                                    (viewer-media-playable.js)
 
 class ContentPane {
   constructor() {
-    this.current = null;  // committed occupant (what is currently displayed)
-    this.future  = null;  // occupant being loaded, or null
+    this.current    = null;  // committed occupant (currently displayed)
+    this.future     = null;  // occupant being loaded, or null
+    this._futureCtx = null;  // LoadContext for the current future, or null
   }
 
   // ── State queries ───────────────────────────────────────────────────────────
 
-  // Full path of whatever is loading or currently displayed.
   get fullPath() {
     var active = this.future || this.current;
     return active ? active.fullPath : null;
   }
 
-  // True when the active content (loading or displayed) is a queue video.
   get isQueueContent() {
     return (this.future || this.current) instanceof QueuedVideoContent;
   }
 
-  // True when the current→future transition is deferred (image→media):
-  // the old image stays visible until loadedmetadata fires; no CSS class is
-  // added yet.  Called by PlayableContent.load() to decide whether to skip
-  // the spinner/class-add, and by _onMediaLoadedMetadata for the same reason.
-  _isDeferred() {
-    return (this.current instanceof ImageContent) &&
-           (this.future  instanceof PlayableContent ||
-            this.future  instanceof GifContent);
-  }
-
   // ── Load ────────────────────────────────────────────────────────────────────
 
-  // Request loading of a new occupant.
-  // Returns false if the same content is already loaded (no-op).
-  // Returns true if loading was started (or the pane was cleared).
+  // Kick off an async content load.  Returns false if already loaded (no-op).
+  // The actual loading runs asynchronously; this method returns immediately
+  // after starting it so the caller can proceed (e.g. set focus).
   load(occupant) {
     if (!occupant) { this._clearToEmpty(); return true; }
 
-    // Deduplication: same content already current, nothing pending → no-op.
     if (this.current &&
         this.current.name === occupant.name &&
         !this.future) {
-      return false;
+      return false;  // already loaded, nothing to do
     }
 
-    // Cancel any previous pending future before replacing it.
-    if (this.future) {
-      this.future.surrender();
-      this.future = null;
+    // Cancel any in-progress load.
+    if (this._futureCtx) {
+      this._futureCtx.cancel();
+      this._futureCtx = null;
     }
+    this.future = null;
 
-    var curIsImage    = this.current instanceof ImageContent;
-    var curIsPlayable = this.current instanceof PlayableContent ||
-                        this.current instanceof GifContent;
-    var newIsImage    = occupant instanceof ImageContent;
-
-    this.future = occupant;
+    const ctx = new LoadContext();
+    this._futureCtx = ctx;
+    this.future     = occupant;
     this._syncLegacyGlobals();
 
-    if (newIsImage) {
-      if (curIsPlayable) {
-        // media→image: keep media playing until mainImageEl 'load' fires and
-        // calls commitFuture(), which calls current.surrender() to stop media.
-      } else if (this.current) {
-        // image→image: cancel any pending preload for the old occupant.
-        this.current.surrender();
-      }
-      // null→image: nothing extra needed.
-    } else {
-      // New content is playable (audio / video / gif).
-      if (!curIsImage) {
-        // media→media or null→media: stop whatever is current under a cover.
-        _startTransitionCover();
-        if (this.current) this.current.surrender();
-        mainImageEl.src = '';
-        imagePaneEl.classList.remove('image-loaded');
-      }
-      // image→media (curIsImage): deferred — old image stays visible; the media
-      // element loads invisibly and _onMediaLoadedMetadata does the atomic swap.
-    }
+    occupant.load(this, ctx).catch(function(e) {
+      if (e instanceof CancelledError) return;
+      console.error('content load failed:', e);
+      content.abortFuture(occupant);
+    });
 
-    occupant.load(this);
     return true;
   }
 
-  // ── Commit / abort ──────────────────────────────────────────────────────────
+  // ── Request ─────────────────────────────────────────────────────────────────
 
-  // Called from event handlers once loading has finished and the future occupant
-  // should become current.  Silently ignored if occupant is no longer the future
-  // (superseded by a later navigation).
+  // Called by occupant.load() when it needs its element.
+  // If the current occupant uses the same element, ask it to surrender first.
+  // After this resolves, the element is unused.
+  async request(occupant, ctx) {
+    if (this.current &&
+        this.current.element !== null &&
+        this.current.element === occupant.element) {
+      await this.current.surrender(occupant.element);
+    }
+    if (ctx._cancelled) throw new CancelledError();
+  }
+
+  // ── Commit ──────────────────────────────────────────────────────────────────
+
+  // Called by occupant.load() once loading has completed successfully.
+  // Shows the transition cover if needed, cleans up the old occupant, applies
+  // the new CSS class, and makes this occupant current.
+  // _endTransitionCover() must be called by the caller immediately after.
   commitFuture(occupant) {
     if (occupant !== this.future) return;
-    if (this.current && this.current !== occupant) {
-      // media→image path: current is still the playing media.  The 'load'
-      // handler stops it via surrender() before calling here; current is nulled.
-      // Nothing else to do — current.surrender() already ran.
-    }
-    this.current = occupant;
-    this.future  = null;
+
+    const prev = this.current;
+
+    // Show transition cover when switching away from a visible occupant, except
+    // for image→image (which uses the visibility:hidden seamless-swap technique).
+    const needCover = prev !== null &&
+      !(prev instanceof ImageContent && occupant instanceof ImageContent);
+    if (needCover) _startTransitionCover();
+
+    // Clean up old occupant.  cleanup() is a no-op for surrendered occupants.
+    if (prev) prev.cleanup();
+
+    // Apply CSS class for the new occupant (e.g. 'media-video').
+    // ImageContent.applyClass() is a no-op (image-loaded was set in load()).
+    occupant.applyClass();
+
+    this.current    = occupant;
+    this.future     = null;
+    this._futureCtx = null;
     this._syncLegacyGlobals();
   }
 
-  // Drop the future occupant without committing (e.g. load error, superseded).
+  // Drop the future without committing (load error or cancelled).
   abortFuture(occupant) {
-    if (occupant === this.future) {
-      this.future = null;
-      this._syncLegacyGlobals();
-    }
+    if (occupant !== this.future) return;
+    this.future     = null;
+    this._futureCtx = null;
+    this._syncLegacyGlobals();
   }
 
   // ── Gif redirect ────────────────────────────────────────────────────────────
-  //
-  // Swap the future VideoContent for a GifContent covering the same file.
-  // Called from _onMediaLoadedMetadata when a gif-loop is detected.
-  // The 'video:' name prefix is shared between VideoContent and GifContent,
-  // so deduplication remains correct after the reclassification.
+
   redirect(gifOccupant) {
     if (this.future instanceof VideoContent) {
       this.future = gifOccupant;
-      // fullPath and isQueueContent are unchanged; no need to resync.
+      // fullPath and isQueueContent are unchanged; _syncLegacyGlobals not needed.
     }
   }
 
   // ── Legacy global sync ──────────────────────────────────────────────────────
-  //
-  // Keep _contentPath and _isQueueContent in sync for the event handlers in
-  // viewer-media-playable.js that still read them directly.
+
   _syncLegacyGlobals() {
     _contentPath    = this.fullPath;
     _isQueueContent = this.isQueueContent;
@@ -152,9 +143,10 @@ class ContentPane {
   // ── Clear ───────────────────────────────────────────────────────────────────
 
   _clearToEmpty() {
-    if (this.future)  { this.future.surrender();  this.future  = null; }
+    if (this._futureCtx) { this._futureCtx.cancel(); this._futureCtx = null; }
+    this.future = null;
     _startTransitionCover();
-    if (this.current) { this.current.surrender(); this.current = null; }
+    if (this.current) { this.current.cleanup(); this.current = null; }
     mainImageEl.src = '';
     imagePaneEl.classList.remove('image-loaded');
     _contentPath    = null;
