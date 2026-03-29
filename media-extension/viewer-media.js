@@ -98,7 +98,6 @@ class ImageContent extends ImagelikeContent {
     const proxyUrl = toProxyFile(this.fullPath);
 
     if (!infoOverlayEl.classList.contains('hidden')) updateInfoOverlay(this.filename);
-    document.title = this.filename + ' — Media Viewer';
 
     // Phase 1: preload with a throwaway Image; old content stays visible.
     const pending = new Image();

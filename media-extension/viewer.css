@@ -142,7 +142,7 @@ html, body {
   height: 100%;
 }
 
-/* ── SELECTOR PANE ─────────────────────────────────────────────────────── */
+/* ── LIST PANES ─────────────────────────────────────────────────────────── */
 
 .list-pane {
   width: var(--selector-w);
@@ -187,32 +187,33 @@ html, body {
   display: none;
 }
 
-/* Hide selector in Z-mode */
-#viewer-screen.no-selector #selector-pane {
-  display: none;
-}
-
-#selector-header {
+.list-header {
   height: var(--hdr-h);
-  padding: 0 8px;
   display: flex;
   align-items: center;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  overflow: hidden;
   background: var(--surface-2);
 }
 
-#dir-path {
+.list-header-title {
   font-family: monospace;
   font-size: 11px;
   color: var(--text-dim);
-  white-space: nowrap;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#selector-header {
+  padding: 0 8px;
+  overflow: hidden;   /* clips long dir paths at the container level */
+}
+
+#dir-path {
   direction: rtl;
-  text-align: left;
-  flex: 1;
+  text-align: left;   /* counteracts RTL default right-alignment for short paths */
 }
 
 .list-list {
@@ -740,25 +741,12 @@ html, body {
 #viewer-screen.no-selector  .list-pane     { display: none; }
 
 #queue-pane-header {
-  height: var(--hdr-h);
   padding: 0 6px;
-  display: flex;
-  align-items: center;
   gap: 4px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-  background: var(--surface-2);
 }
 
 #queue-pane-title {
-  font-family: monospace;
-  font-size: 11px;
-  color: var(--text-dim);
   letter-spacing: 0.05em;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Focus indicator: queue pane header bar highlights like the selector divider */
