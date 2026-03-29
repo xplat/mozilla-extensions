@@ -46,7 +46,7 @@ class ContentOccupant {
   // Which DOM element does this occupant exclusively own?
   // ContentPane.request() compares elements to decide if surrender is needed.
   // commitFuture() toggles 'content-active' on this element.
-  // null means the occupant manages its own visibility.
+  // null is only allowed for an abstract class.
   get element()   { return null; }
 
   // Per-type CSS class to apply to imagePaneEl for HUD / controls visibility.
@@ -69,7 +69,6 @@ class ContentOccupant {
 
   // Sync: fast cleanup called at commitFuture() time when this occupant's
   // element was NOT surrendered (was already hidden under CSS classes).
-  // Must be idempotent.
   cleanup() {}
 
   // Return a pristine (unloaded) copy of this occupant, suitable for a reload
@@ -77,9 +76,16 @@ class ContentOccupant {
   clone() { return null; }
 }
 
+// ── Imagelike ─────────────────────────────────────────────────────────────────
+
+class ImagelikeContent extends ContentOccupant {
+  // Just a stub at this point, but will fill out when occupant event handlers
+  // are a thing.
+}
+
 // ── Image ─────────────────────────────────────────────────────────────────────
 
-class ImageContent extends ContentOccupant {
+class ImageContent extends ImagelikeContent {
   constructor(fullPath) {
     super(fullPath);
     this._name = 'image:' + fullPath;
@@ -100,7 +106,7 @@ class ImageContent extends ContentOccupant {
     _imgPendingLoad = pending;
     pending.src = proxyUrl;
     try {
-      await ctx.waitFor(pending, 'load', [pending, 'error', Error]);
+      await ctx.waitFor(pending, 'load', [pending, 'error', () => new Error()]);
     } catch (e) {
       pending.src = '';
       if (_imgPendingLoad === pending) _imgPendingLoad = null;
@@ -116,7 +122,7 @@ class ImageContent extends ContentOccupant {
     mainImageEl.style.visibility = 'hidden';
     mainImageEl.src = proxyUrl;
     try {
-      await ctx.waitFor(mainImageEl, 'load', [mainImageEl, 'error', Error]);
+      await ctx.waitFor(mainImageEl, 'load', [mainImageEl, 'error', () => new Error]);
     } catch (e) {
       mainImageEl.style.visibility = '';
       mainImageEl.src = '';
@@ -154,7 +160,7 @@ class ImageContent extends ContentOccupant {
 // GifContent shares the 'video:' name prefix with VideoContent so that
 // gif↔video reclassification via ContentPane.redirect() is transparent.
 
-class GifContent extends ContentOccupant {
+class GifContent extends ImagelikeContent {
   constructor(fullPath) {
     super(fullPath);
     this._name    = 'video:' + fullPath;
@@ -163,26 +169,27 @@ class GifContent extends ContentOccupant {
   get element()   { return videoEl; }
   get paneClass() { return 'media-gif'; }
 
-  // GifContent is reached via redirect() from VideoContent._loadPlayable(), which
-  // has already set el.loop/muted and el.src.  This load() secures the element
+  // GifContent is reached via redirect() from VideoContent.load(), which
+  // has already set el.src.  This load() secures the element
   // (guarded against double-surrender by ContentPane._surrendered), sets up the
   // gif-specific playback state, and starts playback.
   async load(pane, ctx) {
+    videoEl.loop  = true;
+    videoEl.muted = true;
     await pane.request(this, ctx);
     _shouldAnnounce   = false;
     _pendingAutoFS    = false;
     _pendingQueuePlay = false;
-    _updateVideoControls();
     videoEl.play().catch(function() {});
     // commitFuture() is called by ContentPane.load()'s .then() chain.
   }
 
   async surrender(element) {
     _startTransitionCover();
-    _stopActiveMedia();
+    _stopActiveMedia(videoEl);
   }
 
-  cleanup() { _stopActiveMedia(); }
+  cleanup() { _stopActiveMedia(videoEl); }
 
   clone() { return new GifContent(this.fullPath); }
 }
@@ -190,12 +197,77 @@ class GifContent extends ContentOccupant {
 // ── Playable (audio + video) ──────────────────────────────────────────────────
 
 class PlayableContent extends ContentOccupant {
-  async surrender(element) {
-    _startTransitionCover();
-    _stopActiveMedia();
+  get mediaEl() { return this.element; }
+
+  prepMediaEl() {
+    const el = this.mediaEl;
+
+    // Wire the element.
+    activeMediaEl      = el;
+    el.src = proxyUrl;
+    el.loop            = false;
   }
 
-  cleanup() { _stopActiveMedia(); }
+  // now that our content has loaded, should we turn into something else?
+  mutate() {
+    return null;
+  }
+
+  get savedPosition() {
+    return _getSavedPosition(this.fullPath);
+  }
+
+  async load(pane, ctx) {
+    const proxyUrl = toProxyFile(this.fullPath);
+
+    // Request the display element.  For same-element (media→media) transitions,
+    // surrender() shows the cover and stops the old media before returning.
+    await pane.request(this, ctx);
+
+    if (!infoOverlayEl.classList.contains('hidden')) updateInfoOverlay(this.filename);
+
+    const el = this.mediaEl;
+
+    // Wait for the browser to have duration/dimensions — or error out.
+    try {
+      await ctx.waitFor(el, 'loadedmetadata', [el, 'error', () => new Error()]);
+    } catch (e) {
+      if (e instanceof CancelledError) throw e;
+      // Media error during load: redirect to ErrorContent so the user sees the
+      // message and can retry.  _onMediaError() skips its own display while
+      // content.future is set (i.e. now, before commitFuture clears it).
+      pane.redirect(new ErrorContent(this, _mediaErrorMessage(el, this.fullPath)), ctx);
+      return await pane.future.load(pane, ctx);
+    }
+
+    const mutated = this.mutate();
+    if (mutated) {
+      pane.redirect(mutated);
+      return await mutated.load(pane, ctx);
+    }
+    // Restore saved playback position.
+    var saved = this.savedPosition
+    if (saved > 0 && isFinite(el.duration) && saved < el.duration) {
+      el.currentTime = saved;
+    }
+
+    var hasAudio = el.audioTracks and length(el.audioTracks);
+    _shouldAnnounce = hasAudio;
+
+    loadAvSettings();
+
+    if (_autoplay || _pendingQueuePlay) {
+      _pendingQueuePlay = false;
+      el.play().catch(function() {});
+    }
+  }
+
+  async surrender(element) {
+    _startTransitionCover();
+    _stopActiveMedia(this.mediaEl);
+  }
+
+  cleanup() { _stopActiveMedia(this.mediaEl); }
 }
 
 class AudioContent extends PlayableContent {
@@ -204,15 +276,9 @@ class AudioContent extends PlayableContent {
     this._name = 'audio:' + fullPath;
   }
 
-  // audioPlaceholderEl serves as both the exclusive resource and the display
-  // target.  Using it (rather than the invisible audioEl) unifies displayEl and
-  // element into a single property.
+  get mediaEl()   { return audioEl; }
   get element()   { return audioPlaceholderEl; }
   get paneClass() { return 'media-audio'; }
-
-  async load(pane, ctx) {
-    await _loadPlayable(this, audioEl, 'audio', pane, ctx);
-  }
 
   clone() { return new AudioContent(this.fullPath); }
 }
@@ -226,8 +292,34 @@ class VideoContent extends PlayableContent {
   get element()   { return videoEl; }
   get paneClass() { return 'media-video'; }
 
-  async load(pane, ctx) {
-    await _loadPlayable(this, videoEl, 'video', pane, ctx);
+  prepMediaEl() {
+    super();
+    const el = this.mediaEl;
+
+    if (el === videoEl) {
+      // Reset per-file video filter.
+      _vContrast = _vBrightness = 1.0;
+      _vHue      = 0;
+      _vSaturation = 1.0;
+      videoEl.style.filter = '';
+    }
+  }
+
+  mutate() {
+    const el = this.mediaEl;
+    // Gif-loop detection: short video, no audio → redirect and hand off.
+    // GifContent.load() handles the gif-specific playback setup.
+    if (el === videoEl && isFinite(el.duration) && el.duration < 60 && !el.mozHasAudio) {
+      return new GifContent(this.fullPath);
+    }
+  }
+
+  async load(pane, ctx):
+    await super(pane, ctx);
+    const el = this.mediaEl;
+    _pendingAutoFS = !document.fullscreenElement &&
+        FULLSCREEN_DIMS.has(el.videoWidth + 'x' + el.videoHeight);
+    return;
   }
 
   clone() { return new VideoContent(this.fullPath); }
@@ -241,6 +333,10 @@ class QueuedVideoContent extends VideoContent {
     this.queueIndex = queueIndex;
     this._name = 'qvideo:' + queueIndex + ':' + fullPath;
   }
+
+  mutate() { return null; }
+
+  get savedPosition() { return _qState.video.time || 0; }
 
   clone() { return new QueuedVideoContent(this.fullPath, this.queueIndex); }
 }
@@ -327,93 +423,6 @@ class ErrorContent extends ContentOccupant {
   // clone() returns the wrapped occupant's clone so a retry re-attempts the
   // original load rather than producing a nested ErrorContent.
   clone() { return this._wrapped ? this._wrapped.clone() : null; }
-}
-
-// ── Shared playable load implementation ───────────────────────────────────────
-//
-// Audio and Video share all loading logic; the only differences are which
-// element to use and which occupant type was created.
-
-async function _loadPlayable(occupant, el, type, pane, ctx) {
-  const proxyUrl = toProxyFile(occupant.fullPath);
-
-  // Request the display element.  For same-element (media→media) transitions,
-  // surrender() shows the cover and stops the old media before returning.
-  await pane.request(occupant, ctx);
-
-  // For cross-element transitions (e.g. audio→video), surrender() was not
-  // called, so we must explicitly stop any still-playing media before taking
-  // over activeMediaEl.  Setting pane._surrendered prevents commitFuture from
-  // calling cleanup() a second time (which would stop the new element).
-  if (activeMediaEl) {
-    pane._surrendered = true;
-    _stopActiveMedia();
-  }
-
-  // Wire the element.
-  activeMediaEl      = el;
-  el.loop            = false;
-  el.volume          = parseFloat(localStorage.getItem('media-volume') || '1');
-  el.muted           = localStorage.getItem('media-muted') === 'true';
-  _updateChannelWiring();
-
-  if (el === videoEl) {
-    // Reset per-file video filter.
-    _vContrast = _vBrightness = 1.0;
-    _vHue      = 0;
-    _vSaturation = 1.0;
-    videoEl.style.filter = '';
-  }
-
-  if (!infoOverlayEl.classList.contains('hidden')) updateInfoOverlay(occupant.filename);
-  document.title = occupant.filename + ' — Media Viewer';
-
-  el.src = proxyUrl;
-
-  // Wait for the browser to have duration/dimensions — or error out.
-  try {
-    await ctx.waitFor(el, 'loadedmetadata', [el, 'error', Error]);
-  } catch (e) {
-    if (e instanceof CancelledError) throw e;
-    // Media error during load: redirect to ErrorContent so the user sees the
-    // message and can retry.  _onMediaError() skips its own display while
-    // content.future is set (i.e. now, before commitFuture clears it).
-    pane.redirect(new ErrorContent(occupant, _mediaErrorMessage()), ctx);
-    await pane.future.load(pane, ctx);
-    return;
-  }
-
-  // Gif-loop detection: short video, no audio → redirect and hand off.
-  // GifContent.load() handles the gif-specific playback setup.
-  if (el === videoEl && isFinite(el.duration) && el.duration < 60 && !el.mozHasAudio) {
-    el.loop  = true;
-    el.muted = true;
-    pane.redirect(new GifContent(occupant.fullPath), ctx);
-    await pane.future.load(pane, ctx);
-    return;
-  }
-
-  // Restore saved playback position.
-  var saved = content.isQueueContent ? (_qState.video.time || 0)
-                                     : _getSavedPosition(occupant.fullPath);
-  if (saved > 0 && isFinite(el.duration) && saved < el.duration) {
-    el.currentTime = saved;
-  }
-
-  var hasAudio = el === audioEl || (el === videoEl && el.mozHasAudio);
-  _shouldAnnounce = hasAudio;
-
-  _pendingAutoFS = (el === videoEl &&
-      !document.fullscreenElement && !(saved > 0) &&
-      FULLSCREEN_DIMS.has(el.videoWidth + 'x' + el.videoHeight));
-
-  _updateVideoControls();
-  // commitFuture() is called by ContentPane.load()'s .then() chain.
-
-  if (_autoplay || _pendingQueuePlay) {
-    _pendingQueuePlay = false;
-    el.play().catch(function() {});
-  }
 }
 
 // ── Factory ───────────────────────────────────────────────────────────────────

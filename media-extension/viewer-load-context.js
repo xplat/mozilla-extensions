@@ -50,7 +50,7 @@ class LoadContext {
       element.addEventListener(event, onSuccess);
 
       for (const [errEl, errEvt, ErrClass] of errorTriples) {
-        const onError = () => { cleanup(); reject(new (ErrClass || Error)()); };
+        const onError = ErrClass.prototype ? (e) => { cleanup(); reject(new ErrClass(e)); } : () => { cleanup(); reject(ErrClass(e)) };
         bound.push([errEl, errEvt, onError]);
         errEl.addEventListener(errEvt, onError);
       }

@@ -1,4 +1,4 @@
-@claude plan ahead and use your todo-list helper to keep track of your detailed progress because you will probably run out of tool calls or tokens unexpectedly at *least* once in this process.
+@claude You seem to have gotten stuck on this refactor before, so I will try to divide it into bite-sized pieces and help out wherever necessary.
 
 The monolith that is viewer.js is going to be divided up:
 
@@ -8,7 +8,8 @@ The monolith that is viewer.js is going to be divided up:
 - viewer-selector.js : the selector.
 - viewer-audio-queue.js : the audio queue.
 - viewer-video-queue.js : the video queue.
-- viewer-media.js : common elements of media objects.
+- viewer-queue-mgt.js : queue management helpers.
+- viewer-media.js : common elements of media objects, error page.
 - viewer-media-imagelike.js : common elements between media-gif and image.  Some of this might be structured as helpers so audio can use it for cover loading in the future, but there might not be anything complicated enough to need that.
 - viewer-media-image.js : actual image
 - viewer-media-gif.js : fake gif that is actually a video
@@ -16,7 +17,7 @@ The monolith that is viewer.js is going to be divided up:
 - viewer-media-audio.js : audio media
 - viewer-media-video.js : normal video media
 - viewer-media-queued-video.js : video media from queue
-- viewer-content.js : content area helpers, empty content area, error page.
+- viewer-content.js : content area helpers, empty content area.
 - viewer.js : mainly just wiring stuff up.
 
 Keys not handled by the global key handler will be redirected to the occupant of the focused pane.  "Q", "v", and "Z" will be global keys and "." for hidden will be relegated to a selector key, simplifying the logic.  ("." for single-frame will belong to video).  The content pane will have a current occupant and, when loading, a future occupant.  Keys for the content pane will be sent to the current occupant when not loading and swallowed when loading.

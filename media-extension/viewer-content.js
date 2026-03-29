@@ -7,7 +7,7 @@
 // Declares these globals:
 //   content                                               (ContentPane instance)
 //
-// Maintains legacy globals _contentPath and _isQueueContent in sync for
+// Maintains legacy global _contentPath in sync for
 // event handlers that read them directly.
 //
 // Calls into globals defined in earlier / later modules:
@@ -17,6 +17,7 @@
 //   EmptyContent, EMPTY_CONTENT, ErrorContent,           (viewer-media.js)
 //   imagePaneEl,                                         (viewer-ui.js)
 //   imgSpinnerEl,                                        (viewer-media-image.js)
+//   selector,                                            (viewer-selector.js)
 //   _endTransitionCover.                                 (viewer-media-playable.js)
 
 class ContentPane {
@@ -64,6 +65,12 @@ class ContentPane {
 
     // Spinner on: stopped by commitFuture() on success.
     imgSpinnerEl.classList.remove('hidden');
+
+    if (occupant.filename) {
+      document.title = this.filename + ' — Media Viewer';
+    } else {
+      selector.updateDirPath();
+    }
 
     const self = this;
     occupant.load(this, ctx)
@@ -144,7 +151,6 @@ class ContentPane {
 
   _syncLegacyGlobals() {
     _contentPath    = this.fullPath;
-    _isQueueContent = this.isQueueContent;
   }
 }
 

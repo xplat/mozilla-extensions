@@ -146,7 +146,7 @@ transitionCoverEl.addEventListener('transitionend', function() {
 
 // ── Stop / tear-down ──────────────────────────────────────────────────────────
 
-function _stopActiveMedia() {
+function _stopActiveMedia(mediaEl) {
   _clearPosCheckpoint();
   _pendingAutoFS    = false;
   _pendingQueuePlay = false;
@@ -155,13 +155,11 @@ function _stopActiveMedia() {
     _hasAnnounced = false;
     _bcPost('media-viewer', { cmd: 'media-stopped' });
   }
-  if (!activeMediaEl) return;
-  activeMediaEl.pause();
-  activeMediaEl.src = '';
-  activeMediaEl     = null;
+  if (!mediaEl) return;
+  mediaEl.pause();
+  mediaEl.src = '';
+  mediaEl     = null;
   _contentPath      = null;
-  imagePaneEl.classList.remove('media-video', 'media-audio', 'media-gif');
-  _updateChannelWiring();  // activeMediaEl just cleared
 }
 
 // ── Autoplay toggle and relative seek ────────────────────────────────────────
@@ -248,11 +246,10 @@ function _onMediaPlaying() {
   _updateChannelWiring();  // now playing
 }
 
-// Build a human-readable message from the current activeMediaEl error.
-function _mediaErrorMessage() {
-  if (!activeMediaEl || !_contentPath) return 'Error loading media.';
-  var ext  = _contentPath.slice(_contentPath.lastIndexOf('.') + 1).toLowerCase();
-  var code = activeMediaEl.error ? activeMediaEl.error.code : 0;
+// Build a human-readable message from a media element's error information.
+function _mediaErrorMessage(el, path) {
+  var ext  = path ? path.slice(path.lastIndexOf('.') + 1).toLowerCase() : "unknown";
+  var code = el.error ? el.error.code : 0;
   if (ext === 'mkv' && code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
     return 'MKV playback is not supported in this version of Firefox.\n' +
            'Try enabling media.mkv.enabled in about:config, or upgrade to a newer Firefox.';
@@ -261,16 +258,16 @@ function _mediaErrorMessage() {
       code === MediaError.MEDIA_ERR_DECODE) {
     return 'This file format is not supported by your browser (' + ext.toUpperCase() + ').';
   }
-  return 'Error loading media.';
+  return el.error.message || 'Error loading media.';
 }
 
-function _onMediaError() {
-  // Guard: if src was cleared during navigation activeMediaEl is already null.
-  if (!activeMediaEl || !_contentPath) return;
+function _onMediaError(e) {
+  // Guard: if src was cleared during navigation, an error is expected.
+  if (!e.currentTarget.src) return;
   // Guard: error during an active load — the load's own catch will redirect to
   // ErrorContent with the same message; nothing to do here.
   if (content.future) return;
-  var msg = _mediaErrorMessage();
+  var msg = _mediaErrorMessage(e.currentTarget, content.current.fullPath);
   // Error during committed playback (e.g. stream interrupted): load ErrorContent.
   content.load(new ErrorContent(content.current, msg));
 }

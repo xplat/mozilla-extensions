@@ -56,9 +56,10 @@ function _onMediaMsg(e) {
     if (activeMediaEl) togglePlayPause();
   } else if (cmd === 'av-settings') {
     var d = e.data;
-    if (d.volume  !== undefined) localStorage.setItem('media-volume',  String(d.volume));
-    if (d.muted   !== undefined) localStorage.setItem('media-muted',   String(d.muted));
-    if (d.balance !== undefined) localStorage.setItem('media-balance', String(d.balance));
+    // The sender should already have done this once and for all:
+    // if (d.volume  !== undefined) localStorage.setItem('media-volume',  String(d.volume));
+    // if (d.muted   !== undefined) localStorage.setItem('media-muted',   String(d.muted));
+    // if (d.balance !== undefined) localStorage.setItem('media-balance', String(d.balance));
     if (activeMediaEl) {
       applyAvSettings(activeMediaEl, d);
       _updateVideoControls();
@@ -90,15 +91,19 @@ function _updateChannelWiring() {
 // hidden), then rewire channels for the new visibility state.
 document.addEventListener('visibilitychange', function() {
   if (document.visibilityState === 'visible' && activeMediaEl) {
-    applyAvSettings(activeMediaEl, {
-      volume:  parseFloat(localStorage.getItem('media-volume')  || '1'),
-      muted:   localStorage.getItem('media-muted')  === 'true',
-      balance: parseFloat(localStorage.getItem('media-balance') || '0'),
-    });
-    _updateVideoControls();
+    loadAvSettings();
   }
   _updateChannelWiring();
 });
+
+function loadAvSettings() {
+  applyAvSettings(activeMediaEl, {
+    volume:  parseFloat(localStorage.getItem('media-volume')  || '1'),
+    muted:   localStorage.getItem('media-muted')  === 'true',
+    balance: parseFloat(localStorage.getItem('media-balance') || '0'),
+  });
+  _updateVideoControls();
+}
 
 // ── A/V control helpers ───────────────────────────────────────────────────────
 
@@ -131,9 +136,7 @@ function toggleMute() {
 // Adjust volume by dBDelta decibels.  Using dB steps gives perceptually uniform
 // increments (~1.5 dB ≈ a just-noticeable loudness change; ~20 steps full→silence).
 function adjustVolume(dBDelta) {
-  var current = activeMediaEl
-    ? activeMediaEl.volume
-    : parseFloat(localStorage.getItem('media-volume') || '1');
+  var current = parseFloat(localStorage.getItem('media-volume') || '1');
   var vol;
   if (current <= 0) {
     // At zero, stepping up goes to a minimal audible level (~-40 dB).

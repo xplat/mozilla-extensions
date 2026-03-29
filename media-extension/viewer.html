@@ -43,11 +43,11 @@
     <div id="main-area">
 
       <!-- LEFT: file selector -->
-      <div id="selector-pane">
+      <div class="list-pane" id="selector-pane">
         <div id="selector-header">
           <span id="dir-path" title=""></span>
         </div>
-        <div id="file-list"></div>
+        <div class="list-list" id="file-list"></div>
         <div id="selector-footer">
           <button id="btn-recursive" title="Recursive listing">REC</button>
           <button id="btn-hidden"    title="Show hidden files (.)">HID</button>
@@ -56,12 +56,12 @@
       </div>
 
       <!-- LEFT (queue mode): playlist replaces selector -->
-      <div id="queue-pane">
+      <div class="list-pane" id="queue-pane">
         <div id="queue-pane-header">
           <span id="queue-pane-title"></span>
           <button id="queue-clear-btn" class="mode-btn" title="Clear queue">CLR</button>
         </div>
-        <div id="queue-list"></div>
+        <div class="list-list" id="queue-list"></div>
       </div>
 
       <!-- DIVIDER: drag to resize panes -->

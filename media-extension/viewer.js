@@ -70,10 +70,6 @@ const FULLSCREEN_DIMS = new Set([
 // function is called outside the ContentPane (e.g. the popstate handler).
 var _contentPath = null;
 
-// True when the content pane is playing a video queue item.
-// Kept in sync by content._syncLegacyGlobals().
-var _isQueueContent = false;
-
 // ── DOM refs ───────────────────────────────────────────────────────────────
 // UI-framework refs (screens, selector, panes, buttons, queue) — viewer-ui.js.
 // Content-pane and media refs remain here pending viewer-content.js extraction.
@@ -326,7 +322,7 @@ if (btnSort)      btnSort.addEventListener('click', selector.cycleSortBy);
 // ── History (back/forward) ─────────────────────────────────────────────────
 
 window.addEventListener('popstate', function(e) {
-  _stopActiveMedia();
+  _stopActiveMedia(activeMediaEl);
   applyHistoryState(e.state);
   var params = getUrlParams();
 
