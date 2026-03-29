@@ -2,7 +2,7 @@
 // ── viewer-media-image.js ─────────────────────────────────────────────────────
 //
 // Image display, preload, and full transform stack: zoom/fit, rotation,
-// mirror/flip, scale stepping, scroll, and the mainImageEl event handlers.
+// mirror/flip, scale stepping, scroll, and the ImageContent occupant class.
 //
 // Declares these globals used by other modules:
 //   transformHostEl, mainImageEl, imgSpinnerEl,
@@ -10,10 +10,14 @@
 //   applyImageTransform,
 //   toggleZoom, rotateBy, toggleMirror, toggleFlip, resetOrientation,
 //   scaleDouble, scaleHalve, scaleStep, scaleTo1,
-//   scrollImage.
+//   scrollImage,
+//   ImageContent.
 //
 // Calls into globals defined in earlier / later modules:
-//   ui, imagePaneEl, persistState.                        (viewer-ui.js)
+//   ui, imagePaneEl, persistState,                        (viewer-ui.js)
+//   toProxyFile,                                          (media-shared.js)
+//   infoOverlayEl, updateInfoOverlay,                     (viewer.js)
+//   ImagelikeContent.                                     (viewer-media-imagelike.js)
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 
@@ -40,9 +44,6 @@ var _prevScale  = 1;
 var _prevMirror = false;
 var _prevFlip   = false;
 
-// Image preload and display is handled by ImageContent.load() in viewer-media.js.
-// _imgPendingLoad, _prevDisplayW, _prevDisplayH are declared above and used there.
-//
 // Belt-and-suspenders: hide the spinner on any mainImageEl error not already
 // caught by an active LoadContext (e.g. a stale src attribute).
 mainImageEl.addEventListener('error', function() {
@@ -318,4 +319,74 @@ function scaleTo1() {
 function scrollImage(dx, dy) {
   imagePaneEl.scrollLeft += dx;
   imagePaneEl.scrollTop  += dy;
+}
+
+// ── ImageContent ──────────────────────────────────────────────────────────────
+
+class ImageContent extends ImagelikeContent {
+  constructor(fullPath) {
+    super(fullPath);
+    this._name = 'image:' + fullPath;
+  }
+
+  // transformHostEl serves as both the exclusive resource (compared in request())
+  // and the content-active display target.
+  get element()   { return transformHostEl; }
+
+  async load(pane, ctx) {
+    const proxyUrl = toProxyFile(this.fullPath);
+
+    if (!infoOverlayEl.classList.contains('hidden')) updateInfoOverlay(this.filename);
+
+    // Phase 1: preload with a throwaway Image; old content stays visible.
+    const pending = new Image();
+    _imgPendingLoad = pending;
+    pending.src = proxyUrl;
+    try {
+      await ctx.waitFor(pending, 'load', [pending, 'error', () => new Error()]);
+    } catch (e) {
+      pending.src = '';
+      if (_imgPendingLoad === pending) _imgPendingLoad = null;
+      throw e;  // CancelledError → swallowed by ContentPane; other → backstop
+    }
+    if (_imgPendingLoad === pending) _imgPendingLoad = null;
+
+    // Phase 2: request the shared image element.
+    // surrender() hides it with visibility:hidden, preserving the layout area.
+    await pane.request(this, ctx);
+
+    // Phase 3: feed URL into mainImageEl and wait for decode+paint.
+    mainImageEl.style.visibility = 'hidden';
+    mainImageEl.src = proxyUrl;
+    try {
+      await ctx.waitFor(mainImageEl, 'load', [mainImageEl, 'error', () => new Error]);
+    } catch (e) {
+      mainImageEl.style.visibility = '';
+      mainImageEl.src = '';
+      throw e;
+    }
+
+    // Image decoded: set up transform before revealing.
+    imagePaneEl.classList.add('image-loaded');
+    _prevDisplayW = 0;
+    _prevDisplayH = 0;
+    applyImageTransform();
+    mainImageEl.style.visibility = '';
+    // commitFuture() is called by ContentPane.load()'s .then() chain.
+  }
+
+  async surrender(element) {
+    // Use visibility:hidden rather than the cover: preserves the layout area so
+    // the incoming ImageContent can overwrite mainImageEl.src without a size flash.
+    mainImageEl.style.visibility = 'hidden';
+  }
+
+  cleanup() {
+    // Still showing — clear it so the incoming occupant starts from a clean slate.
+    if (_imgPendingLoad) { _imgPendingLoad.src = ''; _imgPendingLoad = null; }
+    mainImageEl.src = '';
+    imagePaneEl.classList.remove('image-loaded');
+  }
+
+  clone() { return new ImageContent(this.fullPath); }
 }

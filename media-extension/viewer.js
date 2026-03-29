@@ -69,7 +69,7 @@ const FULLSCREEN_DIMS = new Set([
 // Content-pane and media refs remain here pending viewer-content.js extraction.
 
 // transformHostEl, mainImageEl, imgSpinnerEl — declared in viewer-media-image.js.
-var transitionCoverEl = document.getElementById('transition-cover');
+// transitionCoverEl — declared in viewer-media-playable.js.
 var infoOverlayEl     = document.getElementById('info-overlay');
 var infoContentEl     = document.getElementById('info-content');
 var noImageHintEl     = document.getElementById('no-image-hint');

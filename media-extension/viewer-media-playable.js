@@ -3,9 +3,10 @@
 //
 // Common audio+video playback infrastructure: media element refs, lifecycle
 // flags, event handlers, autoplay, seek, saved-position persistence, controls
-// HUD, transition cover, and stop/tear-down.
+// HUD, transition cover, stop/tear-down, and the PlayableContent base class.
 //
 // Declares these globals used by other modules:
+//   transitionCoverEl,
 //   videoEl, audioEl, audioPlaceholderEl, activeMediaEl,
 //   _pendingAutoFS, _pendingQueuePlay,
 //   _autoplay, _posCheckpointTimer,
@@ -15,18 +16,23 @@
 //   _startTransitionCover, _endTransitionCover,
 //   _stopActiveMedia, _mediaErrorMessage,
 //   toggleAutoplay, seekRelative,
-//   videoProgressEl, videoSeekFillEl, videoTimeEl, videoVolEl.
+//   videoProgressEl, videoSeekFillEl, videoTimeEl, videoVolEl,
+//   PlayableContent.
 //
 // Calls into globals defined in earlier / later modules:
 //   imagePaneEl, selectorStateBeforeFS, ui, applySelector, (viewer-ui.js)
-//   _hasAnnounced, _bcPost, _updateChannelWiring,          (viewer-audio.js)
+//   _hasAnnounced, _bcPost, _updateChannelWiring,
+//   loadAvSettings, playAndAnnounce,                       (viewer-audio.js)
 //   _qState, _vqLoad,                                      (viewer-queue-mgt.js)
-//   _panValue,                                             (media-shared.js)
+//   toProxyFile, _panValue,                                (media-shared.js)
+//   CancelledError,                                        (viewer-load-context.js)
+//   ErrorContent,                                          (viewer-media.js)
 //   content,                                               (viewer-content.js)
-//   transitionCoverEl, errorContentEl.                     (viewer.js)
+//   infoOverlayEl, updateInfoOverlay.                      (viewer.js)
 
-// ── HUD DOM refs ──────────────────────────────────────────────────────────────
+// ── DOM refs ──────────────────────────────────────────────────────────────────
 
+var transitionCoverEl   = document.getElementById('transition-cover');
 var videoProgressEl     = document.getElementById('video-progress');
 var videoSeekFillEl     = document.getElementById('video-seek-fill');
 var videoTimeEl         = document.getElementById('video-time');
@@ -271,3 +277,77 @@ videoEl.addEventListener('ended',          _onMediaEnded);
 audioEl.addEventListener('ended',          _onMediaEnded);
 videoEl.addEventListener('error',          _onMediaError);
 audioEl.addEventListener('error',          _onMediaError);
+
+// ── PlayableContent ───────────────────────────────────────────────────────────
+
+class PlayableContent extends ContentOccupant {
+  get mediaEl() { return this.element; }
+
+  prepMediaEl() {
+    const el = this.mediaEl;
+
+    // Wire the element.
+    activeMediaEl      = el;
+    el.src             = toProxyFile(this.fullPath);
+    el.loop            = false;
+  }
+
+  // now that our content has loaded, should we turn into something else?
+  mutate() {
+    return null;
+  }
+
+  get savedPosition() {
+    return _getSavedPosition(this.fullPath);
+  }
+
+  async load(pane, ctx) {
+    // Request the display element.  For same-element (media→media) transitions,
+    // surrender() shows the cover and stops the old media before returning.
+    await pane.request(this, ctx);
+
+    if (!infoOverlayEl.classList.contains('hidden')) updateInfoOverlay(this.filename);
+
+    // Wire src, activeMediaEl, loop — subclass overrides add filter reset etc.
+    this.prepMediaEl();
+
+    const el = this.mediaEl;
+
+    // Wait for the browser to have duration/dimensions — or error out.
+    try {
+      await ctx.waitFor(el, 'loadedmetadata', [el, 'error', () => new Error()]);
+    } catch (e) {
+      if (e instanceof CancelledError) throw e;
+      // Media error during load: redirect to ErrorContent so the user sees the
+      // message and can retry.  _onMediaError() skips its own display while
+      // content.future is set (i.e. now, before commitFuture clears it).
+      pane.redirect(new ErrorContent(this, _mediaErrorMessage(el, this.fullPath)), ctx);
+      return await pane.future.load(pane, ctx);
+    }
+
+    const mutated = this.mutate();
+    if (mutated) {
+      pane.redirect(mutated, ctx);
+      return await mutated.load(pane, ctx);
+    }
+    // Restore saved playback position.
+    var saved = this.savedPosition;
+    if (saved > 0 && isFinite(el.duration) && saved < el.duration) {
+      el.currentTime = saved;
+    }
+
+    loadAvSettings();
+
+    if (_autoplay || _pendingQueuePlay) {
+      _pendingQueuePlay = false;
+      playAndAnnounce(el);
+    }
+  }
+
+  async surrender(element) {
+    _startTransitionCover();
+    _stopActiveMedia(this.mediaEl);
+  }
+
+  cleanup() { _stopActiveMedia(this.mediaEl); }
+}
