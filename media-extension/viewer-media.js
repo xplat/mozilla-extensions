@@ -17,7 +17,7 @@
 //   imagePaneEl,                                         (viewer-ui.js)
 //   videoEl, audioEl, audioPlaceholderEl, activeMediaEl,
 //   _autoplay, _pendingQueuePlay,
-//   _startTransitionCover, _endTransitionCover,
+//   _startTransitionCover,
 //   _stopActiveMedia, _updateVideoControls,
 //   _getSavedPosition, _shouldAnnounce,
 //   _pendingAutoFS, _mediaErrorMessage,                  (viewer-media-playable.js)
@@ -30,7 +30,7 @@
 //   mediaType, FULLSCREEN_DIMS,
 //   _contentPath, _vContrast, _vBrightness, _vHue, _vSaturation,
 //   infoOverlayEl, updateInfoOverlay,                    (viewer.js)
-//   errorContentEl.                                      (viewer.js)
+//   errorContentEl, noImageHintEl.                       (viewer.js)
 
 // ── Base class ────────────────────────────────────────────────────────────────
 
@@ -40,41 +40,37 @@ class ContentOccupant {
     this._name    = null;  // set by each concrete subclass
   }
 
-  get name()     { return this._name; }
-  get filename() { return this.fullPath ? this.fullPath.replace(/.*\//, '') : null; }
+  get name()      { return this._name; }
+  get filename()  { return this.fullPath ? this.fullPath.replace(/.*\//, '') : null; }
 
   // Which DOM element does this occupant exclusively own?
   // ContentPane.request() compares elements to decide if surrender is needed.
-  get element() { return null; }
+  // commitFuture() toggles 'content-active' on this element.
+  // null means the occupant manages its own visibility.
+  get element()   { return null; }
 
-  // Which DOM element should be given the 'content-active' class when this
-  // occupant is committed?  May differ from element (e.g. audioPlaceholderEl
-  // rather than the invisible <audio> element).  null means nothing is shown
-  // via content-active (occupant manages its own visibility).
-  get displayEl() { return null; }
+  // Per-type CSS class to apply to imagePaneEl for HUD / controls visibility.
+  // null (default) means no class is needed.
+  get paneClass() { return null; }
 
   // Async: start loading content.  ctx is a LoadContext for event-waits;
   // if ctx.cancel() is called (load superseded), all awaited events reject
   // with CancelledError and load() should return silently.
-  // The spinner is started by ContentPane.load() before this is called.
+  // The spinner is started by ContentPane.load() before this is called;
+  // commitFuture() is called by ContentPane.load()'s .then() chain.
   async load(pane, ctx) {}
 
   // Async: give up this.element to an incoming occupant that requested it.
   // Called only when the new occupant needs the SAME element as this one.
   // Must resolve only when the element is unused and safe for the caller.
-  // Implementations using the transition cover should call _startTransitionCover()
-  // here; ImageContent uses visibility:hidden instead.
+  // Implementations using the transition cover call _startTransitionCover() here;
+  // ImageContent uses visibility:hidden instead.
   async surrender(element) {}
 
   // Sync: fast cleanup called at commitFuture() time when this occupant's
   // element was NOT surrendered (was already hidden under CSS classes).
   // Must be idempotent.
   cleanup() {}
-
-  // Sync: apply per-type imagePaneEl CSS class(es) for this occupant (e.g.
-  // 'media-video').  Called at commitFuture() after old occupant's cleanup().
-  // The content-active class on displayEl is managed by commitFuture() directly.
-  applyClass() {}
 
   // Return a pristine (unloaded) copy of this occupant, suitable for a reload
   // attempt.  Returns null if the occupant cannot be reloaded (e.g. EmptyContent).
@@ -86,12 +82,12 @@ class ContentOccupant {
 class ImageContent extends ContentOccupant {
   constructor(fullPath) {
     super(fullPath);
-    this._name        = 'image:' + fullPath;
-    this._surrendered = false;
+    this._name = 'image:' + fullPath;
   }
 
-  get element()   { return mainImageEl; }
-  get displayEl() { return transformHostEl; }
+  // transformHostEl serves as both the exclusive resource (compared in request())
+  // and the content-active display target.
+  get element()   { return transformHostEl; }
 
   async load(pane, ctx) {
     const proxyUrl = toProxyFile(this.fullPath);
@@ -108,12 +104,14 @@ class ImageContent extends ContentOccupant {
     } catch (e) {
       pending.src = '';
       if (_imgPendingLoad === pending) _imgPendingLoad = null;
-      if (!(e instanceof CancelledError)) pane.abortFuture(this);
+      // CancelledError falls through silently; other errors are re-thrown so
+      // ContentPane.load()'s backstop catch can handle them.
+      if (!(e instanceof CancelledError)) throw e;
       return;
     }
     if (_imgPendingLoad === pending) _imgPendingLoad = null;
 
-    // Phase 2: request the image element (shared with any other ImageContent).
+    // Phase 2: request the shared image element.
     // surrender() hides it with visibility:hidden, preserving the layout area.
     await pane.request(this, ctx);
 
@@ -125,7 +123,7 @@ class ImageContent extends ContentOccupant {
     } catch (e) {
       mainImageEl.style.visibility = '';
       mainImageEl.src = '';
-      if (!(e instanceof CancelledError)) pane.abortFuture(this);
+      if (!(e instanceof CancelledError)) throw e;
       return;
     }
 
@@ -135,28 +133,20 @@ class ImageContent extends ContentOccupant {
     _prevDisplayH = 0;
     applyImageTransform();
     mainImageEl.style.visibility = '';
-
-    pane.commitFuture(ctx);
-    // _endTransitionCover() is called by commitFuture().
+    // commitFuture() is called by ContentPane.load()'s .then() chain.
   }
 
   async surrender(element) {
-    this._surrendered = true;
     // Use visibility:hidden rather than the cover: preserves the layout area so
     // the incoming ImageContent can overwrite mainImageEl.src without a size flash.
     mainImageEl.style.visibility = 'hidden';
   }
 
   cleanup() {
-    if (this._surrendered) return;
     // Still showing — clear it so the incoming occupant starts from a clean slate.
     if (_imgPendingLoad) { _imgPendingLoad.src = ''; _imgPendingLoad = null; }
     mainImageEl.src = '';
     imagePaneEl.classList.remove('image-loaded');
-  }
-
-  applyClass() {
-    // image-loaded is set during load() before commitFuture; nothing extra here.
   }
 
   clone() { return new ImageContent(this.fullPath); }
@@ -171,15 +161,19 @@ class ImageContent extends ContentOccupant {
 class GifContent extends ContentOccupant {
   constructor(fullPath) {
     super(fullPath);
-    this._name = 'video:' + fullPath;
+    this._name    = 'video:' + fullPath;
   }
 
   get element()   { return videoEl; }
-  get displayEl() { return videoEl; }
+  get paneClass() { return 'media-gif'; }
 
-  // GifContent is never loaded directly: VideoContent starts the <video> load,
-  // then _loadPlayable() detects the gif and calls ContentPane.redirect().
-  async load(pane, ctx) {}
+  // GifContent is reached via redirect() from VideoContent._loadPlayable().
+  // _loadPlayable() has already set up videoEl; this load() just secures the
+  // element (guarded by ContentPane._surrendered for same-element transitions).
+  async load(pane, ctx) {
+    await pane.request(this, ctx);
+    // commitFuture() is called by ContentPane.load()'s .then() chain.
+  }
 
   async surrender(element) {
     _startTransitionCover();
@@ -187,8 +181,6 @@ class GifContent extends ContentOccupant {
   }
 
   cleanup() { _stopActiveMedia(); }
-
-  applyClass() { imagePaneEl.classList.add('media-gif'); }
 
   clone() { return new GifContent(this.fullPath); }
 }
@@ -210,14 +202,15 @@ class AudioContent extends PlayableContent {
     this._name = 'audio:' + fullPath;
   }
 
-  get element()   { return audioEl; }
-  get displayEl() { return audioPlaceholderEl; }
+  // audioPlaceholderEl serves as both the exclusive resource and the display
+  // target.  Using it (rather than the invisible audioEl) unifies displayEl and
+  // element into a single property.
+  get element()   { return audioPlaceholderEl; }
+  get paneClass() { return 'media-audio'; }
 
   async load(pane, ctx) {
     await _loadPlayable(this, audioEl, 'audio', pane, ctx);
   }
-
-  applyClass() { imagePaneEl.classList.add('media-audio'); }
 
   clone() { return new AudioContent(this.fullPath); }
 }
@@ -229,13 +222,11 @@ class VideoContent extends PlayableContent {
   }
 
   get element()   { return videoEl; }
-  get displayEl() { return videoEl; }
+  get paneClass() { return 'media-video'; }
 
   async load(pane, ctx) {
     await _loadPlayable(this, videoEl, 'video', pane, ctx);
   }
-
-  applyClass() { imagePaneEl.classList.add('media-video'); }
 
   clone() { return new VideoContent(this.fullPath); }
 }
@@ -255,7 +246,8 @@ class QueuedVideoContent extends VideoContent {
 // ── Empty ─────────────────────────────────────────────────────────────────────
 //
 // Singleton representing an unoccupied content pane.  content.current starts as
-// EMPTY_CONTENT; transitioning away from it needs no cover.
+// EMPTY_CONTENT.  noImageHintEl is its exclusive element, so the invariant that
+// exactly one element always has 'content-active' is maintained uniformly.
 
 class EmptyContent extends ContentOccupant {
   constructor() {
@@ -264,7 +256,16 @@ class EmptyContent extends ContentOccupant {
   }
 
   get filename() { return null; }
-  // No element, no displayEl: nothing is shown or surrendered.
+
+  // noImageHintEl is declared in viewer.js, evaluated lazily at call time.
+  get element()  { return noImageHintEl; }
+
+  async load(pane, ctx) {
+    // Secures noImageHintEl (no surrender ever needed since no other occupant
+    // uses it; the call provides a cancellation-check point).
+    await pane.request(this, ctx);
+    // commitFuture() is called by ContentPane.load()'s .then() chain.
+  }
 }
 
 const EMPTY_CONTENT = new EmptyContent();
@@ -272,9 +273,9 @@ const EMPTY_CONTENT = new EmptyContent();
 // ── Error ─────────────────────────────────────────────────────────────────────
 //
 // Wraps a failed occupant to display an error message with a retry button.
-// Use ContentPane.redirect(new ErrorContent(original, msg), ctx) from inside a
-// load() method to handle errors during loading, or content.load(new
-// ErrorContent(current, msg)) for errors during committed playback.
+// Use pane.redirect(new ErrorContent(original, msg), ctx) from inside a load()
+// method to handle errors during loading, or content.load(new ErrorContent(...))
+// for errors during committed playback.
 
 class ErrorContent extends ContentOccupant {
   constructor(wrappedOccupant, message) {
@@ -284,33 +285,41 @@ class ErrorContent extends ContentOccupant {
     this._name    = 'error:' + (wrappedOccupant ? wrappedOccupant.name : 'unknown');
   }
 
-  get displayEl() { return errorContentEl; }
+  // errorContentEl is declared in viewer.js, evaluated lazily at call time.
+  get element() { return errorContentEl; }
+
+  async surrender(element) {
+    // Clear the DOM so the incoming ErrorContent starts from a blank slate.
+    errorContentEl.innerHTML = '';
+  }
 
   async load(pane, ctx) {
-    // Populate the error display element before committing.
-    if (errorContentEl) {
-      var msgEl = document.createElement('p');
-      msgEl.className = 'error-content-msg';
-      msgEl.textContent = this._message;
-      errorContentEl.appendChild(msgEl);
+    // Secure errorContentEl, potentially surrendering an earlier ErrorContent.
+    await pane.request(this, ctx);
 
-      var retryTarget = this._wrapped ? this._wrapped.clone() : null;
-      if (retryTarget) {
-        var btn = document.createElement('button');
-        btn.className = 'error-content-retry';
-        btn.textContent = 'Try again';
-        btn.addEventListener('click', function() { content.load(retryTarget); });
-        errorContentEl.appendChild(btn);
-      }
+    // Clear any stale content left by a cancelled prior ErrorContent load.
+    errorContentEl.innerHTML = '';
+
+    // Populate the error display element before commitFuture() reveals it.
+    var msgEl = document.createElement('p');
+    msgEl.className = 'error-content-msg';
+    msgEl.textContent = this._message;
+    errorContentEl.appendChild(msgEl);
+
+    var retryTarget = this._wrapped ? this._wrapped.clone() : null;
+    if (retryTarget) {
+      var btn = document.createElement('button');
+      btn.className = 'error-content-retry';
+      btn.textContent = 'Try again';
+      btn.addEventListener('click', function() { content.load(retryTarget); });
+      errorContentEl.appendChild(btn);
     }
-
-    pane.commitFuture(ctx);
-    // _endTransitionCover() is called by commitFuture().
+    // commitFuture() is called by ContentPane.load()'s .then() chain.
   }
 
   cleanup() {
     // Clear dynamically-inserted message and retry button when replaced.
-    if (errorContentEl) errorContentEl.innerHTML = '';
+    errorContentEl.innerHTML = '';
   }
 
   // clone() returns the wrapped occupant's clone so a retry re-attempts the
@@ -321,14 +330,23 @@ class ErrorContent extends ContentOccupant {
 // ── Shared playable load implementation ───────────────────────────────────────
 //
 // Audio and Video share all loading logic; the only differences are which
-// element to use and which CSS class to apply.
+// element to use and which occupant type was created.
 
 async function _loadPlayable(occupant, el, type, pane, ctx) {
   const proxyUrl = toProxyFile(occupant.fullPath);
 
-  // Request the media element.  If current also uses this element (media→media),
+  // Request the display element.  For same-element (media→media) transitions,
   // surrender() shows the cover and stops the old media before returning.
   await pane.request(occupant, ctx);
+
+  // For cross-element transitions (e.g. audio→video), surrender() was not
+  // called, so we must explicitly stop any still-playing media before taking
+  // over activeMediaEl.  Setting pane._surrendered prevents commitFuture from
+  // calling cleanup() a second time (which would stop the new element).
+  if (activeMediaEl) {
+    pane._surrendered = true;
+    _stopActiveMedia();
+  }
 
   // Wire the element.
   activeMediaEl      = el;
@@ -359,46 +377,48 @@ async function _loadPlayable(occupant, el, type, pane, ctx) {
       // message and can retry.  _onMediaError() skips its own display while
       // content.future is set (i.e. now, before commitFuture clears it).
       pane.redirect(new ErrorContent(occupant, _mediaErrorMessage()), ctx);
-      pane.commitFuture(ctx);
+      await pane.future.load(pane, ctx);
     }
     return;
   }
 
-  // Gif-loop detection: short video, no audio → loop silently.
-  var isGif = false;
+  // Gif-loop detection: short video, no audio → redirect and hand off.
   if (el === videoEl && isFinite(el.duration) && el.duration < 60 && !el.mozHasAudio) {
-    isGif = true;
     el.loop  = true;
     el.muted = true;
     pane.redirect(new GifContent(occupant.fullPath), ctx);
+    // Hand off to GifContent.load() which secures the element (guarded by
+    // _surrendered) and returns, allowing commitFuture() to run via .then().
+    await pane.future.load(pane, ctx);
+
+    // Gif-specific post-setup: no saved position, no announce, no auto-FS.
+    // Gifs always play (looping, silent; they behave like static images).
+    _shouldAnnounce   = false;
+    _pendingAutoFS    = false;
+    _pendingQueuePlay = false;
+    _updateVideoControls();
+    el.play().catch(function() {});
+    return;
   }
 
-  // Restore saved playback position (skipped for gif-loops: no temporal state).
-  var saved = 0;
-  if (!isGif) {
-    saved = content.isQueueContent ? (_qState.video.time || 0)
-                                   : _getSavedPosition(occupant.fullPath);
-    if (saved > 0 && isFinite(el.duration) && saved < el.duration) {
-      el.currentTime = saved;
-    }
+  // Restore saved playback position.
+  var saved = content.isQueueContent ? (_qState.video.time || 0)
+                                     : _getSavedPosition(occupant.fullPath);
+  if (saved > 0 && isFinite(el.duration) && saved < el.duration) {
+    el.currentTime = saved;
   }
 
-  var hasAudio = el === audioEl ||
-                 (el === videoEl && el.mozHasAudio && !isGif);
+  var hasAudio = el === audioEl || (el === videoEl && el.mozHasAudio);
   _shouldAnnounce = hasAudio;
 
-  _pendingAutoFS = (el === videoEl && !isGif &&
+  _pendingAutoFS = (el === videoEl &&
       !document.fullscreenElement && !(saved > 0) &&
       FULLSCREEN_DIMS.has(el.videoWidth + 'x' + el.videoHeight));
 
   _updateVideoControls();
+  // commitFuture() is called by ContentPane.load()'s .then() chain.
 
-  // Commit: if deferred (image→media), this atomically hides the image and
-  // shows the media; if immediate, media was already prepared under the cover.
-  pane.commitFuture(ctx);
-  // _endTransitionCover() is called by commitFuture().
-
-  if (_autoplay || isGif || _pendingQueuePlay) {
+  if (_autoplay || _pendingQueuePlay) {
     _pendingQueuePlay = false;
     el.play().catch(function() {});
   }

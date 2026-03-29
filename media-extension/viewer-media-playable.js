@@ -267,12 +267,10 @@ function _mediaErrorMessage() {
 function _onMediaError() {
   // Guard: if src was cleared during navigation activeMediaEl is already null.
   if (!activeMediaEl || !_contentPath) return;
+  // Guard: error during an active load — the load's own catch will redirect to
+  // ErrorContent with the same message; nothing to do here.
+  if (content.future) return;
   var msg = _mediaErrorMessage();
-  if (content.future) {
-    // Error during an active load: the load's catch block will redirect to
-    // ErrorContent using the same message.  Nothing to do here.
-    return;
-  }
   // Error during committed playback (e.g. stream interrupted): load ErrorContent.
   content.load(new ErrorContent(content.current, msg));
 }

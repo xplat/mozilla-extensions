@@ -437,28 +437,24 @@ html, body {
   transition: none;  /* snap opaque instantly */
 }
 
-/* No-image hint */
+/* No-image hint — hidden by default; shown only when EmptyContent is committed
+   (i.e. noImageHintEl has the content-active class). */
 #no-image-hint {
   position: absolute;
   inset: 0;
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
   pointer-events: none;
   z-index: 2;
 }
 
+#no-image-hint.content-active { display: flex; }
+
 #no-image-hint span {
   font-family: monospace;
   font-size: 12px;
   color: var(--text-muted);
-}
-
-/* Hide hint when content is active or currently loading */
-#image-pane.image-loaded #no-image-hint,
-#img-spinner:not(.hidden) ~ #no-image-hint,
-.content-active ~ #no-image-hint {
-  display: none;
 }
 
 /* ── THUMBNAIL MODE ─────────────────────────────────────────────────────── */
