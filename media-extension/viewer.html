@@ -100,10 +100,10 @@
           <div class="spinner-ring"></div>
         </div>
 
-        <!-- Media error message (format unsupported, etc.) -->
-        <div id="media-error" class="hidden">
-          <p id="media-error-msg"></p>
-        </div>
+        <!-- Error-content display: shown by ErrorContent occupant via content-active.
+             Inner content (message + retry button) is created/destroyed by
+             ErrorContent.load() / cleanup() respectively. -->
+        <div id="error-content"></div>
 
         <!-- Info overlay -->
         <div id="info-overlay" class="hidden">

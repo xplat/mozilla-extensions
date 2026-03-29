@@ -83,6 +83,7 @@ var transitionCoverEl = document.getElementById('transition-cover');
 var infoOverlayEl     = document.getElementById('info-overlay');
 var infoContentEl     = document.getElementById('info-content');
 var noImageHintEl     = document.getElementById('no-image-hint');
+var errorContentEl    = document.getElementById('error-content');
 
 // ── Proxy URL helpers ──────────────────────────────────────────────────────
 // toProxyFile() is defined in media-shared.js.
@@ -362,9 +363,6 @@ function fmtDate(unixSecs, full) {
 // _shouldAnnounce, _pendingAutoFS, _pendingQueuePlay — viewer-media-playable.js.
 // _hasAnnounced — viewer-audio.js.
 // _autoplay, _posCheckpointTimer — viewer-media-playable.js.
-
-var mediaErrorEl    = document.getElementById('media-error');
-var mediaErrorMsgEl = document.getElementById('media-error-msg');
 
 // Video color/quality filter state (reset on each new file; applied via CSS filter on videoEl)
 var _vContrast   = 1.0;  // CSS contrast()   — mplayer keys 1/2

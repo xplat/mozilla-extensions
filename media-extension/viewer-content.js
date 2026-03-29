@@ -13,24 +13,25 @@
 // Calls into globals defined in earlier / later modules:
 //   CancelledError, LoadContext,                         (viewer-load-context.js)
 //   ImageContent, GifContent, PlayableContent,
-//   VideoContent, QueuedVideoContent,                    (viewer-media.js)
+//   VideoContent, QueuedVideoContent,
+//   EmptyContent, EMPTY_CONTENT, ErrorContent,           (viewer-media.js)
 //   imagePaneEl,                                         (viewer-ui.js)
-//   mainImageEl,                                         (viewer-media-image.js)
+//   mainImageEl, imgSpinnerEl,                           (viewer-media-image.js)
 //   _startTransitionCover, _endTransitionCover,
 //   _stopActiveMedia.                                    (viewer-media-playable.js)
 
 class ContentPane {
   constructor() {
-    this.current    = null;  // committed occupant (currently displayed)
-    this.future     = null;  // occupant being loaded, or null
-    this._futureCtx = null;  // LoadContext for the current future, or null
+    this.current    = EMPTY_CONTENT;  // committed occupant (currently displayed)
+    this.future     = null;           // occupant being loaded, or null
+    this._futureCtx = null;           // LoadContext for the current future, or null
   }
 
   // ── State queries ───────────────────────────────────────────────────────────
 
   get fullPath() {
     var active = this.future || this.current;
-    return active ? active.fullPath : null;
+    return (active && !(active instanceof EmptyContent)) ? active.fullPath : null;
   }
 
   get isQueueContent() {
@@ -45,7 +46,7 @@ class ContentPane {
   load(occupant) {
     if (!occupant) { this._clearToEmpty(); return true; }
 
-    if (this.current &&
+    if (!(this.current instanceof EmptyContent) &&
         this.current.name === occupant.name &&
         !this.future) {
       return false;  // already loaded, nothing to do
@@ -62,6 +63,9 @@ class ContentPane {
     this._futureCtx = ctx;
     this.future     = occupant;
     this._syncLegacyGlobals();
+
+    // Spinner on: stopped by commitFuture() on success or abortFuture() on failure.
+    imgSpinnerEl.classList.remove('hidden');
 
     occupant.load(this, ctx).catch(function(e) {
       if (e instanceof CancelledError) return;
@@ -89,48 +93,69 @@ class ContentPane {
   // ── Commit ──────────────────────────────────────────────────────────────────
 
   // Called by occupant.load() once loading has completed successfully.
-  // Shows the transition cover if needed, cleans up the old occupant, applies
-  // the new CSS class, and makes this occupant current.
-  // _endTransitionCover() must be called by the caller immediately after.
-  commitFuture(occupant) {
-    if (occupant !== this.future) return;
+  // Stops the spinner, starts the transition cover if needed, cleans up the old
+  // occupant, applies the new CSS class, and makes this occupant current.
+  // Calls _endTransitionCover() internally so callers need not do so.
+  commitFuture(ctx) {
+    if (ctx !== this._futureCtx) return;
+    const occupant = this.future;
+    const prev     = this.current;
 
-    const prev = this.current;
+    imgSpinnerEl.classList.add('hidden');
 
-    // Show transition cover when switching away from a visible occupant, except
-    // for image→image (which uses the visibility:hidden seamless-swap technique).
-    const needCover = prev !== null &&
+    // Show transition cover when switching away from a visible non-empty
+    // occupant, except for image→image (which uses visibility:hidden).
+    // surrender() already started it for same-element transitions; this handles
+    // the deferred cross-element case (e.g. image→media).
+    const needCover = !(prev instanceof EmptyContent) &&
       !(prev instanceof ImageContent && occupant instanceof ImageContent);
-    if (needCover) _startTransitionCover();
+    if (needCover) _startTransitionCover();  // idempotent if already covering
 
     // Clean up old occupant.  cleanup() is a no-op for surrendered occupants.
     if (prev) prev.cleanup();
 
-    // Apply CSS class for the new occupant (e.g. 'media-video').
-    // ImageContent.applyClass() is a no-op (image-loaded was set in load()).
+    // Manage the content-active class on display elements.
+    // Avoid a remove+add flash when the same displayEl is reused (same-type swap).
+    if (prev && prev.displayEl && prev.displayEl !== occupant.displayEl) {
+      prev.displayEl.classList.remove('content-active');
+    }
+    if (occupant.displayEl) {
+      occupant.displayEl.classList.add('content-active');
+    }
+
+    // Apply per-type imagePaneEl class for HUD / controls visibility.
     occupant.applyClass();
 
     this.current    = occupant;
     this.future     = null;
     this._futureCtx = null;
     this._syncLegacyGlobals();
+
+    _endTransitionCover();
   }
+
+  // ── Abort ───────────────────────────────────────────────────────────────────
 
   // Drop the future without committing (load error or cancelled).
   abortFuture(occupant) {
     if (occupant !== this.future) return;
+    imgSpinnerEl.classList.add('hidden');
     this.future     = null;
     this._futureCtx = null;
     this._syncLegacyGlobals();
   }
 
-  // ── Gif redirect ────────────────────────────────────────────────────────────
+  // ── Redirect ────────────────────────────────────────────────────────────────
 
-  redirect(gifOccupant) {
-    if (this.future instanceof VideoContent) {
-      this.future = gifOccupant;
-      // fullPath and isQueueContent are unchanged; _syncLegacyGlobals not needed.
-    }
+  // Swap the future occupant mid-load without cancelling the load.  The context
+  // is passed for validation; a stale ctx is silently ignored.  More permissive
+  // than checking the outgoing occupant's type — any in-progress future can be
+  // redirected as long as the ctx matches.
+  redirect(newOccupant, ctx) {
+    if (ctx !== this._futureCtx) return;
+    this.future = newOccupant;
+    // fullPath and isQueueContent are typically unchanged by gif redirects;
+    // _syncLegacyGlobals is not needed in the common case but is harmless.
   }
 
   // ── Legacy global sync ──────────────────────────────────────────────────────
@@ -144,13 +169,17 @@ class ContentPane {
 
   _clearToEmpty() {
     if (this._futureCtx) { this._futureCtx.cancel(); this._futureCtx = null; }
+    imgSpinnerEl.classList.add('hidden');
     this.future = null;
-    _startTransitionCover();
-    if (this.current) { this.current.cleanup(); this.current = null; }
-    mainImageEl.src = '';
-    imagePaneEl.classList.remove('image-loaded');
+    const prev = this.current;
+    if (prev && !(prev instanceof EmptyContent)) {
+      if (prev.displayEl) prev.displayEl.classList.remove('content-active');
+      prev.cleanup();
+    }
+    this.current    = EMPTY_CONTENT;
     _contentPath    = null;
     _isQueueContent = false;
+    _startTransitionCover();
     _endTransitionCover();
   }
 }

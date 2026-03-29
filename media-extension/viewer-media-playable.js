@@ -6,14 +6,14 @@
 // HUD, transition cover, and stop/tear-down.
 //
 // Declares these globals used by other modules:
-//   videoEl, audioEl, activeMediaEl,
+//   videoEl, audioEl, audioPlaceholderEl, activeMediaEl,
 //   _shouldAnnounce, _pendingAutoFS, _pendingQueuePlay,
 //   _autoplay, _posCheckpointTimer,
 //   _clearPosCheckpoint,
 //   _posKey, _savePosition, _getSavedPosition, _clearSavedPosition,
 //   fmtTime, _updateVideoControls,
 //   _startTransitionCover, _endTransitionCover,
-//   _stopActiveMedia,
+//   _stopActiveMedia, _mediaErrorMessage,
 //   toggleAutoplay, seekRelative,
 //   videoProgressEl, videoSeekFillEl, videoTimeEl, videoVolEl.
 //
@@ -24,15 +24,15 @@
 //   _panValue,                                             (media-shared.js)
 //   content,                                               (viewer-content.js)
 //   _contentPath,                                          (viewer.js)
-//   transitionCoverEl,                                     (viewer.js)
-//   mediaErrorEl, mediaErrorMsgEl.                         (viewer.js)
+//   transitionCoverEl, errorContentEl.                     (viewer.js)
 
 // ── HUD DOM refs ──────────────────────────────────────────────────────────────
 
-var videoProgressEl = document.getElementById('video-progress');
-var videoSeekFillEl = document.getElementById('video-seek-fill');
-var videoTimeEl     = document.getElementById('video-time');
-var videoVolEl      = document.getElementById('video-vol');
+var videoProgressEl     = document.getElementById('video-progress');
+var videoSeekFillEl     = document.getElementById('video-seek-fill');
+var videoTimeEl         = document.getElementById('video-time');
+var videoVolEl          = document.getElementById('video-vol');
+var audioPlaceholderEl  = document.getElementById('audio-placeholder');
 
 // ── Autoplay flag and position-checkpoint timer ───────────────────────────────
 
@@ -117,9 +117,12 @@ if (videoProgressEl) {
 
 // ── Transition cover ──────────────────────────────────────────────────────────
 //
-// Used for image↔media mode switches.  Snaps opaque (transition:none) to hide
-// any intermediate layout state, then fades out (0.15s) when new content is
-// ready.  Calling _endTransitionCover() when no cover was started is harmless.
+// Used for content transitions.  Snaps opaque (transition:none) to hide any
+// intermediate layout state, then fades out (0.15s) when new content is ready.
+// Callers may write DOM into transitionCoverEl before calling _startTransitionCover()
+// (e.g. a screenshot of the outgoing content); innerHTML is cleared automatically
+// when the fade ends so covers remain composable.
+// Calling _endTransitionCover() when no cover was started is harmless.
 
 function _startTransitionCover() {
   transitionCoverEl.classList.add('covering');
@@ -133,6 +136,14 @@ function _endTransitionCover() {
   });
 }
 
+// Clear any content written into the cover (e.g. screenshot overlays) once the
+// fade has completed so it doesn't linger invisibly and affect layout.
+transitionCoverEl.addEventListener('transitionend', function() {
+  if (!transitionCoverEl.classList.contains('covering')) {
+    transitionCoverEl.innerHTML = '';
+  }
+});
+
 // ── Stop / tear-down ──────────────────────────────────────────────────────────
 
 function _stopActiveMedia() {
@@ -144,7 +155,6 @@ function _stopActiveMedia() {
     _hasAnnounced = false;
     _bcPost('media-viewer', { cmd: 'media-stopped' });
   }
-  if (mediaErrorEl) mediaErrorEl.classList.add('hidden');
   if (!activeMediaEl) return;
   activeMediaEl.pause();
   activeMediaEl.src = '';
@@ -238,24 +248,33 @@ function _onMediaPlaying() {
   _updateChannelWiring();  // now playing
 }
 
+// Build a human-readable message from the current activeMediaEl error.
+function _mediaErrorMessage() {
+  if (!activeMediaEl || !_contentPath) return 'Error loading media.';
+  var ext  = _contentPath.slice(_contentPath.lastIndexOf('.') + 1).toLowerCase();
+  var code = activeMediaEl.error ? activeMediaEl.error.code : 0;
+  if (ext === 'mkv' && code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+    return 'MKV playback is not supported in this version of Firefox.\n' +
+           'Try enabling media.mkv.enabled in about:config, or upgrade to a newer Firefox.';
+  }
+  if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
+      code === MediaError.MEDIA_ERR_DECODE) {
+    return 'This file format is not supported by your browser (' + ext.toUpperCase() + ').';
+  }
+  return 'Error loading media.';
+}
+
 function _onMediaError() {
-  imgSpinnerEl.classList.add('hidden');
   // Guard: if src was cleared during navigation activeMediaEl is already null.
   if (!activeMediaEl || !_contentPath) return;
-  var ext = _contentPath.slice(_contentPath.lastIndexOf('.') + 1).toLowerCase();
-  var code = activeMediaEl.error ? activeMediaEl.error.code : 0;
-  var msg;
-  if (ext === 'mkv' && code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
-    msg = 'MKV playback is not supported in this version of Firefox.\n' +
-          'Try enabling media.mkv.enabled in about:config, or upgrade to a newer Firefox.';
-  } else if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
-             code === MediaError.MEDIA_ERR_DECODE) {
-    msg = 'This file format is not supported by your browser (' + ext.toUpperCase() + ').';
-  } else {
-    msg = 'Error loading media.';
+  var msg = _mediaErrorMessage();
+  if (content.future) {
+    // Error during an active load: the load's catch block will redirect to
+    // ErrorContent using the same message.  Nothing to do here.
+    return;
   }
-  if (mediaErrorMsgEl) mediaErrorMsgEl.textContent = msg;
-  if (mediaErrorEl)    mediaErrorEl.classList.remove('hidden');
+  // Error during committed playback (e.g. stream interrupted): load ErrorContent.
+  content.load(new ErrorContent(content.current, msg));
 }
 
 videoEl.addEventListener('playing',        _onMediaPlaying);

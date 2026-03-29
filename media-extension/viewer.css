@@ -360,7 +360,10 @@ html, body {
 #transform-host {
   position: relative;
   flex-shrink: 0;
+  display: none;  /* shown by .content-active below */
 }
+
+#transform-host.content-active { display: block; }
 
 /* In scroll mode, margin:auto centers transform-host when smaller than the
    viewport, and collapses to 0 when larger (so scroll starts at the edge). */
@@ -451,9 +454,10 @@ html, body {
   color: var(--text-muted);
 }
 
-/* Hide hint when an image is loaded or currently loading */
+/* Hide hint when content is active or currently loading */
 #image-pane.image-loaded #no-image-hint,
-#img-spinner:not(.hidden) ~ #no-image-hint {
+#img-spinner:not(.hidden) ~ #no-image-hint,
+.content-active ~ #no-image-hint {
   display: none;
 }
 
@@ -640,32 +644,50 @@ html, body {
   letter-spacing: 0.02em;
 }
 
+/* ── CONTENT-ACTIVE: visibility for each content display element ─────────── */
+/*
+ * Each content occupant has a displayEl.  commitFuture() adds content-active
+ * to it; cleanup() / commitFuture() removes it from the old occupant.
+ * transform-host is hidden by default (see above); video/audio/error elements
+ * already have display:none.
+ */
+#main-video.content-active          { display: block; }
+#audio-placeholder.content-active   { display: flex; }
+#error-content.content-active       { display: flex; }
+
 /* ── MEDIA MODE CLASSES ──────────────────────────────────────────────────── */
+/*
+ * Per-type classes on #image-pane for HUD / controls visibility.
+ * No longer responsible for showing/hiding content elements (that is now done
+ * by content-active above); only used for video-controls and no-image-hint.
+ */
 
 /* — video mode — */
-#image-pane.media-video #main-video   { display: block; }
-#image-pane.media-video #transform-host { display: none; }
 #image-pane.media-video #video-controls { display: flex; }
 #image-pane.media-video #no-image-hint  { display: none; }
 
 /* — audio mode — */
-#image-pane.media-audio #audio-placeholder { display: flex; }
-#image-pane.media-audio #transform-host    { display: none; }
 #image-pane.media-audio #video-controls    { display: flex; }
 #image-pane.media-audio #no-image-hint     { display: none; }
 /* Progress bar always visible for audio (no hover required) */
 #image-pane.media-audio #video-controls    { opacity: 1; pointer-events: auto; }
 
-/* — media error overlay — */
-#media-error {
+/* — gif-loop mode (short silent video played inline, no controls) — */
+#image-pane.media-gif #no-image-hint  { display: none; }
+
+/* — error content display — */
+#error-content {
   position: absolute;
   inset: 0;
-  display: flex;
+  display: none;  /* shown by .content-active */
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  pointer-events: none;
+  gap: 0.75rem;
+  pointer-events: auto;
 }
-#media-error p {
+
+.error-content-msg {
   color: var(--text-dim);
   text-align: center;
   max-width: 30em;
@@ -673,12 +695,22 @@ html, body {
   padding: 0.75rem 1.25rem;
   background: rgba(0,0,0,0.55);
   border-radius: 4px;
+  white-space: pre-wrap;
 }
 
-/* — gif-loop mode (short silent video played inline, no controls) — */
-#image-pane.media-gif #main-video    { display: block; }
-#image-pane.media-gif #transform-host { display: none; }
-#image-pane.media-gif #no-image-hint  { display: none; }
+.error-content-retry {
+  padding: 0.4rem 1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.error-content-retry:hover {
+  background: var(--surface-3);
+}
 
 /* Show controls on hover or when pinned visible by JS */
 #image-pane.media-video:hover #video-controls,
