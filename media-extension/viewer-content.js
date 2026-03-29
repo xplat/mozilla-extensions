@@ -67,7 +67,7 @@ class ContentPane {
     imgSpinnerEl.classList.remove('hidden');
 
     if (occupant.filename) {
-      document.title = this.filename + ' — Media Viewer';
+      document.title = occupant.filename + ' — Media Viewer';
     } else {
       selector.updateDirPath();
     }

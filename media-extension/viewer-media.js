@@ -204,7 +204,7 @@ class PlayableContent extends ContentOccupant {
 
     // Wire the element.
     activeMediaEl      = el;
-    el.src = proxyUrl;
+    el.src             = toProxyFile(this.fullPath);
     el.loop            = false;
   }
 
@@ -218,13 +218,14 @@ class PlayableContent extends ContentOccupant {
   }
 
   async load(pane, ctx) {
-    const proxyUrl = toProxyFile(this.fullPath);
-
     // Request the display element.  For same-element (media→media) transitions,
     // surrender() shows the cover and stops the old media before returning.
     await pane.request(this, ctx);
 
     if (!infoOverlayEl.classList.contains('hidden')) updateInfoOverlay(this.filename);
+
+    // Wire src, activeMediaEl, loop — subclass overrides add filter reset etc.
+    this.prepMediaEl();
 
     const el = this.mediaEl;
 
@@ -242,7 +243,7 @@ class PlayableContent extends ContentOccupant {
 
     const mutated = this.mutate();
     if (mutated) {
-      pane.redirect(mutated);
+      pane.redirect(mutated, ctx);
       return await mutated.load(pane, ctx);
     }
     // Restore saved playback position.
@@ -251,7 +252,7 @@ class PlayableContent extends ContentOccupant {
       el.currentTime = saved;
     }
 
-    var hasAudio = el.audioTracks and length(el.audioTracks);
+    var hasAudio = el.audioTracks && el.audioTracks.length;
     _shouldAnnounce = hasAudio;
 
     loadAvSettings();
@@ -293,7 +294,7 @@ class VideoContent extends PlayableContent {
   get paneClass() { return 'media-video'; }
 
   prepMediaEl() {
-    super();
+    super.prepMediaEl();
     const el = this.mediaEl;
 
     if (el === videoEl) {
@@ -314,8 +315,8 @@ class VideoContent extends PlayableContent {
     }
   }
 
-  async load(pane, ctx):
-    await super(pane, ctx);
+  async load(pane, ctx) {
+    await super.load(pane, ctx);
     const el = this.mediaEl;
     _pendingAutoFS = !document.fullscreenElement &&
         FULLSCREEN_DIMS.has(el.videoWidth + 'x' + el.videoHeight);
