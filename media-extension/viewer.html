@@ -115,8 +115,9 @@
              the spinner so loading state remains visible. -->
         <div id="transition-cover"></div>
 
-        <!-- Empty-pane hint when nothing is selected -->
-        <div id="no-image-hint">
+        <!-- Empty-pane hint: content-active boots the invariant that exactly
+             one element is always marked active. -->
+        <div id="no-image-hint" class="content-active">
           <span>Select a file · Enter or double-click</span>
         </div>
       </div>

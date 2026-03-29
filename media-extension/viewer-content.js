@@ -44,23 +44,18 @@ class ContentPane {
   // The actual loading runs asynchronously; this method returns immediately
   // after starting it so the caller can proceed (e.g. set focus).
   load(occupant) {
-    // Normalise falsy → EMPTY_CONTENT.
-    if (!occupant || occupant.name === 'empty') {
-      if (this.current.name === 'empty' && !this.future) return false;
-      occupant = EMPTY_CONTENT;
-    }
-
     if (this.current.name === occupant.name && !this.future) {
       return false;  // already loaded, nothing to do
     }
 
-    // Cancel any in-progress load.
+    // Cancel any in-progress load.  _surrendered is NOT reset here: if the
+    // outgoing current already surrendered its element, that state stands and
+    // guards against calling surrender again on the next request().
     if (this._futureCtx) {
       this._futureCtx.cancel();
       this._futureCtx = null;
     }
-    this.future       = null;
-    this._surrendered = false;
+    this.future = null;
 
     const ctx = new LoadContext();
     this._futureCtx = ctx;
@@ -89,10 +84,7 @@ class ContentPane {
   // After this resolves, the element is unused.
   // Double-surrender is guarded by the central _surrendered flag.
   async request(occupant, ctx) {
-    if (!this._surrendered &&
-        this.current &&
-        this.current.element !== null &&
-        this.current.element === occupant.element) {
+    if (!this._surrendered && this.current.element === occupant.element) {
       this._surrendered = true;
       await this.current.surrender(occupant.element);
     }

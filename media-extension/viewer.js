@@ -85,11 +85,6 @@ var infoContentEl     = document.getElementById('info-content');
 var noImageHintEl     = document.getElementById('no-image-hint');
 var errorContentEl    = document.getElementById('error-content');
 
-// Bootstrap: EMPTY_CONTENT is already committed in content.current (set in
-// viewer-content.js), but noImageHintEl was not yet declared at that point.
-// Add content-active now so the invariant holds from the first rendered frame.
-noImageHintEl.classList.add('content-active');
-
 // ── Proxy URL helpers ──────────────────────────────────────────────────────
 // toProxyFile() is defined in media-shared.js.
 

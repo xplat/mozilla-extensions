@@ -104,10 +104,7 @@ class ImageContent extends ContentOccupant {
     } catch (e) {
       pending.src = '';
       if (_imgPendingLoad === pending) _imgPendingLoad = null;
-      // CancelledError falls through silently; other errors are re-thrown so
-      // ContentPane.load()'s backstop catch can handle them.
-      if (!(e instanceof CancelledError)) throw e;
-      return;
+      throw e;  // CancelledError → swallowed by ContentPane; other → backstop
     }
     if (_imgPendingLoad === pending) _imgPendingLoad = null;
 
@@ -123,8 +120,7 @@ class ImageContent extends ContentOccupant {
     } catch (e) {
       mainImageEl.style.visibility = '';
       mainImageEl.src = '';
-      if (!(e instanceof CancelledError)) throw e;
-      return;
+      throw e;
     }
 
     // Image decoded: set up transform before revealing.
@@ -167,11 +163,17 @@ class GifContent extends ContentOccupant {
   get element()   { return videoEl; }
   get paneClass() { return 'media-gif'; }
 
-  // GifContent is reached via redirect() from VideoContent._loadPlayable().
-  // _loadPlayable() has already set up videoEl; this load() just secures the
-  // element (guarded by ContentPane._surrendered for same-element transitions).
+  // GifContent is reached via redirect() from VideoContent._loadPlayable(), which
+  // has already set el.loop/muted and el.src.  This load() secures the element
+  // (guarded against double-surrender by ContentPane._surrendered), sets up the
+  // gif-specific playback state, and starts playback.
   async load(pane, ctx) {
     await pane.request(this, ctx);
+    _shouldAnnounce   = false;
+    _pendingAutoFS    = false;
+    _pendingQueuePlay = false;
+    _updateVideoControls();
+    videoEl.play().catch(function() {});
     // commitFuture() is called by ContentPane.load()'s .then() chain.
   }
 
@@ -372,32 +374,22 @@ async function _loadPlayable(occupant, el, type, pane, ctx) {
   try {
     await ctx.waitFor(el, 'loadedmetadata', [el, 'error', Error]);
   } catch (e) {
-    if (!(e instanceof CancelledError)) {
-      // Media error during load: redirect to ErrorContent so the user sees the
-      // message and can retry.  _onMediaError() skips its own display while
-      // content.future is set (i.e. now, before commitFuture clears it).
-      pane.redirect(new ErrorContent(occupant, _mediaErrorMessage()), ctx);
-      await pane.future.load(pane, ctx);
-    }
+    if (e instanceof CancelledError) throw e;
+    // Media error during load: redirect to ErrorContent so the user sees the
+    // message and can retry.  _onMediaError() skips its own display while
+    // content.future is set (i.e. now, before commitFuture clears it).
+    pane.redirect(new ErrorContent(occupant, _mediaErrorMessage()), ctx);
+    await pane.future.load(pane, ctx);
     return;
   }
 
   // Gif-loop detection: short video, no audio → redirect and hand off.
+  // GifContent.load() handles the gif-specific playback setup.
   if (el === videoEl && isFinite(el.duration) && el.duration < 60 && !el.mozHasAudio) {
     el.loop  = true;
     el.muted = true;
     pane.redirect(new GifContent(occupant.fullPath), ctx);
-    // Hand off to GifContent.load() which secures the element (guarded by
-    // _surrendered) and returns, allowing commitFuture() to run via .then().
     await pane.future.load(pane, ctx);
-
-    // Gif-specific post-setup: no saved position, no announce, no auto-FS.
-    // Gifs always play (looping, silent; they behave like static images).
-    _shouldAnnounce   = false;
-    _pendingAutoFS    = false;
-    _pendingQueuePlay = false;
-    _updateVideoControls();
-    el.play().catch(function() {});
     return;
   }
 
