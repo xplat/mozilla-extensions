@@ -19,13 +19,12 @@
 //   _autoplay, _pendingQueuePlay,
 //   _startTransitionCover,
 //   _stopActiveMedia, _updateVideoControls,
-//   _getSavedPosition, _shouldAnnounce,
-//   _pendingAutoFS, _mediaErrorMessage,                  (viewer-media-playable.js)
+//   _getSavedPosition, _pendingAutoFS, _mediaErrorMessage, (viewer-media-playable.js)
 //   _imgPendingLoad, mainImageEl, imgSpinnerEl,
 //   transformHostEl, _prevDisplayW, _prevDisplayH,
 //   applyImageTransform,                                 (viewer-media-image.js)
 //   _qState,                                             (viewer-queue-mgt.js)
-//   _bcPost, _updateChannelWiring, _hasAnnounced,        (viewer-audio.js)
+//   playAndAnnounce,                                     (viewer-audio.js)
 //   toProxyFile,                                         (media-shared.js)
 //   mediaType, FULLSCREEN_DIMS,
 //   _contentPath, _vContrast, _vBrightness, _vHue, _vSaturation,
@@ -177,7 +176,6 @@ class GifContent extends ImagelikeContent {
     videoEl.loop  = true;
     videoEl.muted = true;
     await pane.request(this, ctx);
-    _shouldAnnounce   = false;
     _pendingAutoFS    = false;
     _pendingQueuePlay = false;
     videoEl.play().catch(function() {});
@@ -252,14 +250,11 @@ class PlayableContent extends ContentOccupant {
       el.currentTime = saved;
     }
 
-    var hasAudio = el.audioTracks && el.audioTracks.length;
-    _shouldAnnounce = hasAudio;
-
     loadAvSettings();
 
     if (_autoplay || _pendingQueuePlay) {
       _pendingQueuePlay = false;
-      el.play().catch(function() {});
+      playAndAnnounce(el);
     }
   }
 

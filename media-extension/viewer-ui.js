@@ -253,9 +253,9 @@ document.addEventListener('mouseup', function() {
     if (activeMediaEl) {
       if (activeMediaEl.ended) {
         activeMediaEl.currentTime = 0;
-        activeMediaEl.play().catch(function() {});
+        playAndAnnounce(activeMediaEl);
       } else if (activeMediaEl.paused) {
-        activeMediaEl.play().catch(function() {});
+        playAndAnnounce(activeMediaEl);
       } else {
         activeMediaEl.pause();
       }

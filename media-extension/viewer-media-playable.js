@@ -7,7 +7,7 @@
 //
 // Declares these globals used by other modules:
 //   videoEl, audioEl, audioPlaceholderEl, activeMediaEl,
-//   _shouldAnnounce, _pendingAutoFS, _pendingQueuePlay,
+//   _pendingAutoFS, _pendingQueuePlay,
 //   _autoplay, _posCheckpointTimer,
 //   _clearPosCheckpoint,
 //   _posKey, _savePosition, _getSavedPosition, _clearSavedPosition,
@@ -150,7 +150,6 @@ function _stopActiveMedia(mediaEl) {
   _clearPosCheckpoint();
   _pendingAutoFS    = false;
   _pendingQueuePlay = false;
-  _shouldAnnounce   = false;
   if (_hasAnnounced) {
     _hasAnnounced = false;
     _bcPost('media-viewer', { cmd: 'media-stopped' });
@@ -183,7 +182,6 @@ var videoEl   = document.getElementById('main-video');
 var audioEl   = document.getElementById('main-audio');
 
 var activeMediaEl     = null;   // currently active <video> or <audio>, or null
-var _shouldAnnounce   = false;  // true when audio-bearing media loaded; cleared after first 'playing' event
 var _pendingAutoFS    = false;  // true when auto-fullscreen should fire on the next 'playing' event
 var _pendingQueuePlay = false;  // true when a video-queue advance should autoplay regardless of _autoplay
 
@@ -228,11 +226,6 @@ function _onMediaEnded() {
 }
 
 function _onMediaPlaying() {
-  if (_shouldAnnounce) {
-    _shouldAnnounce = false;
-    _hasAnnounced   = true;
-    _bcPost('media-viewer', { cmd: 'pause' });
-  }
   if (_pendingAutoFS && this === videoEl && !document.fullscreenElement) {
     _pendingAutoFS = false;
     selectorStateBeforeFS = ui.selectorVisible;

@@ -8,6 +8,7 @@
 //   _hasAnnounced,
 //   _bcPost,
 //   _mediaListenCh, _updateChannelWiring,
+//   playAndAnnounce,
 //   togglePlayPause, toggleMute, adjustVolume, adjustBalance.
 //
 // Calls into globals defined in earlier / later modules:
@@ -16,7 +17,6 @@
 //   updateQueueChannelWiring.                                   (viewer-queue-mgt.js)
 
 // True after we've broadcast 'pause' to other tabs; cleared on stop/end.
-// Also written by _onMediaPlaying/_onMediaEnded/_stopActiveMedia in viewer.js.
 var _hasAnnounced = false;
 
 // ── BroadcastChannel infrastructure ──────────────────────────────────────────
@@ -107,13 +107,29 @@ function loadAvSettings() {
 
 // ── A/V control helpers ───────────────────────────────────────────────────────
 
+// Start playback on el.  If el has audio tracks and we don't already hold the
+// baton, announce to other tabs and acquire it.  Autoplay rejections are
+// silenced, matching the .catch(function(){}) convention at all other play sites.
+// Call this instead of el.play().catch() whenever the element might have audio.
+function playAndAnnounce(el) {
+  el.play().then(function() {
+    if (_hasAnnounced) return;
+    var tracks = el.audioTracks;
+    if (tracks ? tracks.length > 0 : el.mozHasAudio) {
+      _hasAnnounced = true;
+      _bcPost('media-viewer', { cmd: 'pause' });
+      _updateChannelWiring();
+    }
+  }).catch(function() {});
+}
+
 function togglePlayPause() {
   if (!activeMediaEl) return;
   if (activeMediaEl.ended) {
     activeMediaEl.currentTime = 0;
-    activeMediaEl.play().catch(function() {});
+    playAndAnnounce(activeMediaEl);
   } else if (activeMediaEl.paused) {
-    activeMediaEl.play().catch(function() {});
+    playAndAnnounce(activeMediaEl);
   } else {
     activeMediaEl.pause();
   }
