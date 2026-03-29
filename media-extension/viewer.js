@@ -64,12 +64,6 @@ const FULLSCREEN_DIMS = new Set([
 
 // _updateChannelWiring, _bcPost, _mediaListenCh — defined in viewer-audio.js.
 
-// Full path of whatever is currently loaded (or being loaded) in the content
-// pane.  Kept in sync by content._syncLegacyGlobals() (viewer-content.js).
-// Also written directly by _stopActiveMedia() for compatibility when that
-// function is called outside the ContentPane (e.g. the popstate handler).
-var _contentPath = null;
-
 // ── DOM refs ───────────────────────────────────────────────────────────────
 // UI-framework refs (screens, selector, panes, buttons, queue) — viewer-ui.js.
 // Content-pane and media refs remain here pending viewer-content.js extraction.
@@ -129,8 +123,8 @@ function toggleInfoOverlay() {
   if (hidden) {
     // Use the content-pane path if something is loaded; fall back to the
     // selector's currentFile (e.g. when no media has loaded yet).
-    var filename = _contentPath ? _contentPath.replace(/.*\//, '')
-                                : selector.currentFile;
+    var filename = content.fullPath ? content.fullPath.replace(/.*\//, '')
+                                  : selector.currentFile;
     updateInfoOverlay(filename);
     infoOverlayEl.classList.remove('hidden');
   } else {

@@ -27,7 +27,7 @@
 //   playAndAnnounce,                                     (viewer-audio.js)
 //   toProxyFile,                                         (media-shared.js)
 //   mediaType, FULLSCREEN_DIMS,
-//   _contentPath, _vContrast, _vBrightness, _vHue, _vSaturation,
+//   _vContrast, _vBrightness, _vHue, _vSaturation,
 //   infoOverlayEl, updateInfoOverlay,                    (viewer.js)
 //   errorContentEl, noImageHintEl.                       (viewer.js)
 

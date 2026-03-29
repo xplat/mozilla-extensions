@@ -7,9 +7,6 @@
 // Declares these globals:
 //   content                                               (ContentPane instance)
 //
-// Maintains legacy global _contentPath in sync for
-// event handlers that read them directly.
-//
 // Calls into globals defined in earlier / later modules:
 //   CancelledError, LoadContext,                         (viewer-load-context.js)
 //   ImageContent, GifContent, PlayableContent,
@@ -61,7 +58,6 @@ class ContentPane {
     const ctx = new LoadContext();
     this._futureCtx = ctx;
     this.future     = occupant;
-    this._syncLegacyGlobals();
 
     // Spinner on: stopped by commitFuture() on success.
     imgSpinnerEl.classList.remove('hidden');
@@ -132,7 +128,6 @@ class ContentPane {
     this.future       = null;
     this._futureCtx   = null;
     this._surrendered = false;
-    this._syncLegacyGlobals();
 
     _endTransitionCover();
   }
@@ -145,12 +140,6 @@ class ContentPane {
   redirect(newOccupant, ctx) {
     if (ctx !== this._futureCtx) return;
     this.future = newOccupant;
-  }
-
-  // ── Legacy global sync ──────────────────────────────────────────────────────
-
-  _syncLegacyGlobals() {
-    _contentPath    = this.fullPath;
   }
 }
 

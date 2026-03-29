@@ -23,7 +23,6 @@
 //   _qState, _vqLoad,                                      (viewer-queue-mgt.js)
 //   _panValue,                                             (media-shared.js)
 //   content,                                               (viewer-content.js)
-//   _contentPath,                                          (viewer.js)
 //   transitionCoverEl, errorContentEl.                     (viewer.js)
 
 // ── HUD DOM refs ──────────────────────────────────────────────────────────────
@@ -53,9 +52,9 @@ function _posKey(fileUrl) {
 }
 
 function _savePosition(mediaEl) {
-  if (!_contentPath || mediaEl.paused || mediaEl.ended) return;
+  if (!content.current.fullPath || mediaEl.paused || mediaEl.ended) return;
   if (imagePaneEl.classList.contains('media-gif')) return;
-  localStorage.setItem(_posKey(_contentPath), String(mediaEl.currentTime));
+  localStorage.setItem(_posKey(content.current.fullPath), String(mediaEl.currentTime));
 }
 
 function _getSavedPosition(fileUrl) {
@@ -158,7 +157,6 @@ function _stopActiveMedia(mediaEl) {
   mediaEl.pause();
   mediaEl.src = '';
   mediaEl     = null;
-  _contentPath      = null;
 }
 
 // ── Autoplay toggle and relative seek ────────────────────────────────────────
@@ -220,7 +218,7 @@ function _onMediaEnded() {
     _updateChannelWiring();  // no longer playing
     return;
   }
-  if (_contentPath) _clearSavedPosition(_contentPath);
+  if (content.current.fullPath) _clearSavedPosition(content.current.fullPath);
   _updateVideoControls();
   _updateChannelWiring();  // no longer playing
 }
