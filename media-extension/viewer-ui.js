@@ -292,6 +292,8 @@ document.addEventListener('keydown', function(e) {
       case 'f':
         e.preventDefault(); toggleFullscreen(); return;
       case 'i':
+      case ':':
+      case ';':
         e.preventDefault(); toggleInfoOverlay(); return;
       case '.':
         e.preventDefault();

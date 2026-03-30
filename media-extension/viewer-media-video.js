@@ -9,7 +9,8 @@
 //   VideoContent.
 //
 // Calls into globals defined in earlier / later modules:
-//   PlayableContent, videoEl, _pendingAutoFS.              (viewer-media-playable.js)
+//   PlayableContent, videoEl, _pendingAutoFS,
+//   toggleHudPin.                                          (viewer-media-playable.js)
 //   GifContent.                                            (viewer-media-gif.js)
 //   FULLSCREEN_DIMS.                                       (viewer.js)
 
@@ -101,6 +102,11 @@ class VideoContent extends PlayableContent {
         case '_':
           e.preventDefault();
           cycleVideoTrack(this.mediaEl);
+          return;
+        // HUD pin/unpin (o: mplayer OSD key repurposed for the controls overlay)
+        case 'o':
+          e.preventDefault();
+          toggleHudPin();
           return;
         // Color/quality (overrides image quick-zoom keys 1–8 for video;
         // mplayer layout: 1/2 contrast, 3/4 brightness, 5/6 hue, 7/8 saturation)

@@ -13,7 +13,6 @@
 //   ContentOccupant.                                        (viewer-media.js)
 //   imagePaneEl.                                            (viewer-ui.js)
 //   scrollImage, scaleTo1, toggleZoom.                      (viewer-media-image.js)
-//   toggleInfoOverlay.                                      (viewer.js)
 
 class ImagelikeContent extends ContentOccupant {
   handleKey(e, key, ctrl, plain) {
@@ -65,9 +64,6 @@ class ImagelikeContent extends ContentOccupant {
         case 'n': scaleTo1();   return;
         // Zoom-fit toggle
         case 'z': toggleZoom(); return;
-        // Info (xzgv : / ;)
-        case ':':
-        case ';': e.preventDefault(); toggleInfoOverlay(); return;
       }
     } else if (ctrl) {
       // Fine scrolling — 10 px steps

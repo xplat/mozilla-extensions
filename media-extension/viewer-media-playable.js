@@ -15,8 +15,8 @@
 //   fmtTime, _updateVideoControls,
 //   _startTransitionCover, _endTransitionCover,
 //   _stopActiveMedia, _mediaErrorMessage,
-//   toggleAutoplay, seekRelative, cycleAudioTrack,
-//   videoProgressEl, videoSeekFillEl, videoTimeEl, videoVolEl,
+//   toggleAutoplay, seekRelative, cycleAudioTrack, toggleHudPin,
+//   videoControlsEl, videoProgressEl, videoSeekFillEl, videoTimeEl, videoVolEl,
 //   PlayableContent.
 //
 // Calls into globals defined in earlier / later modules:
@@ -33,6 +33,7 @@
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 
 var transitionCoverEl   = document.getElementById('transition-cover');
+var videoControlsEl     = document.getElementById('video-controls');
 var videoProgressEl     = document.getElementById('video-progress');
 var videoSeekFillEl     = document.getElementById('video-seek-fill');
 var videoTimeEl         = document.getElementById('video-time');
@@ -177,6 +178,15 @@ function seekRelative(el, secs) {
   if (!el || !isFinite(el.duration)) return;
   el.currentTime = Math.max(0, Math.min(el.duration, el.currentTime + secs));
   _updateVideoControls();
+}
+
+// ── HUD pin/unpin ─────────────────────────────────────────────────────────────
+//
+// Toggles the .visible class on #video-controls, which the CSS uses to keep
+// the controls overlay shown regardless of hover state.
+
+function toggleHudPin() {
+  if (videoControlsEl) videoControlsEl.classList.toggle('visible');
 }
 
 // ── Audio / video track cycling ───────────────────────────────────────────────
@@ -417,10 +427,6 @@ class PlayableContent extends ContentOccupant {
       // Audio track cycling
       case 'a':
       case '#': e.preventDefault(); cycleAudioTrack(el); return;
-      // OSD / info (o: mplayer style; :/;: xzgv style, also reachable in media mode)
-      case 'o':
-      case ':':
-      case ';': e.preventDefault(); toggleInfoOverlay(); return;
     }
   }
 }
