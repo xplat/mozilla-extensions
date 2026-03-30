@@ -157,7 +157,7 @@ function updateInfoOverlay(filename) {
 // handleQueueFocusKey — moved to viewer-queue-mgt.js.
 
 function handleViewerKey(e, key, ctrl, plain) {
-  content.current.handleKey(e, key, ctrl, plain);
+  content.handleKey(e, key, ctrl, plain);
 }
 
 // ── Button listeners ───────────────────────────────────────────────────────

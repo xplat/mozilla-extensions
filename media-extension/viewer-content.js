@@ -132,6 +132,15 @@ class ContentPane {
     _endTransitionCover();
   }
 
+  // ── Key dispatch ────────────────────────────────────────────────────────────
+
+  // Route a keydown event to the current occupant, but swallow it silently
+  // while a new occupant is loading (future !== null).
+  handleKey(e, key, ctrl, plain) {
+    if (this.future) return;
+    this.current.handleKey(e, key, ctrl, plain);
+  }
+
   // ── Redirect ────────────────────────────────────────────────────────────────
 
   // Swap the future occupant mid-load without cancelling the load.  The context
