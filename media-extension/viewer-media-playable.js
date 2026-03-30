@@ -15,20 +15,20 @@
 //   fmtTime, _updateVideoControls,
 //   _startTransitionCover, _endTransitionCover,
 //   _stopActiveMedia, _mediaErrorMessage,
-//   toggleAutoplay, seekRelative,
+//   toggleAutoplay, seekRelative, cycleAudioTrack,
 //   videoProgressEl, videoSeekFillEl, videoTimeEl, videoVolEl,
 //   PlayableContent.
 //
 // Calls into globals defined in earlier / later modules:
 //   imagePaneEl, selectorStateBeforeFS, ui, applySelector, (viewer-ui.js)
 //   _hasAnnounced, _bcPost, _updateChannelWiring,
-//   loadAvSettings, playAndAnnounce,                       (viewer-audio.js)
+//   loadAvSettings, playAndAnnounce, togglePlayPause,      (viewer-audio.js)
 //   _qState, _vqLoad,                                      (viewer-queue-mgt.js)
 //   toProxyFile, _panValue,                                (media-shared.js)
 //   CancelledError,                                        (viewer-load-context.js)
 //   ErrorContent,                                          (viewer-media.js)
 //   content,                                               (viewer-content.js)
-//   infoOverlayEl, updateInfoOverlay.                      (viewer.js)
+//   infoOverlayEl, updateInfoOverlay, toggleInfoOverlay.   (viewer.js)
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 
@@ -173,11 +173,22 @@ function toggleAutoplay() {
 }
 
 // secs may be negative (seek back) or positive (seek forward)
-function seekRelative(secs) {
-  if (!activeMediaEl || !isFinite(activeMediaEl.duration)) return;
-  activeMediaEl.currentTime =
-    Math.max(0, Math.min(activeMediaEl.duration, activeMediaEl.currentTime + secs));
+function seekRelative(el, secs) {
+  if (!el || !isFinite(el.duration)) return;
+  el.currentTime = Math.max(0, Math.min(el.duration, el.currentTime + secs));
   _updateVideoControls();
+}
+
+// ── Audio / video track cycling ───────────────────────────────────────────────
+
+function cycleAudioTrack(el) {
+  if (!el) return;
+  var tracks = el.audioTracks;
+  if (!tracks || tracks.length <= 1) return;
+  var cur = 0;
+  for (var i = 0; i < tracks.length; i++) { if (tracks[i].enabled) { cur = i; break; } }
+  var next = (cur + 1) % tracks.length;
+  for (var i = 0; i < tracks.length; i++) { tracks[i].enabled = (i === next); }
 }
 
 // ── Media element refs and playback lifecycle flags ───────────────────────────
@@ -350,4 +361,66 @@ class PlayableContent extends ContentOccupant {
   }
 
   cleanup() { _stopActiveMedia(this.mediaEl); }
+
+  handleKey(e, key, ctrl, plain) {
+    if (!plain) return;
+    const el = this.mediaEl;
+    switch (key) {
+      // Seek (mplayer defaults: ←/→ ±10 s, ↑/↓ ±1 min, PgUp/PgDn ±10 min)
+      case 'ArrowLeft':  e.preventDefault(); seekRelative(el, -10);  return;
+      case 'ArrowRight': e.preventDefault(); seekRelative(el, +10);  return;
+      case 'ArrowUp':    e.preventDefault(); seekRelative(el, +60);  return;
+      case 'ArrowDown':  e.preventDefault(); seekRelative(el, -60);  return;
+      case 'PageUp':     e.preventDefault(); seekRelative(el, +600); return;
+      case 'PageDown':   e.preventDefault(); seekRelative(el, -600); return;
+      case 'Home':
+        e.preventDefault();
+        el.currentTime = 0;
+        _updateVideoControls();
+        return;
+      case 'Backspace':
+        e.preventDefault();
+        el.playbackRate = 1;
+        return;
+      // Navigation
+      case 'Enter':
+        e.preventDefault();
+        this.nextItem();
+        return;
+      case 'b':
+        e.preventDefault();
+        this.prevItem();
+        return;
+      // Play / pause (or advance when ended)
+      case ' ':
+        e.preventDefault();
+        if (el.ended) { this.nextItem(); }
+        else          { togglePlayPause(); }
+        return;
+      // Playback rate  (</>: ±0.1 step; {/}: halve/double, as in mplayer)
+      case '<':
+        e.preventDefault();
+        el.playbackRate = Math.max(0.25, +(el.playbackRate - 0.1).toFixed(2));
+        return;
+      case '>':
+        e.preventDefault();
+        el.playbackRate = Math.min(4.0,  +(el.playbackRate + 0.1).toFixed(2));
+        return;
+      case '{':
+        e.preventDefault();
+        el.playbackRate = Math.max(0.25, el.playbackRate / 2);
+        return;
+      case '}':
+        e.preventDefault();
+        el.playbackRate = Math.min(4.0,  el.playbackRate * 2);
+        return;
+      // Audio track cycling
+      case 'a':
+      case '#': e.preventDefault(); cycleAudioTrack(el); return;
+      // OSD / info (o: mplayer style; :/;: xzgv style, also reachable in media mode)
+      case 'o':
+      case ':':
+      case ';': e.preventDefault(); toggleInfoOverlay(); return;
+    }
+  }
 }

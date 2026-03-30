@@ -157,154 +157,7 @@ function updateInfoOverlay(filename) {
 // handleQueueFocusKey — moved to viewer-queue-mgt.js.
 
 function handleViewerKey(e, key, ctrl, plain) {
-  // Media-mode overrides: applied when a controllable video or audio file is
-  // active (gif-loop videos are excluded — they behave like static images).
-  if (plain && activeMediaEl && !imagePaneEl.classList.contains('media-gif')) {
-    switch (key) {
-      // Seek (mplayer defaults: ←/→ ±10 s, ↑/↓ ±1 min, PgUp/PgDn ±10 min)
-      case 'ArrowLeft':  e.preventDefault(); seekRelative(-10);  return;
-      case 'ArrowRight': e.preventDefault(); seekRelative(+10);  return;
-      case 'ArrowUp':    e.preventDefault(); seekRelative(+60);  return;
-      case 'ArrowDown':  e.preventDefault(); seekRelative(-60);  return;
-      case 'PageUp':     e.preventDefault(); seekRelative(+600); return;
-      case 'PageDown':   e.preventDefault(); seekRelative(-600); return;
-      case 'Home':       e.preventDefault();
-        activeMediaEl.currentTime = 0; _updateVideoControls(); return;
-      case 'Backspace':  e.preventDefault();
-        activeMediaEl.playbackRate = 1; return;
-      // Navigation
-      case 'Enter': e.preventDefault();
-        ui.queueMode === 'video' ? _vqNext() : selector.nextFile(); return;
-      case 'b': e.preventDefault();
-        ui.queueMode === 'video' ? _vqPrev() : selector.prevFile(); return;
-      // Play / pause
-      case ' ':
-        e.preventDefault();
-        if (activeMediaEl.ended) { ui.queueMode === 'video' ? _vqNext() : selector.nextFile(); }
-        else                     { togglePlayPause(); }
-        return;
-      // Playback rate  (</>: ±0.1 step, matching mplayer's [/] moved to angle brackets)
-      //                ({/}: halve/double, as in mplayer)
-      case '<': e.preventDefault();
-        activeMediaEl.playbackRate = Math.max(0.25, +(activeMediaEl.playbackRate - 0.1).toFixed(2));
-        return;
-      case '>': e.preventDefault();
-        activeMediaEl.playbackRate = Math.min(4.0,  +(activeMediaEl.playbackRate + 0.1).toFixed(2));
-        return;
-      case '{': e.preventDefault();
-        activeMediaEl.playbackRate = Math.max(0.25, activeMediaEl.playbackRate / 2);
-        return;
-      case '}': e.preventDefault();
-        activeMediaEl.playbackRate = Math.min(4.0,  activeMediaEl.playbackRate * 2);
-        return;
-      // Audio / video track cycling
-      case 'a':
-      case '#': e.preventDefault(); cycleAudioTrack(); return;
-      case '_': e.preventDefault(); cycleVideoTrack(); return;
-      // OSD / info
-      case 'o': e.preventDefault(); toggleInfoOverlay(); return;
-      // Color/quality (video only; overrides image quick-zoom keys 1-4)
-      // mplayer layout: 1/2 contrast, 3/4 brightness, 5/6 hue, 7/8 saturation
-      case '1': case '2': case '3': case '4':
-      case '5': case '6': case '7': case '8':
-        if (imagePaneEl.classList.contains('media-video')) {
-          e.preventDefault();
-          if      (key === '1') adjustVideoFilter('contrast',   -0.1);
-          else if (key === '2') adjustVideoFilter('contrast',   +0.1);
-          else if (key === '3') adjustVideoFilter('brightness', -0.1);
-          else if (key === '4') adjustVideoFilter('brightness', +0.1);
-          else if (key === '5') adjustVideoFilter('hue',        -10);
-          else if (key === '6') adjustVideoFilter('hue',        +10);
-          else if (key === '7') adjustVideoFilter('saturation', -0.1);
-          else if (key === '8') adjustVideoFilter('saturation', +0.1);
-          return;
-        }
-        break;
-    }
-  }
-
-  if (plain) {
-    switch (key) {
-      // Scrolling — 100 px steps
-      case 'ArrowUp':    e.preventDefault(); scrollImage(0, -100); break;
-      case 'ArrowDown':  e.preventDefault(); scrollImage(0, +100); break;
-      case 'ArrowLeft':  e.preventDefault(); scrollImage(-100, 0); break;
-      case 'ArrowRight': e.preventDefault(); scrollImage(+100, 0); break;
-      // Large scrolling — ~90% of pane
-      case 'PageUp':
-        e.preventDefault();
-        scrollImage(0, -(imagePaneEl.clientHeight * 0.9));
-        break;
-      case 'PageDown':
-        e.preventDefault();
-        scrollImage(0, +(imagePaneEl.clientHeight * 0.9));
-        break;
-      case '-':
-        e.preventDefault();
-        scrollImage(-(imagePaneEl.clientWidth * 0.9), 0);
-        break;
-      case '=':
-        e.preventDefault();
-        scrollImage(+(imagePaneEl.clientWidth * 0.9), 0);
-        break;
-      // Jump to corners
-      case 'Home':
-        e.preventDefault();
-        imagePaneEl.scrollLeft = 0;
-        imagePaneEl.scrollTop  = 0;
-        break;
-      case 'End':
-        e.preventDefault();
-        imagePaneEl.scrollLeft = imagePaneEl.scrollWidth;
-        imagePaneEl.scrollTop  = imagePaneEl.scrollHeight;
-        break;
-      // Image navigation
-      case 'Enter':
-      case ' ':
-        e.preventDefault();
-        ui.queueMode === 'video' ? _vqNext() : selector.nextFile();
-        break;
-      case 'b':
-        ui.queueMode === 'video' ? _vqPrev() : selector.prevFile();
-        break;
-      // Rotation (xzgv r/R/N)
-      case 'r': rotateBy(90);        break;
-      case 'R': rotateBy(-90);       break;
-      case 'N': resetOrientation();  break;
-      // Mirror / flip (M/F for consistency; F avoids fullscreen conflict)
-      case 'M': toggleMirror(); break;  // horizontal mirror (xzgv m)
-      case 'F': toggleFlip();   break;  // vertical flip    (xzgv f)
-      // Scale (xzgv d/D/s/S/n)
-      case 'd': scaleDouble(); break;
-      case 'D': scaleHalve();  break;
-      case 's': scaleStep(+1); break;
-      case 'S': scaleStep(-1); break;
-      case 'n': scaleTo1();    break;
-      // Quick zoom levels
-      case '1': scaleTo1();                                    break;
-      case '2': ui.zoomFit=false; ui.scale=2; applyImageTransform(); persistState(false); break;
-      case '3': ui.zoomFit=false; ui.scale=3; applyImageTransform(); persistState(false); break;
-      case '4': ui.zoomFit=false; ui.scale=4; applyImageTransform(); persistState(false); break;
-      // Zoom-fit toggle (z) and reduce-only toggle (` — replaces xzgv Alt-r)
-      case 'z': toggleZoom(); break;
-      case '`':
-        ui.zoomReduceOnly = !ui.zoomReduceOnly;
-        if (ui.zoomFit) applyImageTransform();
-        persistState(false);
-        break;
-      // Info (xzgv : / ;)
-      case ':':
-      case ';': e.preventDefault(); toggleInfoOverlay(); break;
-    }
-  } else if (ctrl) {
-    // Fine scrolling — 10 px steps
-    switch (key) {
-      case 'ArrowUp':    e.preventDefault(); scrollImage(0, -10);  break;
-      case 'ArrowDown':  e.preventDefault(); scrollImage(0, +10);  break;
-      case 'ArrowLeft':  e.preventDefault(); scrollImage(-10,  0); break;
-      case 'ArrowRight': e.preventDefault(); scrollImage(+10,  0); break;
-    }
-  }
+  content.current.handleKey(e, key, ctrl, plain);
 }
 
 // ── Button listeners ───────────────────────────────────────────────────────
@@ -354,11 +207,7 @@ function fmtDate(unixSecs, full) {
 // _hasAnnounced — viewer-audio.js.
 // _autoplay, _posCheckpointTimer — viewer-media-playable.js.
 
-// Video color/quality filter state (reset on each new file; applied via CSS filter on videoEl)
-var _vContrast   = 1.0;  // CSS contrast()   — mplayer keys 1/2
-var _vBrightness = 1.0;  // CSS brightness() — mplayer keys 3/4
-var _vHue        = 0;    // CSS hue-rotate() degrees — mplayer keys 5/6
-var _vSaturation = 1.0;  // CSS saturate()   — mplayer keys 7/8
+// Video color/quality filter state — moved to VideoContent in viewer-media-video.js.
 
 // Stereo balance (Web Audio API): _panValue, _audioCtx, _panNode defined in
 // media-shared.js.  Both elements are wired into the graph eagerly so that
@@ -389,54 +238,12 @@ catch (err) { console.warn('createMediaElementSource(videoEl) failed:', err); }
 // toggleAutoplay, seekRelative — moved to viewer-media-playable.js.
 
 // ── Video color/quality filter ───────────────────────────────────────────────
-//
-// Applies CSS filter to the video element.  mplayer key layout:
-//   1/2 contrast, 3/4 brightness, 5/6 hue-rotate, 7/8 saturate
-// Filter is reset to defaults when a new file is opened (_loadPlayable).
-
-function _applyVideoFilter() {
-  var parts = [];
-  if (_vContrast   !== 1.0) parts.push('contrast('   + _vContrast.toFixed(2)   + ')');
-  if (_vBrightness !== 1.0) parts.push('brightness(' + _vBrightness.toFixed(2) + ')');
-  if (_vHue        !== 0)   parts.push('hue-rotate(' + _vHue                   + 'deg)');
-  if (_vSaturation !== 1.0) parts.push('saturate('   + _vSaturation.toFixed(2) + ')');
-  videoEl.style.filter = parts.join(' ');
-}
-
-function adjustVideoFilter(prop, delta) {
-  if (prop === 'contrast') {
-    _vContrast   = +Math.max(0, Math.min(3, _vContrast   + delta)).toFixed(2);
-  } else if (prop === 'brightness') {
-    _vBrightness = +Math.max(0, Math.min(3, _vBrightness + delta)).toFixed(2);
-  } else if (prop === 'hue') {
-    _vHue = ((_vHue + delta) % 360 + 360) % 360;
-    if (_vHue > 180) _vHue -= 360;
-  } else if (prop === 'saturation') {
-    _vSaturation = +Math.max(0, Math.min(3, _vSaturation + delta)).toFixed(2);
-  }
-  _applyVideoFilter();
-}
+// Moved to VideoContent._applyFilter / VideoContent._adjustFilter
+// in viewer-media-video.js.
 
 // ── Track switching ──────────────────────────────────────────────────────────
-
-function cycleAudioTrack() {
-  if (!activeMediaEl) return;
-  var tracks = activeMediaEl.audioTracks;
-  if (!tracks || tracks.length <= 1) return;
-  var cur = 0;
-  for (var i = 0; i < tracks.length; i++) { if (tracks[i].enabled) { cur = i; break; } }
-  var next = (cur + 1) % tracks.length;
-  for (var i = 0; i < tracks.length; i++) { tracks[i].enabled = (i === next); }
-}
-
-function cycleVideoTrack() {
-  var tracks = videoEl.videoTracks;
-  if (!tracks || tracks.length <= 1) return;
-  var cur = 0;
-  for (var i = 0; i < tracks.length; i++) { if (tracks[i].selected) { cur = i; break; } }
-  var next = (cur + 1) % tracks.length;
-  for (var i = 0; i < tracks.length; i++) { tracks[i].selected = (i === next); }
-}
+// cycleAudioTrack(el) — moved to viewer-media-playable.js.
+// cycleVideoTrack(el) — moved to viewer-media-video.js.
 
 // ── Show media file (dispatcher) ────────────────────────────────────────────
 

@@ -11,7 +11,7 @@
 //
 // Calls into globals defined in earlier / later modules:
 //   VideoContent.                                          (viewer-media-video.js)
-//   _qState.                                               (viewer-queue-mgt.js)
+//   _qState, _vqNext, _vqPrev.                             (viewer-queue-mgt.js)
 
 class QueuedVideoContent extends VideoContent {
   constructor(fullPath, queueIndex) {
@@ -23,6 +23,10 @@ class QueuedVideoContent extends VideoContent {
   mutate() { return null; }
 
   get savedPosition() { return _qState.video.time || 0; }
+
+  // Advance / retreat through the video queue instead of the selector.
+  nextItem() { _vqNext(); }
+  prevItem() { _vqPrev(); }
 
   clone() { return new QueuedVideoContent(this.fullPath, this.queueIndex); }
 }

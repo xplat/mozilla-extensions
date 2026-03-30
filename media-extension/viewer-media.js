@@ -12,6 +12,7 @@
 // Calls into globals defined in earlier / later modules:
 //   content,                                             (viewer-content.js)
 //   noImageHintEl, errorContentEl, mediaType,            (viewer.js)
+//   selector,                                            (viewer-selector.js)
 //   ImageContent,                                        (viewer-media-image.js)
 //   AudioContent,                                        (viewer-media-audio.js)
 //   VideoContent,                                        (viewer-media-video.js)
@@ -59,6 +60,15 @@ class ContentOccupant {
   // Return a pristine (unloaded) copy of this occupant, suitable for a reload
   // attempt.  Returns null if the occupant cannot be reloaded (e.g. EmptyContent).
   clone() { return null; }
+
+  // Navigate to the next / previous item in the current list.
+  // QueuedVideoContent overrides these to advance the video queue instead.
+  nextItem() { selector.nextFile(); }
+  prevItem() { selector.prevFile(); }
+
+  // Handle a keydown event routed from the global dispatcher when this occupant
+  // has viewer focus.  Subclasses override; default is a no-op.
+  handleKey(e, key, ctrl, plain) {}
 }
 
 // ── Empty ─────────────────────────────────────────────────────────────────────

@@ -389,4 +389,35 @@ class ImageContent extends ImagelikeContent {
   }
 
   clone() { return new ImageContent(this.fullPath); }
+
+  handleKey(e, key, ctrl, plain) {
+    if (plain) {
+      switch (key) {
+        // Rotation (xzgv r/R/N)
+        case 'r': rotateBy(90);        return;
+        case 'R': rotateBy(-90);       return;
+        case 'N': resetOrientation();  return;
+        // Mirror / flip (M/F; F avoids fullscreen conflict)
+        case 'M': toggleMirror(); return;
+        case 'F': toggleFlip();   return;
+        // Scale (xzgv d/D/s/S)
+        case 'd': scaleDouble(); return;
+        case 'D': scaleHalve();  return;
+        case 's': scaleStep(+1); return;
+        case 'S': scaleStep(-1); return;
+        // Quick zoom levels (1 is also the scaleTo1 alias)
+        case '1': scaleTo1();                                                              return;
+        case '2': ui.zoomFit=false; ui.scale=2; applyImageTransform(); persistState(false); return;
+        case '3': ui.zoomFit=false; ui.scale=3; applyImageTransform(); persistState(false); return;
+        case '4': ui.zoomFit=false; ui.scale=4; applyImageTransform(); persistState(false); return;
+        // Reduce-only toggle (` — replaces xzgv Alt-r)
+        case '`':
+          ui.zoomReduceOnly = !ui.zoomReduceOnly;
+          if (ui.zoomFit) applyImageTransform();
+          persistState(false);
+          return;
+      }
+    }
+    super.handleKey(e, key, ctrl, plain);
+  }
 }
