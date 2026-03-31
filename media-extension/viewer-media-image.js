@@ -6,7 +6,7 @@
 //
 // Declares these globals used by other modules:
 //   transformHostEl, mainImageEl, imgSpinnerEl,
-//   _imgPendingLoad, _prevDisplayW, _prevDisplayH,
+//   _prevDisplayW, _prevDisplayH,
 //   applyImageTransform,
 //   toggleZoom, rotateBy, toggleMirror, toggleFlip, resetOrientation,
 //   scaleDouble, scaleHalve, scaleStep, scaleTo1,
@@ -36,7 +36,6 @@ const SCALE_STEPS = [0.1, 0.125, 0.167, 0.25, 0.333, 0.5, 0.667, 1.0, 1.5, 2.0, 
 // call.  Used to recover the exact image pixel at the viewport centre before a
 // transform change so it can be repositioned afterwards.  Reset on new image.
 
-var _imgPendingLoad = null;   // in-flight preload image, or null
 var _prevDisplayW = 0;
 var _prevDisplayH = 0;
 var _prevRot    = 0;
@@ -340,16 +339,13 @@ class ImageContent extends ImagelikeContent {
 
     // Phase 1: preload with a throwaway Image; old content stays visible.
     const pending = new Image();
-    _imgPendingLoad = pending;
     pending.src = proxyUrl;
     try {
       await ctx.waitFor(pending, 'load', [pending, 'error', () => new Error()]);
     } catch (e) {
-      pending.src = '';
-      if (_imgPendingLoad === pending) _imgPendingLoad = null;
+      pending.removeAttribute('src');
       throw e;  // CancelledError → swallowed by ContentPane; other → backstop
     }
-    if (_imgPendingLoad === pending) _imgPendingLoad = null;
 
     // Phase 2: request the shared image element.
     // surrender() hides it with visibility:hidden, preserving the layout area.
@@ -362,7 +358,7 @@ class ImageContent extends ImagelikeContent {
       await ctx.waitFor(mainImageEl, 'load', [mainImageEl, 'error', () => new Error]);
     } catch (e) {
       mainImageEl.style.visibility = '';
-      mainImageEl.src = '';
+      mainImageEl.removeAttribute('src');
       throw e;
     }
 
@@ -383,8 +379,7 @@ class ImageContent extends ImagelikeContent {
 
   cleanup() {
     // Still showing — clear it so the incoming occupant starts from a clean slate.
-    if (_imgPendingLoad) { _imgPendingLoad.src = ''; _imgPendingLoad = null; }
-    mainImageEl.src = '';
+    mainImageEl.removeAttribute('src');
     imagePaneEl.classList.remove('image-loaded');
   }
 

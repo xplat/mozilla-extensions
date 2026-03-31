@@ -117,8 +117,10 @@ function playAndAnnounce(el) {
     var tracks = el.audioTracks;
     if (tracks ? tracks.length > 0 : el.mozHasAudio) {
       _hasAnnounced = true;
-      _bcPost('media-viewer', { cmd: 'pause' });
       _updateChannelWiring();
+      // we now have a broadcast channel open and listening.
+      // broadcast on it so we don't hear our own broadcast.
+      _mediaListenCh.postMessage({ cmd: 'pause' });
     }
   }).catch(function() {});
 }

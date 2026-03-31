@@ -162,8 +162,7 @@ function _stopActiveMedia(mediaEl) {
   }
   if (!mediaEl) return;
   mediaEl.pause();
-  mediaEl.src = '';
-  mediaEl     = null;
+  mediaEl.removeAttribute('src');
 }
 
 // ── Autoplay toggle and relative seek ────────────────────────────────────────
