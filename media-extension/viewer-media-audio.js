@@ -16,9 +16,9 @@ class AudioContent extends PlayableContent {
     this._name = 'audio:' + fullPath;
   }
 
-  get mediaEl()   { return audioEl; }
-  get element()   { return audioPlaceholderEl; }
-  get paneClass() { return 'media-audio'; }
+  get mediaEl()      { return audioEl; }
+  get element()      { return audioPlaceholderEl; }
+  get controlsMode() { return 'audio'; }
 
   clone() { return new AudioContent(this.fullPath); }
 }

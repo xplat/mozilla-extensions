@@ -68,7 +68,7 @@
       <div id="pane-divider"></div>
 
       <!-- RIGHT: image / video / audio display -->
-      <div id="image-pane">
+      <div id="image-pane" data-mode="other" data-show="no-image-hint">
 
         <!-- Transform host: sized to image visual bounding box (image mode) -->
         <div id="transform-host">
@@ -117,7 +117,7 @@
 
         <!-- Empty-pane hint: content-active boots the invariant that exactly
              one element is always marked active. -->
-        <div id="no-image-hint" class="content-active">
+        <div id="no-image-hint">
           <span>Select a file · Enter or double-click</span>
         </div>
       </div>

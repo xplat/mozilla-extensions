@@ -109,20 +109,8 @@ class ContentPane {
     // Clean up old occupant.  No-op if it was surrendered (already torn down).
     if (!this._surrendered) prev.cleanup();
 
-    // Manage content-active on display elements.
-    // Avoid a remove+add flash when the same element is reused.
-    if (prev.element && prev.element !== occupant.element) {
-      prev.element.classList.remove('content-active');
-    }
-    if (occupant.element) {
-      occupant.element.classList.add('content-active');
-    }
-
-    // Apply per-type imagePaneEl class for HUD / controls visibility.
-    // Old class is always removed first; _stopActiveMedia() may have already
-    // done this, but the remove is idempotent.
-    imagePaneEl.classList.remove('media-video', 'media-audio', 'media-gif');
-    if (occupant.paneClass) imagePaneEl.classList.add(occupant.paneClass);
+    imagePaneEl.dataset.show = occupant.element.id;
+    imagePaneEl.dataset.mode = occupant.controlsMode || 'other';
 
     this.current      = occupant;
     this.future       = null;

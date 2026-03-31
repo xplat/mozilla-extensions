@@ -278,17 +278,17 @@ html, body {
   background: var(--surface-2);
 }
 
-.file-item.loaded {
+.file-item.active {
   background: var(--sel-bg);
   color: var(--sel-text);
 }
 
-.file-item.loaded .file-name,
-.file-item.loaded .file-meta {
+.file-item.active .file-name,
+.file-item.active .file-meta {
   color: var(--sel-text);
 }
 
-.file-item.loaded .file-icon {
+.file-item.active .file-icon {
   color: var(--sel-text);
 }
 
@@ -361,10 +361,9 @@ html, body {
 #transform-host {
   position: relative;
   flex-shrink: 0;
-  display: none;  /* shown by .content-active below */
+  display: none;  /* shown by rule below */
 }
-
-#transform-host.content-active { display: block; }
+#image-pane[data-show="transform-host"] #transform-host { display: block; }
 
 /* In scroll mode, margin:auto centers transform-host when smaller than the
    viewport, and collapses to 0 when larger (so scroll starts at the edge). */
@@ -449,8 +448,7 @@ html, body {
   pointer-events: none;
   z-index: 2;
 }
-
-#no-image-hint.content-active { display: flex; }
+#image-pane[data-show="no-image-hint"] #no-image-hint { display: flex; }
 
 #no-image-hint span {
   font-family: monospace;
@@ -525,8 +523,8 @@ html, body {
   color: var(--dir-color);
 }
 
-.list-list.thumbnails .file-item.loaded .thumb-label,
-.list-list.thumbnails .file-item.loaded .file-icon {
+.list-list.thumbnails .file-item.active .thumb-label,
+.list-list.thumbnails .file-item.active .file-icon {
   color: var(--sel-text);
 }
 
@@ -542,6 +540,7 @@ html, body {
   background: #111;
   display: none;
 }
+#image-pane[data-show="main-video"] #main-video { display: block; }
 
 /* Audio element is invisible; only its playback matters */
 #main-audio {
@@ -557,6 +556,7 @@ html, body {
   justify-content: center;
   pointer-events: none;
 }
+#image-pane[data-show="audio-placeholder"] #audio-placeholder { display: flex; }
 
 #audio-placeholder span {
   font-size: 72px;
@@ -641,29 +641,22 @@ html, body {
   letter-spacing: 0.02em;
 }
 
-/* ── CONTENT-ACTIVE: visibility for each content display element ─────────── */
-/*
- * Each content occupant has a displayEl.  commitFuture() adds content-active
- * to it; cleanup() / commitFuture() removes it from the old occupant.
- * transform-host is hidden by default (see above); video/audio/error elements
- * already have display:none.
- */
-#main-video.content-active          { display: block; }
-#audio-placeholder.content-active   { display: flex; }
-#error-content.content-active       { display: flex; }
-
 /* ── MEDIA MODE CLASSES ──────────────────────────────────────────────────── */
 /*
  * Per-type classes on #image-pane for HUD / controls visibility.
  */
 
-/* — video mode — */
-#image-pane.media-video #video-controls { display: flex; }
+/* — video and audio mode — */
+#image-pane[data-mode="video"] #video-controls,
+#image-pane[data-mode="audio"] #video-controls { display: flex; }
 
-/* — audio mode — */
-#image-pane.media-audio #video-controls    { display: flex; }
-/* Progress bar always visible for audio (no hover required) */
-#image-pane.media-audio #video-controls    { opacity: 1; pointer-events: auto; }
+/* Show controls on hover, for audio or when pinned visible by JS */
+#image-pane[data-mode="video"] #video-controls:hover,
+#image-pane[data-mode="audio"] #video-controls,
+#image-pane[data-mode="video"] #video-controls.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
 
 /* — error content display — */
 #error-content {
@@ -676,6 +669,7 @@ html, body {
   gap: 0.75rem;
   pointer-events: auto;
 }
+#image-pane[data-show="error-content"] #error-content { display: flex; }
 
 .error-content-msg {
   color: var(--text-dim);
@@ -700,14 +694,6 @@ html, body {
 
 .error-content-retry:hover {
   background: var(--surface-3);
-}
-
-/* Show controls on hover or when pinned visible by JS */
-#image-pane.media-video #video-controls:hover,
-#image-pane.media-video #video-controls.visible,
-#image-pane.media-audio #video-controls.visible {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 /* File-list icons for video and audio items */
@@ -764,7 +750,7 @@ html, body {
 .file-item.selected {
   box-shadow: inset 2px 0 0 var(--focus-ring);
 }
-.file-item.selected:not(.loaded) {
+.file-item.selected:not(.active) {
   background: var(--surface-2);
 }
 

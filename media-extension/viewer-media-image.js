@@ -43,12 +43,6 @@ var _prevScale  = 1;
 var _prevMirror = false;
 var _prevFlip   = false;
 
-// Belt-and-suspenders: hide the spinner on any mainImageEl error not already
-// caught by an active LoadContext (e.g. a stale src attribute).
-mainImageEl.addEventListener('error', function() {
-  imgSpinnerEl.classList.add('hidden');
-});
-
 // ── Image transform ───────────────────────────────────────────────────────────
 //
 // The transform-host div is sized to the image's visual bounding box.
@@ -363,7 +357,6 @@ class ImageContent extends ImagelikeContent {
     }
 
     // Image decoded: set up transform before revealing.
-    imagePaneEl.classList.add('image-loaded');
     _prevDisplayW = 0;
     _prevDisplayH = 0;
     applyImageTransform();
@@ -380,7 +373,6 @@ class ImageContent extends ImagelikeContent {
   cleanup() {
     // Still showing — clear it so the incoming occupant starts from a clean slate.
     mainImageEl.removeAttribute('src');
-    imagePaneEl.classList.remove('image-loaded');
   }
 
   clone() { return new ImageContent(this.fullPath); }

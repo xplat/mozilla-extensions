@@ -20,7 +20,7 @@ var selector = (function() {
   var _file    = null;     // selected filename within _dir (or null)
   var _listing = [];       // sorted/filtered entry objects from latest fetch
   var _selIdx  = -1;       // DOM index of selected item (-1 = none)
-  var _loadedIdx  = -1;    // DOM index of loaded item (-1 = none)
+  var _activeIdx  = -1;    // DOM index of active item (-1 = none)
 
   // ── Listing utilities ───────────────────────────────────────────────────────
 
@@ -89,7 +89,7 @@ var selector = (function() {
 
     if (_file) {
       var selIdx = _listing.findIndex(function(i) { return i.u === _file; });
-      if (selIdx >= 0) indicateLoaded(selIdx, false);
+      if (selIdx >= 0) markActive(selIdx, false);
       showMediaFile(_file);
     } else {
       var firstFile = _listing.findIndex(function(i) { return isSelectable(i) && i.t !== 'd'; });
@@ -208,14 +208,14 @@ var selector = (function() {
     if (scroll) el.scrollIntoView({ block: 'center' });
   }
 
-  function indicateLoaded(idx, scroll) {
+  function markActive(idx, scroll) {
     if (idx < 0 || idx >= _listing.length) return;
-    var prev = fileListEl.querySelector('.file-item.loaded');
-    if (prev) prev.classList.remove('loaded');
-    _loadedIdx = idx;
+    var prev = fileListEl.querySelector('.file-item.active');
+    if (prev) prev.classList.remove('active');
+    _activedIdx = idx;
     var el = fileListEl.children[idx];
     if (!el) return;
-    el.classList.add('loaded');
+    el.classList.add('active');
     if (scroll) el.scrollIntoView({ block: 'center' });
   }
 
@@ -234,7 +234,7 @@ var selector = (function() {
     } else {
       _file = item.u;
       persistState(false);
-      indicateLoaded(idx);
+      markActive(idx);
       selectItem(-1);
       showMediaFile(item.u);
       setFocusMode('viewer');
@@ -247,7 +247,7 @@ var selector = (function() {
     var idx  = files.findIndex(function(i) { return i.u === _file; });
     var next = files[(idx + 1) % files.length];
     var li   = _listing.findIndex(function(i) { return i.u === next.u; });
-    indicateLoaded(li, true);
+    markActive(li, true);
     _file = next.u;
     persistState(false);
     showMediaFile(next.u);
@@ -259,7 +259,7 @@ var selector = (function() {
     var idx  = files.findIndex(function(i) { return i.u === _file; });
     var prev = files[(idx - 1 + files.length) % files.length];
     var li   = _listing.findIndex(function(i) { return i.u === prev.u; });
-    indicateLoaded(li, true);
+    markActive(li, true);
     _file = prev.u;
     persistState(false);
     showMediaFile(prev.u);
@@ -276,7 +276,7 @@ var selector = (function() {
 
   function moveSelectionBy(delta) {
     if (_listing.length === 0) return;
-    var start = _selIdx < 0 ? (_loadedIdx < 0 ? (delta > 0 ? -1 : _listing.length) : _loadedIdx) : _selIdx;
+    var start = _selIdx < 0 ? (_activeIdx < 0 ? (delta > 0 ? -1 : _listing.length) : _activeIdx) : _selIdx;
     var step  = delta > 0 ? 1 : -1;
     var count = Math.abs(delta);
     var cur   = start;
@@ -339,7 +339,7 @@ var selector = (function() {
     if (btnSort) btnSort.textContent = labels[ui.sortBy] || 'NAME';
     if (_file) {
       var i = _listing.findIndex(function(x) { return x.u === _file; });
-      if (i >= 0) indicateLoaded(i, true);
+      if (i >= 0) markActive(i, true);
     }
   }
 
@@ -432,7 +432,7 @@ var selector = (function() {
     get currentDir()  { return _dir;        },
     get currentFile() { return _file;       },
     get listing()     { return _listing;    },
-    get loadedIdx()   { return _loadedIdx;  },
+    get activeIdx()   { return _activeIdx;  },
     get selectedIdx() { return _selIdx;     },
 
 
@@ -444,11 +444,11 @@ var selector = (function() {
     moveSelectionBy:  moveSelectionBy,
     jumpToEdge:       jumpToEdge,
     selectItem:       selectItem,
-    indicateLoaded:   indicateLoaded,
+    markActive:       markActive,
     renderSelector:   renderSelector,
     updateDirPath:    updateDirPath,
     displayableFiles: displayableFiles,
-    handleKey:           handleKey,
+    handleKey:        handleKey,
     handleQueueKey:   handleQueueKey,
     toggleThumbnails: toggleThumbnails,
     toggleRecursive:  toggleRecursive,

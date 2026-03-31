@@ -20,7 +20,6 @@ class GifContent extends ImagelikeContent {
   }
 
   get element()   { return videoEl; }
-  get paneClass() { return 'media-gif'; }
 
   // GifContent is reached via redirect() from VideoContent.load(), which
   // has already set el.src.  This load() secures the element

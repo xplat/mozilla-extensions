@@ -31,13 +31,13 @@ class ContentOccupant {
 
   // Which DOM element does this occupant exclusively own?
   // ContentPane.request() compares elements to decide if surrender is needed.
-  // commitFuture() toggles 'content-active' on this element.
+  // commitFuture() sets this element as the one that is shown.
   // null is only allowed for an abstract class.
   get element()   { return null; }
 
-  // Per-type CSS class to apply to imagePaneEl for HUD / controls visibility.
-  // null (default) means no class is needed.
-  get paneClass() { return null; }
+  // Mode to put the video-controls HUD in.  Currently, "audio", "video", and
+  // "other" are defined.
+  get controlsMode() { return 'other'; }
 
   // Async: start loading content.  ctx is a LoadContext for event-waits;
   // if ctx.cancel() is called (load superseded), all awaited events reject

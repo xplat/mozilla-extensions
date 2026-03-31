@@ -146,7 +146,7 @@ function renderQueuePane() {
   items.forEach(function(item, idx) {
     var el   = document.createElement('div');
     el.className = 'file-item' +
-                   (idx === q.index ? ' loaded' : '') +
+                   (idx === q.index ? ' active' : '') +
                    (idx === _queueSelIdx ? ' selected' : '');
     el.dataset.idx = String(idx);
 
@@ -173,7 +173,7 @@ function renderQueuePane() {
 
   // Scroll keyboard-selected (or playing) item into view.
   var sel = queueListEl.querySelector('.selected') ||
-            queueListEl.querySelector('.loaded');
+            queueListEl.querySelector('.active');
   if (sel) sel.scrollIntoView({ block: 'nearest' });
 }
 

@@ -39,8 +39,8 @@ class VideoContent extends PlayableContent {
     this._vSaturation = 1.0;
   }
 
-  get element()   { return videoEl; }
-  get paneClass() { return 'media-video'; }
+  get element()      { return videoEl; }
+  get controlsMode() { return 'video'; }
 
   // ── CSS filter helpers ──────────────────────────────────────────────────────
 
