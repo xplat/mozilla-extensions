@@ -181,7 +181,7 @@ window.addEventListener('popstate', function(e) {
     applyUiState();
     if (params.file) {
       var idx = selector.listing.findIndex(function(i) { return i.u === params.file; });
-      if (idx >= 0) selector.selectItem(idx, true);
+      if (idx >= 0) selector.indicateLoaded(idx, true);
       showMediaFile(params.file);
     }
   }

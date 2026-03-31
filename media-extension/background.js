@@ -225,7 +225,7 @@ function _loadAudioItem(index, timeOffset, autoPlay) {
   }
   if (!_aq.items.length || index < 0 || index >= _aq.items.length) {
     _queueAudio.pause();
-    _queueAudio.src = '';
+    _queueAudio.removeAttribute('src');
     _aqPlaying    = false;
     _aqSuppressed = false;
     _broadcastState();
@@ -301,7 +301,7 @@ function _audioQueueSkip(delta) {
   if (next >= _aq.items.length) {
     // Skipped past end — stop and park at the past-end sentinel.
     _queueAudio.pause();
-    _queueAudio.src = '';
+    _queueAudio.removeAttribute('src');
     _aqPlaying = false;
     _aq.index  = _aq.items.length;
     _aq.time   = 0;
@@ -318,7 +318,7 @@ _queueAudio.addEventListener('ended', function() {
   var next = _aq.index + 1;
   if (next >= _aq.items.length) {
     // End of queue — stop and park at the past-end sentinel.
-    _queueAudio.src = '';
+    _queueAudio.removeAttribute('src');
     _aqPlaying = false;
     _aq.index  = _aq.items.length;
     _aq.time   = 0;
@@ -337,7 +337,7 @@ _queueAudio.addEventListener('error', function() {
   if (next < _aq.items.length) {
     _loadAudioItem(next, 0, _aqPlaying && !_aqSuppressed);
   } else {
-    _queueAudio.src = '';
+    _queueAudio.removeAttribute('src');
     _aqPlaying = false;
     _aq.index  = _aq.items.length;
     _broadcastState();
@@ -383,7 +383,7 @@ _queueChannel.onmessage = function(e) {
     case 'q-clear':
       if (d.type === 'audio') {
         _queueAudio.pause();
-        _queueAudio.src = '';
+        _queueAudio.removeAttribute('src');
         _aqPlaying    = false;
         _aqSuppressed = false;
         _aq = { items: [], index: 0, time: 0 };

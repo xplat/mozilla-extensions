@@ -16,10 +16,11 @@ var selector = (function() {
 
   // ── Private state ───────────────────────────────────────────────────────────
 
-  var _dir     = null;  // current directory (file:// URL)
-  var _file    = null;  // selected filename within _dir (or null)
-  var _listing = [];    // sorted/filtered entry objects from latest fetch
-  var _selIdx  = -1;    // DOM index of highlighted item (-1 = none)
+  var _dir     = null;     // current directory (file:// URL)
+  var _file    = null;     // selected filename within _dir (or null)
+  var _listing = [];       // sorted/filtered entry objects from latest fetch
+  var _selIdx  = -1;       // DOM index of selected item (-1 = none)
+  var _loadedIdx  = -1;    // DOM index of loaded item (-1 = none)
 
   // ── Listing utilities ───────────────────────────────────────────────────────
 
@@ -88,7 +89,7 @@ var selector = (function() {
 
     if (_file) {
       var selIdx = _listing.findIndex(function(i) { return i.u === _file; });
-      if (selIdx >= 0) selectItem(selIdx, false);
+      if (selIdx >= 0) indicateLoaded(selIdx, false);
       showMediaFile(_file);
     } else {
       var firstFile = _listing.findIndex(function(i) { return isSelectable(i) && i.t !== 'd'; });
@@ -196,13 +197,25 @@ var selector = (function() {
   // ── Item selection ──────────────────────────────────────────────────────────
 
   function selectItem(idx, scroll) {
-    if (idx < 0 || idx >= _listing.length) return;
+    if (idx >= _listing.length) return;
     var prev = fileListEl.querySelector('.file-item.selected');
     if (prev) prev.classList.remove('selected');
     _selIdx = idx;
+    if (idx < 0) return;
     var el = fileListEl.children[idx];
     if (!el) return;
     el.classList.add('selected');
+    if (scroll) el.scrollIntoView({ block: 'center' });
+  }
+
+  function indicateLoaded(idx, scroll) {
+    if (idx < 0 || idx >= _listing.length) return;
+    var prev = fileListEl.querySelector('.file-item.loaded');
+    if (prev) prev.classList.remove('loaded');
+    _loadedIdx = idx;
+    var el = fileListEl.children[idx];
+    if (!el) return;
+    el.classList.add('loaded');
     if (scroll) el.scrollIntoView({ block: 'center' });
   }
 
@@ -221,6 +234,8 @@ var selector = (function() {
     } else {
       _file = item.u;
       persistState(false);
+      indicateLoaded(idx);
+      selectItem(-1);
       showMediaFile(item.u);
       setFocusMode('viewer');
     }
@@ -232,7 +247,7 @@ var selector = (function() {
     var idx  = files.findIndex(function(i) { return i.u === _file; });
     var next = files[(idx + 1) % files.length];
     var li   = _listing.findIndex(function(i) { return i.u === next.u; });
-    selectItem(li, true);
+    indicateLoaded(li, true);
     _file = next.u;
     persistState(false);
     showMediaFile(next.u);
@@ -244,7 +259,7 @@ var selector = (function() {
     var idx  = files.findIndex(function(i) { return i.u === _file; });
     var prev = files[(idx - 1 + files.length) % files.length];
     var li   = _listing.findIndex(function(i) { return i.u === prev.u; });
-    selectItem(li, true);
+    indicateLoaded(li, true);
     _file = prev.u;
     persistState(false);
     showMediaFile(prev.u);
@@ -261,7 +276,7 @@ var selector = (function() {
 
   function moveSelectionBy(delta) {
     if (_listing.length === 0) return;
-    var start = _selIdx < 0 ? (delta > 0 ? -1 : _listing.length) : _selIdx;
+    var start = _selIdx < 0 ? (_loadedIdx < 0 ? (delta > 0 ? -1 : _listing.length) : _loadedIdx) : _selIdx;
     var step  = delta > 0 ? 1 : -1;
     var count = Math.abs(delta);
     var cur   = start;
@@ -324,7 +339,7 @@ var selector = (function() {
     if (btnSort) btnSort.textContent = labels[ui.sortBy] || 'NAME';
     if (_file) {
       var i = _listing.findIndex(function(x) { return x.u === _file; });
-      if (i >= 0) selectItem(i, true);
+      if (i >= 0) indicateLoaded(i, true);
     }
   }
 
@@ -414,10 +429,12 @@ var selector = (function() {
   // ── Public interface ────────────────────────────────────────────────────────
 
   return {
-    get currentDir()  { return _dir;     },
-    get currentFile() { return _file;    },
-    get listing()     { return _listing; },
-    get selectedIdx() { return _selIdx;  },
+    get currentDir()  { return _dir;        },
+    get currentFile() { return _file;       },
+    get listing()     { return _listing;    },
+    get loadedIdx()   { return _loadedIdx;  },
+    get selectedIdx() { return _selIdx;     },
+
 
     loadDir:          loadDir,
     openItem:         openItem,
@@ -427,6 +444,7 @@ var selector = (function() {
     moveSelectionBy:  moveSelectionBy,
     jumpToEdge:       jumpToEdge,
     selectItem:       selectItem,
+    indicateLoaded:   indicateLoaded,
     renderSelector:   renderSelector,
     updateDirPath:    updateDirPath,
     displayableFiles: displayableFiles,

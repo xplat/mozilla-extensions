@@ -280,6 +280,7 @@ function _mediaErrorMessage(el, path) {
 
 function _onMediaError(e) {
   // Guard: if src was cleared during navigation, an error is expected.
+  console.log("_onMediaError", e.currentTarget.src, e);
   if (!e.currentTarget.src) return;
   // Guard: error during an active load — the load's own catch will redirect to
   // ErrorContent with the same message; nothing to do here.

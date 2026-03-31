@@ -145,9 +145,9 @@ function renderQueuePane() {
 
   items.forEach(function(item, idx) {
     var el   = document.createElement('div');
-    el.className = 'file-item queue-item' +
-                   (idx === q.index ? ' playing' : '') +
-                   (focusMode === 'queue' && idx === _queueSelIdx ? ' queue-selected' : '');
+    el.className = 'file-item' +
+                   (idx === q.index ? ' loaded' : '') +
+                   (idx === _queueSelIdx ? ' selected' : '');
     el.dataset.idx = String(idx);
 
     var icon = document.createElement('span');
@@ -172,8 +172,8 @@ function renderQueuePane() {
   });
 
   // Scroll keyboard-selected (or playing) item into view.
-  var sel = queueListEl.querySelector('.queue-selected') ||
-            queueListEl.querySelector('.playing');
+  var sel = queueListEl.querySelector('.selected') ||
+            queueListEl.querySelector('.loaded');
   if (sel) sel.scrollIntoView({ block: 'nearest' });
 }
 
