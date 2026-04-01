@@ -117,11 +117,7 @@ var selector = (function() {
       if (mtype === 'video') el.classList.add('is-video');
       if (mtype === 'audio') el.classList.add('is-audio');
 
-      if (ui.thumbnails) {
-        _renderThumbItem(el, item);
-      } else {
-        _renderListItem(el, item);
-      }
+      _renderItem(el, item);
 
       if (sel) {
         el.addEventListener('click', function() {
@@ -135,40 +131,23 @@ var selector = (function() {
     });
   }
 
-  function _renderListItem(el, item) {
-    var type   = mediaType(item.u);
+  // Renders all child elements for a file-item in a single pass.  The same DOM
+  // serves both list and thumbnail modes; viewer.css toggles visibility via the
+  // .thumbnails class on the parent list.
+  function _renderItem(el, item) {
+    var type = mediaType(item.u);
+
     var iconEl = document.createElement('span');
     iconEl.className = 'file-icon';
     iconEl.textContent = item.t === 'd' ? '>' : type === 'video' ? '▶' : type === 'audio' ? '♪' : ' ';
-
-    var nameEl = document.createElement('span');
-    nameEl.className = 'file-name';
-    nameEl.textContent = item.u;
-
-    var metaEl = document.createElement('span');
-    metaEl.className = 'file-meta';
-    if (item.s !== undefined) metaEl.textContent = fmtSize(item.s);
-
     el.appendChild(iconEl);
-    el.appendChild(nameEl);
-    el.appendChild(metaEl);
-  }
 
-  function _renderThumbItem(el, item) {
-    var type = mediaType(item.u);
-    if (item.t === 'd' || type === 'unknown') {
-      var iconEl = document.createElement('span');
-      iconEl.className = 'file-icon';
-      iconEl.textContent = (item.t === 'd') ? '>' : ' ';
-      var labelEl = document.createElement('span');
-      labelEl.className = 'thumb-label';
-      labelEl.textContent = item.u;
-      el.appendChild(iconEl);
-      el.appendChild(labelEl);
-    } else {
-      var fallback = type === 'video' ? '▶' : type === 'audio' ? '♪' : null;
-      var fileUrl  = _dir.replace(/\/$/, '') + '/' + item.u;
-      var imgEl    = document.createElement('img');
+    // Thumbnail image — created for every non-directory, non-unknown item so
+    // that switching to thumbnail mode needs only a class toggle on the list.
+    // loading="lazy" keeps the image unfetched while display:none in list mode.
+    if (item.t !== 'd' && type !== 'unknown') {
+      var fileUrl = _dir.replace(/\/$/, '') + '/' + item.u;
+      var imgEl   = document.createElement('img');
       imgEl.className = 'thumb-img thumb-loading';
       imgEl.src       = toProxyThumb(fileUrl);
       imgEl.alt       = '';
@@ -177,21 +156,22 @@ var selector = (function() {
       imgEl.addEventListener('load',  function() { imgEl.classList.remove('thumb-loading'); });
       imgEl.addEventListener('error', function() {
         imgEl.classList.remove('thumb-loading');
-        if (fallback) {
-          var fbEl = document.createElement('span');
-          fbEl.className = 'thumb-img-fallback';
-          fbEl.textContent = fallback;
-          el.replaceChild(fbEl, imgEl);
-        } else {
-          imgEl.classList.add('thumb-missing');
-        }
+        // Mark the item so CSS can hide the broken img and reveal the file-icon
+        // (which already carries the appropriate fallback glyph).
+        el.classList.add('thumb-error');
       });
-      var labelEl = document.createElement('span');
-      labelEl.className = 'thumb-label';
-      labelEl.textContent = item.u;
       el.appendChild(imgEl);
-      el.appendChild(labelEl);
     }
+
+    var nameEl = document.createElement('span');
+    nameEl.className = 'file-name';
+    nameEl.textContent = item.u;
+    el.appendChild(nameEl);
+
+    var metaEl = document.createElement('span');
+    metaEl.className = 'file-meta';
+    if (item.s !== undefined) metaEl.textContent = fmtSize(item.s);
+    el.appendChild(metaEl);
   }
 
   // ── Item selection ──────────────────────────────────────────────────────────
@@ -306,7 +286,7 @@ var selector = (function() {
   function toggleThumbnails() {
     ui.thumbnails = !ui.thumbnails;
     persistState(false);
-    renderSelector();
+    fileListEl.classList.toggle('thumbnails', ui.thumbnails);
     if (ui.thumbnails && _dir) fetch(toProxyQueueDir(_dir)).catch(function() {});
     if (_selIdx >= 0) {
       var el = fileListEl.children[_selIdx];
