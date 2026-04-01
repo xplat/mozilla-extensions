@@ -252,13 +252,7 @@ function _onMediaEnded() {
 function _onMediaPlaying() {
   if (_pendingAutoFS && this === videoEl && !document.fullscreenElement) {
     _pendingAutoFS = false;
-    selectorStateBeforeFS = ui.selectorVisible;
-    ui.selectorVisible = false;
-    applySelector();
-    document.documentElement.requestFullscreen().catch(function() {
-      ui.selectorVisible = selectorStateBeforeFS;
-      applySelector();
-    });
+    document.documentElement.requestFullscreen().catch(function() {});
   }
   _updateChannelWiring();  // now playing
 }

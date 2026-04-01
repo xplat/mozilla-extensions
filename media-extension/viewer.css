@@ -142,6 +142,16 @@ html, body {
   height: 100%;
 }
 
+/* ── LIST DRAWER ────────────────────────────────────────────────────────── */
+
+#list-drawer {
+  display: flex;
+  flex-shrink: 0;
+  flex-grow: 0;
+  overflow: hidden;
+  height: 100%;
+}
+
 /* ── LIST PANES ─────────────────────────────────────────────────────────── */
 
 .list-pane {
@@ -173,18 +183,35 @@ html, body {
 
 /* Focus indicators: divider highlights when selector is active;
    image pane gets an inset ring when viewer is active */
-#viewer-screen[data-focus="selector"] #pane-divider {
+#viewer-screen[data-focus="list"] #pane-divider {
   background: var(--focus-ring);
 }
 
+/* Focus indicator on viewer is actually more annoying than helpful */
+/*
 #viewer-screen[data-focus="viewer"] #image-pane {
   outline: 1px solid var(--focus-ring);
   outline-offset: -1px;
 }
+*/
 
 /* Hide divider along with selector */
-#viewer-screen.no-selector #pane-divider {
-  display: none;
+:is(#viewer-screen.no-selector, :root:fullscreen) #list-drawer {
+  content-visibility: hidden;
+  position: fixed;
+  top: 0;
+  left: 0;
+  transform: translateX(-100%);
+  transition-property: transform, content-visibility;
+  transition-duration: 0.3s;
+  transition-timing-function: ease-out;
+  transition-behavior: allow-discrete;
+  z-index: 1; /* above content area */
+}
+
+:is(#viewer-screen.no-selector, :root:fullscreen #viewer-screen)[data-focus="list"] #list-drawer {
+  content-visibility: visible;
+  transform: translateX(0);
 }
 
 .list-header {
@@ -724,10 +751,6 @@ html, body {
 
 #viewer-screen.queue-mode   #selector-pane { display: none; }
 #viewer-screen.queue-mode   #queue-pane    { display: flex; }
-#viewer-screen.no-selector  .list-pane     { display: none; }
-
-/* specificity hack */
-#viewer-screen.no-selector.queue-mode   #queue-pane    { display: none; }
 
 #queue-pane-header {
   padding: 0 6px;
@@ -739,7 +762,7 @@ html, body {
 }
 
 /* Focus indicator: queue pane header bar highlights like the selector divider */
-#viewer-screen[data-focus="queue"] #queue-pane-header {
+#viewer-screen[data-focus="list"] #queue-pane-header {
   border-bottom-color: var(--focus-ring);
 }
 

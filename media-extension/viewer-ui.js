@@ -66,7 +66,7 @@ var ui = {
 
 // ── Focus mode ────────────────────────────────────────────────────────────────
 
-var focusMode = 'selector'; // 'selector' | 'viewer' | 'queue'
+var focusMode = 'list'; // 'list' | 'viewer'
 
 function setFocusMode(mode) {
   focusMode = mode;
@@ -183,28 +183,13 @@ function applyUiState() {
 
 // ── Fullscreen ────────────────────────────────────────────────────────────────
 
-var selectorStateBeforeFS = true;
-
 function toggleFullscreen() {
   if (!document.fullscreenElement) {
-    selectorStateBeforeFS = ui.selectorVisible;
-    ui.selectorVisible = false;
-    applySelector();
-    document.documentElement.requestFullscreen().catch(function() {
-      ui.selectorVisible = selectorStateBeforeFS;
-      applySelector();
-    });
+    document.documentElement.requestFullscreen().catch(function() {});
   } else {
     document.exitFullscreen();
   }
 }
-
-document.addEventListener('fullscreenchange', function() {
-  if (!document.fullscreenElement) {
-    ui.selectorVisible = selectorStateBeforeFS;
-    applySelector();
-  }
-});
 
 // ── Drag: image pan and divider resize ───────────────────────────────────────
 
@@ -270,7 +255,7 @@ document.addEventListener('mouseup', function() {
 
 // Clicking the selector pane body refocuses it.
 selectorPaneEl.addEventListener('mousedown', function() {
-  setFocusMode('selector');
+  setFocusMode('list');
 });
 
 // ── Global keyboard dispatcher ────────────────────────────────────────────────
@@ -310,19 +295,17 @@ document.addEventListener('keydown', function(e) {
         e.preventDefault(); selector.toggleThumbnails(); return;
       case 'Tab': {
         e.preventDefault();
-        if (ui.queueMode) {
-          var nextQF = (focusMode === 'viewer') ? 'queue' : 'viewer';
-          if (nextQF === 'queue')
-            _queueSelIdx = _qState[ui.queueMode === 'video' ? 'video' : 'audio'].index;
-          setFocusMode(nextQF);
+        if (ui.queueMode && focusMode == 'viewer') {
+          _queueSelIdx = _qState[ui.queueMode].index;
+        }
+        setFocusMode(focusMode === 'list' ? 'viewer' : 'list');
+        if (ui.queueMode && focusMode == 'list') {
           renderQueuePane();
-        } else {
-          setFocusMode(focusMode === 'selector' ? 'viewer' : 'selector');
         }
         return;
       }
       case 'Escape':
-        if (focusMode === 'viewer') { e.preventDefault(); setFocusMode('selector'); }
+        if (focusMode === 'viewer') { e.preventDefault(); setFocusMode('list'); }
         return;
       // Pane-width adjustment (xzgv [ ] ~)
       case '[': e.preventDefault(); adjustSelectorWidth(-16); return;
@@ -353,10 +336,12 @@ document.addEventListener('keydown', function(e) {
     }
   }
 
-  if (focusMode === 'queue') {
-    if (plain) handleQueueFocusKey(e, key);
-  } else if (focusMode === 'selector') {
-    selector.handleKey(e, key, ctrl, plain);
+  if (focusMode === 'list') {
+    if (ui.queueMode) {
+      if (plain) handleQueueFocusKey(e, key);
+    } else {
+      selector.handleKey(e, key, ctrl, plain);
+    }
   } else {
     handleViewerKey(e, key, ctrl, plain);
   }

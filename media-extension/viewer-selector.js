@@ -125,7 +125,7 @@ var selector = (function() {
 
       if (sel) {
         el.addEventListener('click', function() {
-          setFocusMode('selector');
+          setFocusMode('list');
           selectItem(idx, false);
         });
         el.addEventListener('dblclick', function() { openItem(idx); });
@@ -212,7 +212,7 @@ var selector = (function() {
     if (idx < 0 || idx >= _listing.length) return;
     var prev = fileListEl.querySelector('.file-item.active');
     if (prev) prev.classList.remove('active');
-    _activedIdx = idx;
+    _activeIdx = idx;
     var el = fileListEl.children[idx];
     if (!el) return;
     el.classList.add('active');
@@ -230,7 +230,7 @@ var selector = (function() {
       var newDir = _dir.replace(/\/$/, '') + '/' + item.u.replace(/\/$/, '');
       _file = null;
       loadDir(newDir, true);
-      setFocusMode('selector');
+      setFocusMode('list');
     } else {
       _file = item.u;
       persistState(false);
@@ -371,7 +371,7 @@ var selector = (function() {
       case 'Home':       e.preventDefault(); jumpToEdge(1);        break;
       case 'End':        e.preventDefault(); jumpToEdge(-1);       break;
       case 'Enter':      e.preventDefault();
-        if (_selIdx >= 0) openItem(_selIdx);
+        if (_selIdx >= 0) openItem(_selIdx); else setFocusMode('viewer');
         break;
       case ' ':          e.preventDefault();
         if (_selIdx >= 0) openItem(_selIdx);

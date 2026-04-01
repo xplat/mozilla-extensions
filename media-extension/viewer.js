@@ -50,8 +50,8 @@ const FULLSCREEN_DIMS = new Set([
 
 // ── Mutable state ──────────────────────────────────────────────────────────
 //
-// ui, focusMode, selectorWidthPx / SELECTOR_W_*, dragMode, dragState,
-// selectorStateBeforeFS — declared in viewer-ui.js (loaded first).
+// ui, focusMode, selectorWidthPx / SELECTOR_W_*, dragMode, dragState
+//  — declared in viewer-ui.js (loaded first).
 //
 // currentDir / currentFile / listing / selectedIdx — owned by viewer-selector.js.
 

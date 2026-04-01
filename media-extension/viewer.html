@@ -37,35 +37,39 @@
   </div>
 
   <!-- VIEWER SCREEN -->
-  <div id="viewer-screen" class="hidden" data-focus="selector">
+  <div id="viewer-screen" class="hidden" data-focus="list">
 
     <!-- MAIN AREA: selector + image (fills full height) -->
     <div id="main-area">
 
-      <!-- LEFT: file selector -->
-      <div class="list-pane" id="selector-pane">
-        <div id="selector-header" class="list-header">
-          <span id="dir-path" class="list-header-title" title=""></span>
-        </div>
-        <div class="list-list" id="file-list"></div>
-        <div id="selector-footer">
-          <button id="btn-recursive" title="Recursive listing">REC</button>
-          <button id="btn-hidden"    title="Show hidden files (.)">HID</button>
-          <button id="btn-sort"      title="Sort order">NAME</button>
-        </div>
-      </div>
+      <!-- LEFT: drawer for list sidebars -->
+      <div id="list-drawer">
 
-      <!-- LEFT (queue mode): playlist replaces selector -->
-      <div class="list-pane" id="queue-pane">
-        <div id="queue-pane-header" class="list-header">
-          <span id="queue-pane-title" class="list-header-title"></span>
-          <button id="queue-clear-btn" class="mode-btn" title="Clear queue">CLR</button>
+        <!-- LEFT: file selector -->
+        <div class="list-pane" id="selector-pane">
+          <div id="selector-header" class="list-header">
+            <span id="dir-path" class="list-header-title" title=""></span>
+          </div>
+          <div class="list-list" id="file-list"></div>
+          <div id="selector-footer">
+            <button id="btn-recursive" title="Recursive listing">REC</button>
+            <button id="btn-hidden"    title="Show hidden files (.)">HID</button>
+            <button id="btn-sort"      title="Sort order">NAME</button>
+          </div>
         </div>
-        <div class="list-list" id="queue-list"></div>
-      </div>
 
-      <!-- DIVIDER: drag to resize panes -->
-      <div id="pane-divider"></div>
+        <!-- LEFT (queue mode): playlist replaces selector -->
+        <div class="list-pane" id="queue-pane">
+          <div id="queue-pane-header" class="list-header">
+            <span id="queue-pane-title" class="list-header-title"></span>
+            <button id="queue-clear-btn" class="mode-btn" title="Clear queue">CLR</button>
+          </div>
+          <div class="list-list" id="queue-list"></div>
+        </div>
+
+        <!-- DIVIDER: drag to resize panes -->
+        <div id="pane-divider"></div>
+      </div>
 
       <!-- RIGHT: image / video / audio display -->
       <div id="image-pane" data-mode="other" data-show="no-image-hint">

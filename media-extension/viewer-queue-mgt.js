@@ -98,14 +98,12 @@ function cycleQueueMode() {
   _setQueueMode(modes[(modes.indexOf(ui.queueMode) + 1) % modes.length]);
 }
 
-function _setQueueMode(mode) {
+function setQueueMode(mode) {
   var old = ui.queueMode;
   ui.queueMode = mode;
 
-  // When entering queue mode the selector pane hides; move focus off it.
-  // When leaving queue mode the queue pane hides; move focus off it.
-  if (mode && !old && focusMode === 'selector') setFocusMode('queue');
-  if (!mode && focusMode === 'queue') setFocusMode('selector');
+  setFocusMode('list'); // XXX Focus should return to where it was if it goes
+                        //     a full cycle without a manual switch, probably.
 
   if (mode === 'video' && old !== 'video') {
     // Entering video queue mode: show queue pane with cursor at current index.
@@ -113,22 +111,14 @@ function _setQueueMode(mode) {
     // pane.  This prevents a video starting every time the user passes through
     // video-queue mode cycling toward audio-queue mode.
     _queueSelIdx  = _qState.video.index;
-    applySelector();
-    renderQueuePane();
-    _updateChannelWiring();
-    return;
-  }
-
-  if (mode === 'audio' && old !== 'audio') {
+  } else if (mode === 'audio' && old !== 'audio') {
     _queueSelIdx = _qState.audio.index;
   }
-
-  // Leaving video queue mode: the queue video (if any) keeps playing.
-  // The selector pane reappears unchanged — nothing was mutated.
 
   applySelector();
   renderQueuePane();
   _updateChannelWiring();
+  return;
 }
 
 // ── Queue pane rendering ──────────────────────────────────────────────────────
@@ -285,7 +275,7 @@ function handleQueueFocusKey(e, key) {
       break;
     case 'Escape': case 'ArrowLeft':
       e.preventDefault();
-      setFocusMode('selector');
+      setQueueMode(null);
       break;
   }
 }
