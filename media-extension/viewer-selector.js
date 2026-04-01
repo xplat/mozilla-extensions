@@ -21,6 +21,8 @@ var selector = (function() {
   var _listing = [];       // sorted/filtered entry objects from latest fetch
   var _selIdx  = -1;       // DOM index of selected item (-1 = none)
   var _activeIdx  = -1;    // DOM index of active item (-1 = none)
+  var _items   = [];       // flat array of .file-item elements, parallel to _listing
+  var _listenersWired = false;
 
   // ── Listing utilities ───────────────────────────────────────────────────────
 
@@ -100,12 +102,60 @@ var selector = (function() {
 
   // ── Selector rendering ──────────────────────────────────────────────────────
 
+  // Items are grouped into fixed-height .item-chunk containers so that
+  // content-visibility: auto on each chunk lets Gecko skip building frame trees
+  // for the ~900 off-screen chunks in a large directory.
+  var CHUNK_SIZE = 100;
+
+  // Wire delegated event listeners on fileListEl once.  click/dblclick bubble
+  // naturally; load/error on <img> do not, so those use capture.
+  function _wireListeners() {
+    if (_listenersWired) return;
+    _listenersWired = true;
+
+    fileListEl.addEventListener('click', function(e) {
+      var el = e.target.closest('.file-item');
+      if (!el || el.classList.contains('dimmed')) return;
+      setFocusMode('list');
+      selectItem(parseInt(el.dataset.idx, 10), false);
+    });
+
+    fileListEl.addEventListener('dblclick', function(e) {
+      var el = e.target.closest('.file-item');
+      if (!el || el.classList.contains('dimmed')) return;
+      openItem(parseInt(el.dataset.idx, 10));
+    });
+
+    fileListEl.addEventListener('load', function(e) {
+      var t = e.target;
+      if (t.tagName !== 'IMG' || !t.classList.contains('thumb-img')) return;
+      t.classList.remove('thumb-loading');
+    }, true);
+
+    fileListEl.addEventListener('error', function(e) {
+      var t = e.target;
+      if (t.tagName !== 'IMG' || !t.classList.contains('thumb-img')) return;
+      t.classList.remove('thumb-loading');
+      var item = t.closest('.file-item');
+      if (item) item.classList.add('thumb-error');
+    }, true);
+  }
+
   function renderSelector() {
+    _wireListeners();
     fileListEl.innerHTML = '';
+    _items  = [];
     _selIdx = -1;
     fileListEl.classList.toggle('thumbnails', ui.thumbnails);
 
+    var chunk = null;
     _listing.forEach(function(item, idx) {
+      if (idx % CHUNK_SIZE === 0) {
+        chunk = document.createElement('div');
+        chunk.className = 'item-chunk';
+        fileListEl.appendChild(chunk);
+      }
+
       var el = document.createElement('div');
       el.className = 'file-item';
       el.dataset.idx = String(idx);
@@ -118,22 +168,19 @@ var selector = (function() {
       if (mtype === 'audio') el.classList.add('is-audio');
 
       _renderItem(el, item);
-
-      if (sel) {
-        el.addEventListener('click', function() {
-          setFocusMode('list');
-          selectItem(idx, false);
-        });
-        el.addEventListener('dblclick', function() { openItem(idx); });
-      }
-
-      fileListEl.appendChild(el);
+      _items.push(el);
+      chunk.appendChild(el);
     });
+
+    // Last chunk may be smaller than CHUNK_SIZE; tell CSS so its height is exact.
+    var tail = _listing.length % CHUNK_SIZE;
+    if (tail !== 0 && chunk) chunk.style.setProperty('--chunk-size', tail);
   }
 
   // Renders all child elements for a file-item in a single pass.  The same DOM
   // serves both list and thumbnail modes; viewer.css toggles visibility via the
-  // .thumbnails class on the parent list.
+  // .thumbnails class on the parent list.  load/error events are handled by
+  // delegated capture listeners on fileListEl rather than per-element.
   function _renderItem(el, item) {
     var type = mediaType(item.u);
 
@@ -145,7 +192,9 @@ var selector = (function() {
     // Thumbnail image — created for every non-directory, non-unknown item so
     // that switching to thumbnail mode needs only a class toggle on the list.
     // loading="lazy" keeps the image unfetched while display:none in list mode.
+    // has-thumb marks items that carry a thumbnail slot (avoids :has() in CSS).
     if (item.t !== 'd' && type !== 'unknown') {
+      el.classList.add('has-thumb');
       var fileUrl = _dir.replace(/\/$/, '') + '/' + item.u;
       var imgEl   = document.createElement('img');
       imgEl.className = 'thumb-img thumb-loading';
@@ -153,13 +202,6 @@ var selector = (function() {
       imgEl.alt       = '';
       imgEl.draggable = false;
       imgEl.loading   = 'lazy';
-      imgEl.addEventListener('load',  function() { imgEl.classList.remove('thumb-loading'); });
-      imgEl.addEventListener('error', function() {
-        imgEl.classList.remove('thumb-loading');
-        // Mark the item so CSS can hide the broken img and reveal the file-icon
-        // (which already carries the appropriate fallback glyph).
-        el.classList.add('thumb-error');
-      });
       el.appendChild(imgEl);
     }
 
@@ -182,7 +224,7 @@ var selector = (function() {
     if (prev) prev.classList.remove('selected');
     _selIdx = idx;
     if (idx < 0) return;
-    var el = fileListEl.children[idx];
+    var el = _items[idx];
     if (!el) return;
     el.classList.add('selected');
     if (scroll) el.scrollIntoView({ block: 'center' });
@@ -193,7 +235,7 @@ var selector = (function() {
     var prev = fileListEl.querySelector('.file-item.active');
     if (prev) prev.classList.remove('active');
     _activeIdx = idx;
-    var el = fileListEl.children[idx];
+    var el = _items[idx];
     if (!el) return;
     el.classList.add('active');
     if (scroll) el.scrollIntoView({ block: 'center' });
@@ -289,7 +331,7 @@ var selector = (function() {
     fileListEl.classList.toggle('thumbnails', ui.thumbnails);
     if (ui.thumbnails && _dir) fetch(toProxyQueueDir(_dir)).catch(function() {});
     if (_selIdx >= 0) {
-      var el = fileListEl.children[_selIdx];
+      var el = _items[_selIdx];
       if (el) el.scrollIntoView({ block: 'nearest' });
     }
   }

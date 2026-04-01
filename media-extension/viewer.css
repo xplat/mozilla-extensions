@@ -292,6 +292,21 @@ html, body {
 
 /* ── FILE LIST ITEMS ─────────────────────────────────────────────────────── */
 
+/* Chunks of CHUNK_SIZE items each.  The fixed height lets content-visibility:auto
+   reserve exact scroll space for off-screen chunks without rendering their
+   frame trees.  contain-intrinsic-block-size echoes the height as belt-and-
+   suspenders in case the browser's size-containment path ignores explicit height. */
+.item-chunk {
+  height: calc(var(--chunk-size, 100) * 22px);
+  content-visibility: auto;
+  contain-intrinsic-block-size: calc(var(--chunk-size, 100) * 22px);
+}
+
+.list-list.thumbnails .item-chunk {
+  height: calc(var(--chunk-size, 100) * 52px);
+  contain-intrinsic-block-size: calc(var(--chunk-size, 100) * 52px);
+}
+
 .file-item {
   display: flex;
   align-items: center;
@@ -564,7 +579,7 @@ html, body {
 
 /* In thumbnail mode, hide the file-icon for items that carry a thumb-img
    (img is visible in its place).  Restored when the thumbnail fails. */
-.list-list.thumbnails .file-item:has(.thumb-img):not(.thumb-error) .file-icon {
+.list-list.thumbnails .file-item.has-thumb:not(.thumb-error) .file-icon {
   display: none;
 }
 
