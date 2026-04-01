@@ -298,9 +298,8 @@ html, body {
   gap: 5px;
   padding: 2px 8px;
   cursor: pointer;
-  min-height: 22px;
+  height: 22px;
   content-visibility: auto;
-  contain-intrinsic-size: auto 22px;
 }
 
 .file-item:hover:not(.dimmed) {
@@ -503,10 +502,10 @@ html, body {
   column-gap: 6px;
   align-items: center;
   flex-shrink: 0;
+  width: 100%;
+  height: 52px;
   padding: 2px 4px;
   overflow: hidden;
-  min-height: unset;
-  contain-intrinsic-size: auto 52px;  /* overrides list-mode value */
 }
 
 /* Column 1: every file-icon gets the same 48×48 inline-flex slot so that
