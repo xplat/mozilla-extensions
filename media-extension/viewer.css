@@ -299,6 +299,8 @@ html, body {
   padding: 2px 8px;
   cursor: pointer;
   min-height: 22px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 22px;
 }
 
 .file-item:hover:not(.dimmed) {
@@ -504,9 +506,22 @@ html, body {
   padding: 2px 4px;
   overflow: hidden;
   min-height: unset;
+  contain-intrinsic-size: auto 52px;  /* overrides list-mode value */
 }
 
-.list-list.thumbnails .file-item .file-icon,
+/* Column 1: every file-icon gets the same 48×48 inline-flex slot so that
+   directories and unknown-type items are as tall as items with thumbnails. */
+.list-list.thumbnails .file-item .file-icon {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  align-self: center;
+  width: 48px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .list-list.thumbnails .file-item .thumb-img {
   grid-column: 1;
   grid-row: 1 / span 2;
@@ -554,22 +569,14 @@ html, body {
   display: none;
 }
 
-/* On thumbnail load failure: hide the broken img, unsuppress the file-icon
-   and size it to match the thumbnail slot it replaces. */
+/* On thumbnail load failure: hide the broken img and reveal the file-icon
+   (already 48×48 from above); just bump the glyph to a readable size. */
 .list-list.thumbnails .file-item.thumb-error .thumb-img { display: none; }
-.list-list.thumbnails .file-item.thumb-error .file-icon {
-  width: 48px;
-  height: 48px;
-  font-size: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
+.list-list.thumbnails .file-item.thumb-error .file-icon { font-size: 20px; }
 
 .list-list.thumbnails .file-item.is-dir .file-icon {
   font-size: 16px;
   color: var(--dir-color);
-  width: auto;
 }
 
 .list-list.thumbnails .file-item.active .file-name,
