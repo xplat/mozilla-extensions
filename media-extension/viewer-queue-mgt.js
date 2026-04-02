@@ -95,7 +95,7 @@ function _vqPrev() { _vqLoad(_qState.video.index - 1); }
 // Cycle: null → 'audio' → 'video' → null
 function cycleQueueMode() {
   var modes = [null, 'audio', 'video'];
-  _setQueueMode(modes[(modes.indexOf(ui.queueMode) + 1) % modes.length]);
+  setQueueMode(modes[(modes.indexOf(ui.queueMode) + 1) % modes.length]);
 }
 
 function setQueueMode(mode) {

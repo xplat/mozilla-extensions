@@ -302,7 +302,7 @@ html, body {
   contain-intrinsic-block-size: calc(var(--chunk-size, 100) * 22px);
 }
 
-.list-list.thumbnails .item-chunk {
+#viewer-screen.thumbnails .list-list .item-chunk {
   height: calc(var(--chunk-size, 100) * 52px);
   contain-intrinsic-block-size: calc(var(--chunk-size, 100) * 52px);
 }
@@ -502,15 +502,15 @@ html, body {
 /* ── THUMBNAIL MODE ─────────────────────────────────────────────────────── */
 
 /* Keep thumb images out of list-mode layout and unfetched (lazy + display:none) */
-.list-list:not(.thumbnails) .thumb-img { display: none; }
+#viewer-screen:not(.thumbnails) .list-list .thumb-img { display: none; }
 
-.list-list.thumbnails {
+#viewer-screen.thumbnails .list-list {
   padding: 2px;
 }
 
 /* Two-column grid: [icon/img col] [name + meta col].
    The icon/img spans both text rows so it stays centred against them. */
-.list-list.thumbnails .file-item {
+#viewer-screen.thumbnails .list-list .file-item {
   display: grid;
   grid-template-columns: auto 1fr;
   grid-template-rows: auto auto;
@@ -525,7 +525,7 @@ html, body {
 
 /* Column 1: every file-icon gets the same 48×48 inline-flex slot so that
    directories and unknown-type items are as tall as items with thumbnails. */
-.list-list.thumbnails .file-item .file-icon {
+#viewer-screen.thumbnails .list-list .file-item .file-icon {
   grid-column: 1;
   grid-row: 1 / span 2;
   align-self: center;
@@ -536,13 +536,13 @@ html, body {
   justify-content: center;
 }
 
-.list-list.thumbnails .file-item .thumb-img {
+#viewer-screen.thumbnails .list-list .file-item .thumb-img {
   grid-column: 1;
   grid-row: 1 / span 2;
   align-self: center;
 }
 
-.list-list.thumbnails .file-item .file-name {
+#viewer-screen.thumbnails .list-list .file-item .file-name {
   grid-column: 2;
   grid-row: 1;
   align-self: end;
@@ -551,14 +551,14 @@ html, body {
   line-height: 1.3;
 }
 
-.list-list.thumbnails .file-item .file-meta {
+#viewer-screen.thumbnails .list-list .file-item .file-meta {
   grid-column: 2;
   grid-row: 2;
   align-self: start;
 }
 
 /* Suppress empty meta row so it doesn't push the name off-centre */
-.list-list.thumbnails .file-item .file-meta:empty { display: none; }
+#viewer-screen.thumbnails .list-list .file-item .file-meta:empty { display: none; }
 
 .thumb-img {
   width: 48px;
@@ -579,22 +579,22 @@ html, body {
 
 /* In thumbnail mode, hide the file-icon for items that carry a thumb-img
    (img is visible in its place).  Restored when the thumbnail fails. */
-.list-list.thumbnails .file-item.has-thumb:not(.thumb-error) .file-icon {
+#viewer-screen.thumbnails .list-list .file-item.has-thumb:not(.thumb-error) .file-icon {
   display: none;
 }
 
 /* On thumbnail load failure: hide the broken img and reveal the file-icon
    (already 48×48 from above); just bump the glyph to a readable size. */
-.list-list.thumbnails .file-item.thumb-error .thumb-img { display: none; }
-.list-list.thumbnails .file-item.thumb-error .file-icon { font-size: 20px; }
+#viewer-screen.thumbnails .list-list .file-item.thumb-error .thumb-img { display: none; }
+#viewer-screen.thumbnails .list-list .file-item.thumb-error .file-icon { font-size: 20px; }
 
-.list-list.thumbnails .file-item.is-dir .file-icon {
+#viewer-screen.thumbnails .list-list .file-item.is-dir .file-icon {
   font-size: 16px;
   color: var(--dir-color);
 }
 
-.list-list.thumbnails .file-item.active .file-name,
-.list-list.thumbnails .file-item.active .file-icon {
+#viewer-screen.thumbnails .list-list .file-item.active .file-name,
+#viewer-screen.thumbnails .list-list .file-item.active .file-icon {
   color: var(--sel-text);
 }
 

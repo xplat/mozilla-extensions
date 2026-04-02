@@ -113,8 +113,8 @@ function toProxyQueueDir(dirUrl) {
 // ── Image navigation / toggle helpers ─────────────────────────────────────
 // Delegated to selector module (viewer-selector.js):
 //   selector.nextFile(), selector.prevFile(), selector.goToParent(),
-//   selector.toggleThumbnails(), selector.toggleRecursive(),
-//   selector.toggleHidden(), selector.cycleSortBy()
+//   selector.toggleRecursive(), selector.toggleHidden(), selector.cycleSortBy()
+// toggleThumbnails() — moved to viewer-ui.js (global mode, not selector-specific)
 
 // ── Info overlay ───────────────────────────────────────────────────────────
 
@@ -162,9 +162,9 @@ function handleViewerKey(e, key, ctrl, plain) {
 
 // ── Button listeners ───────────────────────────────────────────────────────
 
-if (btnRecursive) btnRecursive.addEventListener('click', selector.toggleRecursive);
-if (btnHidden)    btnHidden.addEventListener('click', selector.toggleHidden);
-if (btnSort)      btnSort.addEventListener('click', selector.cycleSortBy);
+if (btnRecursive) btnRecursive.addEventListener('click', () => selector.toggleRecursive());
+if (btnHidden)    btnHidden.addEventListener('click', () => selector.toggleHidden());
+if (btnSort)      btnSort.addEventListener('click', () => selector.cycleSortBy());
 
 // ── History (back/forward) ─────────────────────────────────────────────────
 
@@ -181,7 +181,7 @@ window.addEventListener('popstate', function(e) {
     applyUiState();
     if (params.file) {
       var idx = selector.listing.findIndex(function(i) { return i.u === params.file; });
-      if (idx >= 0) selector.indicateLoaded(idx, true);
+      if (idx >= 0) selector.markActive(idx, true);
       showMediaFile(params.file);
     }
   }

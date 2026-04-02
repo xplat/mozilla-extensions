@@ -48,6 +48,16 @@ class FileList {
     return true;
   }
 
+  // Override to return the full file:// path for a listing item (used for
+  // thumbnail src URLs).  Returns null if the subclass doesn't supply paths.
+  fullPathOf(item) {
+    return null;
+  }
+
+  // Override to kick off any background thumbnail pre-fetch after entering
+  // thumbnail mode or loading a new directory while in thumbnail mode.
+  prefetchThumbnails() {}
+
   set listing(l) {
     this.#listing = l;
     this.renderList();
@@ -195,7 +205,6 @@ class FileList {
     this.#selIdx = -1;
     this.#activeIdx = -1;
     this.#scrollIdx = -1;
-    this.#container.classList.toggle('thumbnails', this.#ui.thumbnails);
 
     let chunk = null;
     this.#listing.forEach((item, idx) => {

@@ -170,10 +170,20 @@ function toggleSelector() {
   persistState(false);
 }
 
+// ── Thumbnail mode ────────────────────────────────────────────────────────────
+
+function toggleThumbnails() {
+  ui.thumbnails = !ui.thumbnails;
+  persistState(false);
+  viewerScreenEl.classList.toggle('thumbnails', ui.thumbnails);
+  if (ui.thumbnails) selector.prefetchThumbnails();
+}
+
 // ── Apply full UI state ───────────────────────────────────────────────────────
 
 function applyUiState() {
   applySelector();
+  viewerScreenEl.classList.toggle('thumbnails', ui.thumbnails);
   if (mainImageEl.naturalWidth) applyImageTransform();
   if (btnRecursive) btnRecursive.classList.toggle('active', ui.recursive);
   if (btnHidden)    btnHidden.classList.toggle('active', ui.showHidden);
@@ -292,7 +302,7 @@ document.addEventListener('keydown', function(e) {
         }
         return;
       case 'v':
-        e.preventDefault(); selector.toggleThumbnails(); return;
+        e.preventDefault(); toggleThumbnails(); return;
       case 'Tab': {
         e.preventDefault();
         if (ui.queueMode && focusMode == 'viewer') {
