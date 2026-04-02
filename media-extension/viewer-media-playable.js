@@ -20,7 +20,7 @@
 //   PlayableContent.
 //
 // Calls into globals defined in earlier / later modules:
-//   imagePaneEl, selectorStateBeforeFS, ui, applySelector, (viewer-ui.js)
+//   imagePaneEl, ui, applySelector, (viewer-ui.js)
 //   _hasAnnounced, _bcPost, _updateChannelWiring,
 //   loadAvSettings, playAndAnnounce, togglePlayPause,      (viewer-audio.js)
 //   _qState, _vqLoad,                                      (viewer-queue-mgt.js)

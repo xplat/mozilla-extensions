@@ -283,6 +283,13 @@ class FileList {
 
   // ── Item selection ──────────────────────────────────────────────────────────
 
+  static needsScroll(item) {
+    const containerRect = this.#container.getBoundingClientRect();
+    const itemRect = item.getBoundingClientRect();
+
+    return itemRect.top < containerRect.top || itemRect.bottom > containerRect.bottom;
+  }
+
   selectItem(idx, scroll) {
     if (idx >= this.#listing.length) return;
     if (this.#selIdx >= 0) this.#items[this.#selIdx].classList.remove('selected');
@@ -291,20 +298,20 @@ class FileList {
     const el = this.#items[idx];
     if (!el) return;
     el.classList.add('selected');
-    if (!scroll) return;
+    if (!scroll || !FileList.needsScroll(el)) return;
     el.scrollIntoView({ block: 'center' });
     this.#scrollIdx = -1;
   }
 
-  markActive(idx, scroll, block = 'nearest') {
+  markActive(idx, scroll) {
     if (idx < 0 || idx >= this.#listing.length) return;
     if (this.#activeIdx >= 0) this.#items[this.#activeIdx].classList.remove('active');
     this.#activeIdx = idx;
     const el = this.#items[idx];
     if (!el) return;
     el.classList.add('active');
-    if (!scroll) return;
-    el.scrollIntoView({ block });
+    if (!scroll || !FileList.needsScroll(el)) return;
+    el.scrollIntoView({ block: "center });
   }
 
   // ── Item opening / file navigation ─────────────────────────────────────────
@@ -488,4 +495,5 @@ class FileList {
   get listing()     { return this.#listing;   }
   get activeIdx()   { return this.#activeIdx; }
   get selectedIdx() { return this.#selIdx;    }
+  get _items()      { return this.#items;     }
 }

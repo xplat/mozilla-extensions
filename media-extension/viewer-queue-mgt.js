@@ -108,12 +108,14 @@ function setQueueMode(mode) {
   // and the next few items after it are visible, giving context for what plays.
   if (mode === 'audio') {
     audioQueueList.listing = _qAudioItems();
-    audioQueueList.markActive(_qState.audio.index, true, 'start');
+    audioQueueList.markActive(_qState.audio.index, false);
     audioQueueList.selectItem(_qState.audio.index, false);
+    audioQueueList.items[_qState.audio.index].scrollIntoView({block: "start"});
   } else if (mode === 'video') {
     videoQueueList.listing = _qVideoItems();
-    videoQueueList.markActive(_qState.video.index, true, 'start');
+    videoQueueList.markActive(_qState.video.index, false);
     videoQueueList.selectItem(_qState.video.index, false);
+    videoQueueList.items[_qState.video.index].scrollIntoView({block: "start"});
   }
 }
 
