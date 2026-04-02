@@ -2,21 +2,22 @@
 // ── viewer-queue-mgt.js ───────────────────────────────────────────────────────
 //
 // Queue state, BroadcastChannel queue listener, mode switching, queue pane
-// rendering, video-queue navigation, directory-collection helpers, and the
-// queue-pane keyboard handler.
+// FileList subclasses, video-queue navigation, and directory-collection helpers.
 //
 // Declares these globals used by other modules:
-//   _qState, _queueSelIdx,
-//   cycleQueueMode, renderQueuePane, handleQueueFocusKey,
+//   _qState,
+//   audioQueueList, videoQueueList,
+//   cycleQueueMode, setQueueMode,
 //   updateQueueChannelWiring,
 //   _vqLoad, _vqNext, _vqPrev,
 //   _collectAndQueueDir.
 //
 // Calls into globals defined in earlier / later modules:
-//   ui, focusMode, setFocusMode, applySelector,     (viewer-ui.js)
-//   queueListEl, queueClearBtn,                      (viewer-ui.js)
-//   _bcPost, toProxyDir, mediaType, showMediaFile,   (viewer.js)
-//   _pendingQueuePlay.                               (viewer.js)
+//   ui, focusMode, setFocusMode, applySelector,                (viewer-ui.js)
+//   audioQueuePaneEl, audioQueueClearBtn,                      (viewer-ui.js)
+//   videoQueuePaneEl, videoQueueClearBtn,                      (viewer-ui.js)
+//   _bcPost, toProxyDir, mediaType, showMediaFile,             (viewer.js)
+//   _pendingQueuePlay.                                         (viewer.js)
 
 // ── Queue state (mirrored from background via BroadcastChannel) ───────────────
 //
@@ -37,10 +38,6 @@ function _qVideoItems() {
   try { return JSON.parse(localStorage.getItem('media-video-queue') || '{}').items || []; }
   catch (e) { return []; }
 }
-
-// ── Queue pane cursor ─────────────────────────────────────────────────────────
-
-var _queueSelIdx = 0;
 
 // ── Queue BroadcastChannel listener ──────────────────────────────────────────
 
@@ -79,12 +76,12 @@ function _vqLoad(index) {
   var items = _qVideoItems();
   if (index < 0 || index >= items.length) return;
   _pendingQueuePlay = true;
-  _queueSelIdx      = index;
   var item          = items[index];
-  var fullPath      = item.dir.replace(/\/$/, '') + '/' + item.file;
+  var fullPath      = item.p.replace(/\/$/, '') + '/' + item.u;
   var newItem       = (index !== _qState.video.index);
   if (newItem) _qState.video.time = 0;  // new item — start from beginning
-  showMediaFile(item.file, fullPath, /*isQueueItem=*/ true);
+  videoQueueList.markActive(index, true);  // optimistic cursor update
+  showMediaFile(item.u, fullPath, /*isQueueItem=*/ true, /*queueIndex=*/ index);
   if (newItem) _bcPost('media-queue', { cmd: 'q-jump', type: 'video', index: index });
 }
 function _vqNext() { _vqLoad(_qState.video.index + 1); }
@@ -99,92 +96,42 @@ function cycleQueueMode() {
 }
 
 function setQueueMode(mode) {
-  var old = ui.queueMode;
   ui.queueMode = mode;
 
   setFocusMode('list'); // XXX Focus should return to where it was if it goes
                         //     a full cycle without a manual switch, probably.
 
-  if (mode === 'video' && old !== 'video') {
-    // Entering video queue mode: show queue pane with cursor at current index.
-    // The item is NOT loaded here — user must press Enter/Space in the queue
-    // pane.  This prevents a video starting every time the user passes through
-    // video-queue mode cycling toward audio-queue mode.
-    _queueSelIdx  = _qState.video.index;
-  } else if (mode === 'audio' && old !== 'audio') {
-    _queueSelIdx = _qState.audio.index;
-  }
-
   applySelector();
-  renderQueuePane();
   _updateChannelWiring();
-  return;
-}
 
-// ── Queue pane rendering ──────────────────────────────────────────────────────
-
-// Render the queue playlist into #queue-list based on current _qState.
-function renderQueuePane() {
-  if (!queueListEl) return;
-  if (!ui.queueMode) { queueListEl.innerHTML = ''; return; }
-
-  var isAudio = (ui.queueMode === 'audio');
-  var q       = isAudio ? _qState.audio : _qState.video;
-  var items   = isAudio ? _qAudioItems() : _qVideoItems();
-  queueListEl.innerHTML = '';
-
-  items.forEach(function(item, idx) {
-    var el   = document.createElement('div');
-    el.className = 'file-item' +
-                   (idx === q.index ? ' active' : '') +
-                   (idx === _queueSelIdx ? ' selected' : '');
-    el.dataset.idx = String(idx);
-
-    var icon = document.createElement('span');
-    icon.className   = 'file-icon';
-    icon.textContent = isAudio ? '♪' : '▶';
-
-    var name = document.createElement('span');
-    name.className   = 'file-name';
-    name.textContent = item.file;
-    name.title       = item.file;
-
-    el.appendChild(icon);
-    el.appendChild(name);
-
-    el.addEventListener('click', function() {
-      _bcPost('media-queue', {
-        cmd: 'q-jump', type: isAudio ? 'audio' : 'video', index: idx
-      });
-    });
-
-    queueListEl.appendChild(el);
-  });
-
-  // Scroll keyboard-selected (or playing) item into view.
-  var sel = queueListEl.querySelector('.selected') ||
-            queueListEl.querySelector('.active');
-  if (sel) sel.scrollIntoView({ block: 'nearest' });
+  // Populate the newly-visible queue pane.  block:'start' so the active item
+  // and the next few items after it are visible, giving context for what plays.
+  if (mode === 'audio') {
+    audioQueueList.listing = _qAudioItems();
+    audioQueueList.markActive(_qState.audio.index, true, 'start');
+    audioQueueList.selectItem(_qState.audio.index, false);
+  } else if (mode === 'video') {
+    videoQueueList.listing = _qVideoItems();
+    videoQueueList.markActive(_qState.video.index, true, 'start');
+    videoQueueList.selectItem(_qState.video.index, false);
+  }
 }
 
 // ── Queue state sync ──────────────────────────────────────────────────────────
 
-// Called when background broadcasts new queue state.
+// Called when background broadcasts new queue state.  Refreshes the visible
+// queue pane listing and syncs the active-item cursor.
 function _onQueueStateUpdate(prev) {
-  if (ui.queueMode === 'video') {
-    var newIdx = _qState.video.index;
-    if (newIdx !== prev.video.index) {
-      // Sync cursor only.  Actual loading is done by _vqLoad(), handleQueueFocusKey(),
-      // and _onMediaEnded() — not here — so that _pendingQueuePlay is only set when
-      // a human action or auto-advance intends playback.
-      _queueSelIdx = newIdx;
-    }
-  } else if (ui.queueMode === 'audio' && _qState.audio.index !== prev.audio.index) {
-    // Keep cursor in sync with auto-advances (end-of-track, skip) but not
-    // user-initiated jumps (those set _queueSelIdx before posting q-jump).
-    _queueSelIdx = _qState.audio.index;
+  if (ui.queueMode === 'audio') {
+    // Re-read items in case q-add or q-clear changed the list.
+    audioQueueList.listing = _qAudioItems();
+    audioQueueList.markActive(_qState.audio.index, true);
+  } else if (ui.queueMode === 'video') {
+    videoQueueList.listing = _qVideoItems();
+    // Sync cursor only.  Actual loading is done by _vqLoad() — not here —
+    // so that _pendingQueuePlay is only set when playback is truly intended.
+    videoQueueList.markActive(_qState.video.index, true);
   }
-  renderQueuePane();
 }
 
 // ── Directory collection ──────────────────────────────────────────────────────
@@ -217,8 +164,8 @@ async function _collectQueueables(dirUrl, audioItems, videoItems) {
   });
   files.forEach(function(f) {
     var mt = mediaType(f.u);
-    if (mt === 'audio') audioItems.push({ dir: dirUrl, file: f.u });
-    else if (mt === 'video') videoItems.push({ dir: dirUrl, file: f.u });
+    if (mt === 'audio') audioItems.push(Object.assign({}, f, { p: dirUrl }));
+    else if (mt === 'video') videoItems.push(Object.assign({}, f, { p: dirUrl }));
   });
 
   // Recurse only into subdirectories named like "CD 1", "Disc 2", etc.
@@ -233,49 +180,54 @@ async function _collectQueueables(dirUrl, audioItems, videoItems) {
   }
 }
 
-// ── Clear-queue button ────────────────────────────────────────────────────────
+// ── Clear-queue buttons ───────────────────────────────────────────────────────
 
-if (queueClearBtn) {
-  queueClearBtn.addEventListener('click', function() {
-    if (!ui.queueMode) return;
-    _bcPost('media-queue', {
-      cmd: 'q-clear',
-      type: ui.queueMode === 'video' ? 'video' : 'audio'
-    });
+if (audioQueueClearBtn) {
+  audioQueueClearBtn.addEventListener('click', function() {
+    _bcPost('media-queue', { cmd: 'q-clear', type: 'audio' });
+  });
+}
+if (videoQueueClearBtn) {
+  videoQueueClearBtn.addEventListener('click', function() {
+    _bcPost('media-queue', { cmd: 'q-clear', type: 'video' });
   });
 }
 
-// ── Queue-pane keyboard handler ───────────────────────────────────────────────
+// ── Queue pane FileList subclasses ────────────────────────────────────────────
 
-function handleQueueFocusKey(e, key) {
-  var isAudio = (ui.queueMode === 'audio');
-  var items   = isAudio ? _qAudioItems() : _qVideoItems();
-  if (!items.length) return;
-  switch (key) {
-    case 'ArrowDown': case 'j':
-      e.preventDefault();
-      _queueSelIdx = Math.min(items.length - 1, _queueSelIdx + 1);
-      renderQueuePane();
-      break;
-    case 'ArrowUp': case 'k':
-      e.preventDefault();
-      _queueSelIdx = Math.max(0, _queueSelIdx - 1);
-      renderQueuePane();
-      break;
-    case 'Enter': case ' ':
-      e.preventDefault();
-      if (isAudio) {
-        _bcPost('media-queue', { cmd: 'q-jump', type: 'audio', index: _queueSelIdx });
-      } else {
-        // Load directly (don't wait for q-changed round-trip) so it works even
-        // when the queue index doesn't change (first Enter after entering queue mode).
-        _vqLoad(_queueSelIdx);
-        setFocusMode('viewer');
-      }
-      break;
-    case 'Escape': case 'ArrowLeft':
-      e.preventDefault();
-      setQueueMode(null);
-      break;
+class AudioQueueList extends FileList {
+  constructor(ui, el) { super(ui, el); }
+
+  fullPathOf(item) { return item.p.replace(/\/$/, '') + '/' + item.u; }
+
+  // Open an audio queue item: mark active optimistically, then broadcast
+  // q-jump.  Audio plays in the background script, so we stay in list focus.
+  openItem(idx, passive = false) {
+    const items = _qAudioItems();
+    if (idx < 0 || idx >= items.length) return;
+    this.markActive(idx, true);
+    _bcPost('media-queue', { cmd: 'q-jump', type: 'audio', index: idx });
   }
+
+  goToParent() { setQueueMode(null); }
 }
+
+class VideoQueueList extends FileList {
+  constructor(ui, el) { super(ui, el); }
+
+  fullPathOf(item) { return item.p.replace(/\/$/, '') + '/' + item.u; }
+
+  // Open a video queue item: load directly (don't wait for q-changed round-trip)
+  // so it works even when the queue index doesn't change (first Enter after
+  // entering video-queue mode).  Switch to viewer focus so the user can control
+  // the video immediately.
+  openItem(idx, passive = false) {
+    _vqLoad(idx);
+    if (!passive) setFocusMode('viewer');
+  }
+
+  goToParent() { setQueueMode(null); }
+}
+
+var audioQueueList = new AudioQueueList(ui, audioQueuePaneEl);
+var videoQueueList = new VideoQueueList(ui, videoQueuePaneEl);

@@ -58,13 +58,22 @@
           </div>
         </div>
 
-        <!-- LEFT (queue mode): playlist replaces selector -->
-        <div class="list-pane" id="queue-pane">
-          <div id="queue-pane-header" class="list-header">
-            <span id="queue-pane-title" class="list-header-title"></span>
-            <button id="queue-clear-btn" class="mode-btn" title="Clear queue">CLR</button>
+        <!-- LEFT (audio queue mode): audio playlist replaces selector -->
+        <div class="list-pane" id="audio-queue-pane">
+          <div id="audio-queue-header" class="list-header">
+            <span class="list-header-title">AUDIO QUEUE</span>
+            <button id="audio-queue-clear-btn" class="mode-btn" title="Clear audio queue">CLR</button>
           </div>
-          <div class="list-list" id="queue-list"></div>
+          <div class="list-list" id="audio-queue-list"></div>
+        </div>
+
+        <!-- LEFT (video queue mode): video playlist replaces selector -->
+        <div class="list-pane" id="video-queue-pane">
+          <div id="video-queue-header" class="list-header">
+            <span class="list-header-title">VIDEO QUEUE</span>
+            <button id="video-queue-clear-btn" class="mode-btn" title="Clear video queue">CLR</button>
+          </div>
+          <div class="list-list" id="video-queue-list"></div>
         </div>
 
         <!-- DIVIDER: drag to resize panes -->

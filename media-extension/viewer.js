@@ -58,8 +58,8 @@ const FULLSCREEN_DIMS = new Set([
 // transformHostEl, mainImageEl, imgSpinnerEl — declared in viewer-media-image.js.
 // applyImageTransform, zoom/rotate/scale/scroll — viewer-media-image.js.
 
-// _qState, _queueSelIdx, _vqLoad/_vqNext/_vqPrev, cycleQueueMode,
-// renderQueuePane, handleQueueFocusKey, _collectAndQueueDir —
+// _qState, _vqLoad/_vqNext/_vqPrev, cycleQueueMode,
+// audioQueueList, videoQueueList, _collectAndQueueDir —
 // all defined in viewer-queue-mgt.js (loaded before this file).
 
 // _updateChannelWiring, _bcPost, _mediaListenCh — defined in viewer-audio.js.
@@ -154,7 +154,7 @@ function updateInfoOverlay(filename) {
 // ── Focus mode, applyUiState, global keydown ──────────────────────────────
 // Moved to viewer-ui.js.
 
-// handleQueueFocusKey — moved to viewer-queue-mgt.js.
+// Queue key handling — moved into AudioQueueList/VideoQueueList in viewer-queue-mgt.js.
 
 function handleViewerKey(e, key, ctrl, plain) {
   content.handleKey(e, key, ctrl, plain);
@@ -251,14 +251,15 @@ catch (err) { console.warn('createMediaElementSource(videoEl) failed:', err); }
 // the path is constructed from selector.currentDir + filename as usual.
 // isQueueItem: true when called from _vqLoad — suppresses per-file position
 // persistence and routes time tracking through the video queue state instead.
-function showMediaFile(filename, fullPath, isQueueItem) {
+// queueIndex: the video queue index, passed explicitly from _vqLoad.
+function showMediaFile(filename, fullPath, isQueueItem, queueIndex) {
   var fp = fullPath ||
     (selector.currentDir
       ? selector.currentDir.replace(/\/$/, '') + '/' + filename
       : null);
   if (!fp) return;
   content.load(makeContentOccupant(fp, !!isQueueItem,
-    isQueueItem ? _queueSelIdx : undefined));
+    isQueueItem ? queueIndex : undefined));
 }
 
 

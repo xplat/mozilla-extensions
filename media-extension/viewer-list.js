@@ -296,7 +296,7 @@ class FileList {
     this.#scrollIdx = -1;
   }
 
-  markActive(idx, scroll) {
+  markActive(idx, scroll, block = 'nearest') {
     if (idx < 0 || idx >= this.#listing.length) return;
     if (this.#activeIdx >= 0) this.#items[this.#activeIdx].classList.remove('active');
     this.#activeIdx = idx;
@@ -304,7 +304,7 @@ class FileList {
     if (!el) return;
     el.classList.add('active');
     if (!scroll) return;
-    el.scrollIntoView({ block: 'center' });
+    el.scrollIntoView({ block });
   }
 
   // ── Item opening / file navigation ─────────────────────────────────────────

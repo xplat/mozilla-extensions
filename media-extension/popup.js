@@ -31,7 +31,7 @@ function render(state) {
     return;
   }
   var item = items[a.index] || {};
-  trackEl.textContent = (a.index + 1) + '/' + items.length + '  ' + (item.file || '');
+  trackEl.textContent = (a.index + 1) + '/' + items.length + '  ' + (item.u || '');
   timeEl.textContent  = fmtTime(a.time || 0);
 
   if (a.suppressed) {

@@ -212,7 +212,7 @@ class Selector extends FileList {
       if (mt !== 'audio' && mt !== 'video') return;
       _bcPost('media-queue', {
         cmd: 'q-add', type: mt,
-        items: [{ dir: this.#dir, file: item.u }]
+        items: [Object.assign({}, item, { p: this.#dir })]
       });
       this.nextFile();
     }

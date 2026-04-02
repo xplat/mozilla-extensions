@@ -12,13 +12,15 @@
 //   (DOM refs) pickScreenEl, loadingScreenEl, errorScreenEl, viewerScreenEl,
 //     dirPathEl, fileListEl, selectorPaneEl, imagePaneEl, paneDividerEl,
 //     btnRecursive, btnHidden, btnSort,
-//     queuePaneEl, queuePaneTitleEl, queueListEl, queueClearBtn.
+//     audioQueuePaneEl, audioQueueClearBtn,
+//     videoQueuePaneEl, videoQueueClearBtn.
 //
 // Calls into globals defined in later modules (viewer-selector.js, viewer.js):
-//   selector, toggleInfoOverlay, cycleQueueMode, renderQueuePane,
+//   selector, toggleInfoOverlay, cycleQueueMode,
+//   audioQueueList, videoQueueList,
 //   toggleMute, togglePlayPause, adjustVolume, adjustBalance, toggleAutoplay,
-//   _bcPost, _qState, _queueSelIdx, activeMediaEl, _updateVideoControls,
-//   handleQueueFocusKey, handleViewerKey, applyImageTransform,
+//   _bcPost, _qState, activeMediaEl, _updateVideoControls,
+//   handleViewerKey, applyImageTransform,
 //   mainImageEl, videoProgressEl.
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
@@ -38,10 +40,10 @@ var btnRecursive = document.getElementById('btn-recursive');
 var btnHidden    = document.getElementById('btn-hidden');
 var btnSort      = document.getElementById('btn-sort');
 
-var queuePaneEl      = document.getElementById('queue-pane');
-var queuePaneTitleEl = document.getElementById('queue-pane-title');
-var queueListEl      = document.getElementById('queue-list');
-var queueClearBtn    = document.getElementById('queue-clear-btn');
+var audioQueuePaneEl   = document.getElementById('audio-queue-pane');
+var audioQueueClearBtn = document.getElementById('audio-queue-clear-btn');
+var videoQueuePaneEl   = document.getElementById('video-queue-pane');
+var videoQueueClearBtn = document.getElementById('video-queue-clear-btn');
 
 // ── Persistent UI state ───────────────────────────────────────────────────────
 //
@@ -158,10 +160,17 @@ function adjustSelectorWidth(delta) {
 function applySelector() {
   viewerScreenEl.classList.toggle('no-selector', !ui.selectorVisible);
   viewerScreenEl.classList.toggle('queue-mode',  !!ui.queueMode);
-  if (ui.queueMode && queuePaneTitleEl) {
-    queuePaneTitleEl.textContent = (ui.queueMode === 'video') ? 'VIDEO QUEUE' : 'AUDIO QUEUE';
-  }
+  viewerScreenEl.dataset.queueMode = ui.queueMode || '';
   if (btnRecursive) btnRecursive.classList.toggle('active', ui.recursive);
+}
+
+// Returns the FileList instance for the currently active queue pane, or null.
+// Forward references audioQueueList / videoQueueList — defined in viewer-queue-mgt.js
+// which loads after this file, but this function is only called at runtime.
+function _activeQueueList() {
+  if (ui.queueMode === 'audio') return audioQueueList;
+  if (ui.queueMode === 'video') return videoQueueList;
+  return null;
 }
 
 function toggleSelector() {
@@ -305,12 +314,10 @@ document.addEventListener('keydown', function(e) {
         e.preventDefault(); toggleThumbnails(); return;
       case 'Tab': {
         e.preventDefault();
-        if (ui.queueMode && focusMode == 'viewer') {
-          _queueSelIdx = _qState[ui.queueMode].index;
-        }
         setFocusMode(focusMode === 'list' ? 'viewer' : 'list');
-        if (ui.queueMode && focusMode == 'list') {
-          renderQueuePane();
+        // When returning to list focus in queue mode, sync cursor to active item.
+        if (ui.queueMode && focusMode === 'list') {
+          _activeQueueList()?.receiveFocus();
         }
         return;
       }
@@ -348,7 +355,7 @@ document.addEventListener('keydown', function(e) {
 
   if (focusMode === 'list') {
     if (ui.queueMode) {
-      if (plain) handleQueueFocusKey(e, key);
+      _activeQueueList()?.handleKey(e, key, ctrl, plain);
     } else {
       selector.handleKey(e, key, ctrl, plain);
     }

@@ -127,8 +127,8 @@ connectNative();
 // the background must therefore use the real port + token URL directly.
 //
 // State layout:
-//   _aq  { items: [{dir, file}, …], index, time }  — audio queue
-//   _vq  { items: [{dir, file}, …], index, time }  — video queue
+//   _aq  { items: [{u, p, …}, …], index, time }  — audio queue  (filestat + p)
+//   _vq  { items: [{u, p, …}, …], index, time }  — video queue (filestat + p)
 //     (video plays in the viewer tab; background only tracks list + position)
 //
 // _aqPlaying   = true  means the user wants the queue to be playing.
@@ -233,7 +233,7 @@ function _loadAudioItem(index, timeOffset, autoPlay) {
     return;
   }
   var item    = _aq.items[index];
-  var fileUrl = item.dir.replace(/\/$/, '') + '/' + item.file;
+  var fileUrl = item.p.replace(/\/$/, '') + '/' + item.u;
   _aq.index = index;
   _aq.time  = timeOffset;
 

@@ -21,6 +21,7 @@ restarts from the beginning.  Paths are optional when --play is used alone.
 
 import os, re, sys
 import argparse
+from pathlib import Path
 
 from viewer_host_utils import cache_dir, enqueue_request
 
@@ -42,6 +43,36 @@ def _media_type(name):
     return None
 
 
+def _entry_filestat(entry, dir_url):
+    """Build a filestat dict from a DirEntry for use as a queue item."""
+    info = {'u': entry.name, 'p': dir_url}
+    try:
+        st = entry.stat(follow_symlinks=True)
+        info['m'] = int(st.st_mtime)
+        info['s'] = st.st_size
+    except OSError:
+        pass
+    if not os.access(entry.path, os.R_OK):
+        info['r'] = 0
+    return info
+
+
+def _file_filestat(file_path):
+    """Build a filestat dict for a single absolute file path."""
+    p = Path(file_path)
+    dir_url = p.parent.as_uri() + '/'
+    info = {'u': p.name, 'p': dir_url}
+    try:
+        st = p.stat()
+        info['m'] = int(st.st_mtime)
+        info['s'] = st.st_size
+    except OSError:
+        pass
+    if not os.access(file_path, os.R_OK):
+        info['r'] = 0
+    return info
+
+
 def _collect_dir(dir_path, audio_items, video_items):
     """Collect queued audio/video items from *dir_path*.
 
@@ -50,6 +81,7 @@ def _collect_dir(dir_path, audio_items, video_items):
     are recursed in disc-number order after the flat files, mirroring the
     viewer's Q-key queueing behaviour.
     """
+    dir_url = Path(dir_path).as_uri() + '/'
     try:
         entries = sorted(os.scandir(dir_path), key=lambda e: e.name.lower())
     except OSError as exc:
@@ -61,9 +93,9 @@ def _collect_dir(dir_path, audio_items, video_items):
         if entry.is_file(follow_symlinks=True):
             mt = _media_type(entry.name)
             if mt == 'audio':
-                audio_items.append({'dir': dir_path, 'file': entry.name})
+                audio_items.append(_entry_filestat(entry, dir_url))
             elif mt == 'video':
-                video_items.append({'dir': dir_path, 'file': entry.name})
+                video_items.append(_entry_filestat(entry, dir_url))
         elif entry.is_dir(follow_symlinks=True) and _DISC_RE.match(entry.name):
             disc_subdirs.append(entry)
 
@@ -99,9 +131,9 @@ def main():
                 print(f'warning: {target}: not a supported audio/video type, skipping',
                       file=sys.stderr)
             elif mt == 'audio':
-                audio_items.append({'dir': os.path.dirname(target), 'file': os.path.basename(target)})
+                audio_items.append(_file_filestat(target))
             else:
-                video_items.append({'dir': os.path.dirname(target), 'file': os.path.basename(target)})
+                video_items.append(_file_filestat(target))
         else:
             print(f'error: {raw}: no such file or directory', file=sys.stderr)
             error = True

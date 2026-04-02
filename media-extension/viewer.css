@@ -773,28 +773,29 @@ html, body {
 }
 
 
-/* ── QUEUE PANE ──────────────────────────────────────────────────────────── */
+/* ── QUEUE PANES ─────────────────────────────────────────────────────────── */
 
-/* Queue pane occupies the same slot as the selector pane; they are mutually
-   exclusive.  In queue mode #selector-pane is hidden and #queue-pane shown. */
-#queue-pane {
+/* Queue panes occupy the same slot as the selector pane; all three are
+   mutually exclusive.  In queue mode #selector-pane is hidden and the
+   appropriate queue pane shown via [data-queue-mode]. */
+#audio-queue-pane,
+#video-queue-pane {
   display: none;
 }
 
-#viewer-screen.queue-mode   #selector-pane { display: none; }
-#viewer-screen.queue-mode   #queue-pane    { display: flex; }
+#viewer-screen.queue-mode                        #selector-pane    { display: none; }
+#viewer-screen[data-queue-mode="audio"]          #audio-queue-pane { display: flex; }
+#viewer-screen[data-queue-mode="video"]          #video-queue-pane { display: flex; }
 
-#queue-pane-header {
+#audio-queue-header,
+#video-queue-header {
   padding: 0 6px;
   gap: 4px;
 }
 
-#queue-pane-title {
-  letter-spacing: 0.05em;
-}
-
 /* Focus indicator: queue pane header bar highlights like the selector divider */
-#viewer-screen[data-focus="list"] #queue-pane-header {
+#viewer-screen[data-focus="list"][data-queue-mode="audio"] #audio-queue-header,
+#viewer-screen[data-focus="list"][data-queue-mode="video"] #video-queue-header {
   border-bottom-color: var(--focus-ring);
 }
 
