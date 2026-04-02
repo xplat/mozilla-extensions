@@ -92,18 +92,33 @@ class FileList {
     // ResizeObserver preserves the scroll position of a "center" item across
     // container/item height changes (e.g. thumbnail mode toggle, font resize).
     //
-    // Invariant: there exists a point h such that h's fractional position
-    // within the center item equals its fractional position within the
-    // viewport.  Solving the equal-ratio equation:
+    // PRIMARY formula — equal-ratio invariant: there exists a point h such that
+    // h's fractional position within the center item equals its fractional
+    // position within the viewport.  Solving the equal-ratio equation gives:
     //
-    //   frac = (cTop - visTop) / (clientH - cSize)
+    //   frac    = (cTop - visTop) / (clientH - cSize)
+    //   visTop' = cTop' + frac * (cSize' - clientH')
     //
-    // and after the resize:
+    // This formula divides by (clientH - cSize).  When the viewport is nearly
+    // the same height as the center item that denominator is small, and any
+    // rounding in the subtraction is amplified.
     //
-    //   visTop_new = cTop_new + frac * (cSize_new - clientH_new)
+    // FALLBACK formula — center-fraction invariant: when the item fills most of
+    // the viewport (|clientH - cSize| < ½ cSize) we instead preserve the
+    // fractional position of the viewport centre within the center item:
     //
-    // This is an identity when nothing changes, and degenerates gracefully
-    // to visTop_new = cTop_new when clientH == cSize (viewport = one item).
+    //   centerFrac = (visTop + clientH/2 - cTop) / cSize
+    //   visTop'    = cTop' + centerFrac * cSize' - clientH'/2
+    //
+    // The denominator here is cSize (always large), so there is no cancellation.
+    // Both formulas share the same limit as clientH → cSize, so the switch is
+    // seamless at the boundary.  The fallback is NOT used for the whole-list
+    // pseudo-center (cSize = scrollH >> clientH), where the primary formula is
+    // always well-conditioned.
+    //
+    // Off-screen items are not used as a center: if the preferred item has been
+    // scrolled out of view (e.g. by the scroll wheel or scrollbar) we fall back
+    // to the whole-list pseudo-center so we preserve what is actually visible.
     this.#resizeObserver = new ResizeObserver((_entries) => {
       const itemH_new   = this.#items[0]?.offsetHeight ?? 0;
       const clientH_new = this.#container.clientHeight;
@@ -127,28 +142,41 @@ class FileList {
       // Nothing relevant changed.
       if (itemH_new === itemH_old && clientH_new === clientH_old) return;
 
-      // Pick the highest-priority center item.
-      const centerIdx = this.#scrollIdx >= 0 ? this.#scrollIdx
-                      : this.#selIdx    >= 0 ? this.#selIdx
-                      : this.#activeIdx >= 0 ? this.#activeIdx
-                      : -1;
+      // Pick the highest-priority center item that is at least partially
+      // visible.  If none overlaps the viewport, fall through to -1.
+      let centerIdx = this.#scrollIdx >= 0 ? this.#scrollIdx
+                    : this.#selIdx    >= 0 ? this.#selIdx
+                    : this.#activeIdx >= 0 ? this.#activeIdx
+                    : -1;
+
+      if (centerIdx >= 0) {
+        const cTop = centerIdx * itemH_old;
+        if (cTop + itemH_old <= visTop_old || cTop >= visTop_old + clientH_old) {
+          centerIdx = -1;
+        }
+      }
 
       let cTop_old, cSize_old, cTop_new, cSize_new;
       if (centerIdx >= 0) {
         cTop_old  = centerIdx * itemH_old;  cSize_old = itemH_old;
         cTop_new  = centerIdx * itemH_new;  cSize_new = itemH_new;
       } else {
-        // No single-item center: treat the entire scroll range as the center,
-        // which preserves fractional scroll position.
+        // No on-screen center item: treat the entire scroll range as the
+        // center, which degrades gracefully to preserving fractional position.
         cTop_old  = 0;  cSize_old = scrollH_old;
         cTop_new  = 0;  cSize_new = scrollH_new;
       }
 
       const denom = clientH_old - cSize_old;
       let visTop_new;
+
       if (denom === 0) {
-        // Viewport exactly fits the center; just align their tops.
+        // Degenerate: viewport exactly matches center size.  Align tops.
         visTop_new = cTop_new;
+      } else if (centerIdx >= 0 && 2 * Math.abs(denom) < cSize_old) {
+        // Near-degenerate single-item center: switch to center-fraction formula.
+        const centerFrac = (visTop_old + clientH_old / 2 - cTop_old) / cSize_old;
+        visTop_new = cTop_new + centerFrac * cSize_new - clientH_new / 2;
       } else {
         const frac = (cTop_old - visTop_old) / denom;
         visTop_new = cTop_new + frac * (cSize_new - clientH_new);
