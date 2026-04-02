@@ -18,6 +18,11 @@ class FileList {
   #resizeObserver = null;
   #ui      = null;   // ui object, use it to persist and query state and such
 
+  // Heights tracked for ResizeObserver scroll-position preservation.
+  #itemH   = 0;
+  #clientH = 0;
+  #scrollH = 0;
+
   // Items are grouped into fixed-height .item-chunk containers so that
   // content-visibility: auto on each chunk lets Gecko skip building frame trees
   // for the ~900 off-screen chunks in a large directory.
@@ -45,7 +50,7 @@ class FileList {
 
   set listing(l) {
     this.#listing = l;
-    this.renderListing();
+    this.renderList();
   }
 
   // ── Selector rendering ──────────────────────────────────────────────────────
@@ -61,7 +66,7 @@ class FileList {
       if (!el || el.classList.contains('dimmed')) return;
       setFocusMode('list');
       this.selectItem(parseInt(el.dataset.idx, 10), false);
-      this.scrollIdx = -1;
+      this.#scrollIdx = -1;
     });
 
     this.#container.addEventListener('dblclick', (e) => {
@@ -84,40 +89,89 @@ class FileList {
       if (item) item.classList.add('thumb-error');
     }, true);
 
-    // CHANGE NEEDED: attach a resizeObserver to this.#container.
-    // - disconnect it during the actual list rendering and reconnect it after.
-    //   leave it disconnected if there are no items.
-    // - track old clientHeight, scrollHeight, old height of #items[0] in
-    //   private fields.
-    // - when they change, pick a "center": #scrollIdx, #selIdx, #activeIdx in
-    //   priority order.
-    // - compute where the "center" was and is using the fact that all of
-    //   #items have the same height.
-    // - there is a height h where the ratio of (h - top of "center") to
-    //   (bottom of "center" - h) is the same as the ratio of (h - top of
-    //   visible area) to (bottom of visible area - h).
-    // - set scrollTop so the visible area after is positioned so the matching
-    //   ratio is the same before and after the height changes.
-    // - keep in mind the actual ratio may be infinite so be sure to calculate
-    //   the new scrollTop in a way that is numerically stable.
-    // - if there is no appropriate center as a single item, consider the
-    //   entire area from 0 to scrollHeight to be the center.
-    // - when one of the heights is 0 because of a lack of visibility, just
-    //   drop the event in an early guard.
+    // ResizeObserver preserves the scroll position of a "center" item across
+    // container/item height changes (e.g. thumbnail mode toggle, font resize).
+    //
+    // Invariant: there exists a point h such that h's fractional position
+    // within the center item equals its fractional position within the
+    // viewport.  Solving the equal-ratio equation:
+    //
+    //   frac = (cTop - visTop) / (clientH - cSize)
+    //
+    // and after the resize:
+    //
+    //   visTop_new = cTop_new + frac * (cSize_new - clientH_new)
+    //
+    // This is an identity when nothing changes, and degenerates gracefully
+    // to visTop_new = cTop_new when clientH == cSize (viewport = one item).
+    this.#resizeObserver = new ResizeObserver((_entries) => {
+      const itemH_new   = this.#items[0]?.offsetHeight ?? 0;
+      const clientH_new = this.#container.clientHeight;
+      const scrollH_new = this.#container.scrollHeight;
+
+      // Drop events while the container is invisible.
+      if (!clientH_new || !scrollH_new) return;
+
+      const itemH_old   = this.#itemH;
+      const clientH_old = this.#clientH;
+      const scrollH_old = this.#scrollH;
+      const visTop_old  = this.#container.scrollTop;
+
+      // Always update stored heights so the next event has fresh baselines.
+      this.#itemH   = itemH_new;
+      this.#clientH = clientH_new;
+      this.#scrollH = scrollH_new;
+
+      // First observation after (re)connect: no old baseline to work from.
+      if (!itemH_old || !clientH_old || !scrollH_old) return;
+      // Nothing relevant changed.
+      if (itemH_new === itemH_old && clientH_new === clientH_old) return;
+
+      // Pick the highest-priority center item.
+      const centerIdx = this.#scrollIdx >= 0 ? this.#scrollIdx
+                      : this.#selIdx    >= 0 ? this.#selIdx
+                      : this.#activeIdx >= 0 ? this.#activeIdx
+                      : -1;
+
+      let cTop_old, cSize_old, cTop_new, cSize_new;
+      if (centerIdx >= 0) {
+        cTop_old  = centerIdx * itemH_old;  cSize_old = itemH_old;
+        cTop_new  = centerIdx * itemH_new;  cSize_new = itemH_new;
+      } else {
+        // No single-item center: treat the entire scroll range as the center,
+        // which preserves fractional scroll position.
+        cTop_old  = 0;  cSize_old = scrollH_old;
+        cTop_new  = 0;  cSize_new = scrollH_new;
+      }
+
+      const denom = clientH_old - cSize_old;
+      let visTop_new;
+      if (denom === 0) {
+        // Viewport exactly fits the center; just align their tops.
+        visTop_new = cTop_new;
+      } else {
+        const frac = (cTop_old - visTop_old) / denom;
+        visTop_new = cTop_new + frac * (cSize_new - clientH_new);
+      }
+
+      this.#container.scrollTop = Math.max(0, Math.round(visTop_new));
+    });
   }
 
   renderList() {
     this.#wireListeners();
+    this.#resizeObserver.disconnect();
+
     this.#container.innerHTML = '';
     this.#items  = [];
     this.#selIdx = -1;
     this.#activeIdx = -1;
     this.#scrollIdx = -1;
-    this.#container.classList.toggle('thumbnails', ui.thumbnails);
+    this.#container.classList.toggle('thumbnails', this.#ui.thumbnails);
 
     let chunk = null;
     this.#listing.forEach((item, idx) => {
-      if (idx % Selector.#CHUNK_SIZE === 0) {
+      if (idx % FileList.#CHUNK_SIZE === 0) {
         chunk = document.createElement('div');
         chunk.className = 'item-chunk';
         this.#container.appendChild(chunk);
@@ -139,8 +193,17 @@ class FileList {
     });
 
     // Last chunk may be smaller than CHUNK_SIZE; tell CSS so its height is exact.
-    const tail = this.#listing.length % Selector.#CHUNK_SIZE;
+    const tail = this.#listing.length % FileList.#CHUNK_SIZE;
     if (tail !== 0 && chunk) chunk.style.setProperty('--chunk-size', tail);
+
+    // Reconnect observer only when there is content to observe.  The first
+    // callback establishes the baseline heights; no scroll adjustment is made.
+    if (this.#items.length > 0) {
+      this.#itemH   = 0;  // reset so first callback skips scroll adjustment
+      this.#clientH = 0;
+      this.#scrollH = 0;
+      this.#resizeObserver.observe(this.#container);
+    }
   }
 
   // Renders all child elements for a file-item in a single pass.  The same DOM
@@ -227,7 +290,7 @@ class FileList {
   }
 
   yieldFocus() {
-    if (this.#selIdx == this.#activeIdx) {
+    if (this.#selIdx === this.#activeIdx) {
       this.#selIdx = -1;
     }
   }
@@ -239,15 +302,15 @@ class FileList {
   nextFile(passive = false) {
     for (let cur = this.#activeIdx + 1; cur < this.#listing.length; cur++) {
       if (this._isViewable(this.#listing[cur])) {
-        return openItem(cur, passive);
+        return this.openItem(cur, passive);
       }
     }
   }
-  
+
   prevFile(passive = false) {
     for (let cur = this.#activeIdx - 1; cur >= 0; cur--) {
       if (this._isViewable(this.#listing[cur])) {
-        return openItem(cur, passive);
+        return this.openItem(cur, passive);
       }
     }
   }
@@ -258,11 +321,11 @@ class FileList {
     if (this.#selIdx >= 0) {
       return this.#selIdx;
     } else if (this.#activeIdx >= 0) {
-      return this.activeIdx;
-    } else if (goingUp) { 
+      return this.#activeIdx;
+    } else if (goingUp) {
       return this.#listing.length;
     } else {
-      return -1; 
+      return -1;
     }
   }
 
@@ -284,21 +347,49 @@ class FileList {
     return -1;
   }
 
-  pageDown() { 
-    const start = max(0,this.#startIdx(false));
+  pageDown() {
+    const start   = Math.max(0, this.#startIdx(false));
+    const itemH   = this.#items[0]?.offsetHeight ?? 0;
+    const clientH = this.#container.clientHeight;
 
-    // Spec:
-    // - Find the last item that will fit in a #this.container.clientHeight
-    //   with `start`, or the next item if #this.container.clientHeight is
-    //   less than twice as big as an item height.  Set #scrollIdx to this.
-    // - Scroll the new #scrollIdx onto the page with "nearest".
-    // - Select the last selectable index between the new #scrollIdx and start,
-    //   inclusive, with selectItem(..., false).  If there is no selectable
-    //   index in range, just return and leave the selection where it was.
+    // If the viewport fits at least two items, advance by a full page (the
+    // last item that still fits on-screen alongside start).  Otherwise just
+    // step one item so we never skip past unreachable items.
+    let end;
+    if (itemH > 0 && clientH >= 2 * itemH) {
+      end = Math.min(start + Math.floor(clientH / itemH) - 1, this.#listing.length - 1);
+    } else {
+      end = Math.min(start + 1, this.#listing.length - 1);
+    }
+
+    this.#scrollIdx = end;
+    this.#items[end]?.scrollIntoView({ block: 'nearest' });
+
+    // Select the selectable item closest to the new scroll position.
+    const sel = this.findLastSelectable(end, start);
+    if (sel < 0) return;
+    this.selectItem(sel, false);
   }
 
   pageUp() {
-    // Spec: Like pageDown but in the opposite direction.
+    const start   = Math.min(this.#listing.length - 1, this.#startIdx(true));
+    const itemH   = this.#items[0]?.offsetHeight ?? 0;
+    const clientH = this.#container.clientHeight;
+
+    let end;
+    if (itemH > 0 && clientH >= 2 * itemH) {
+      end = Math.max(start - Math.floor(clientH / itemH) + 1, 0);
+    } else {
+      end = Math.max(start - 1, 0);
+    }
+
+    this.#scrollIdx = end;
+    this.#items[end]?.scrollIntoView({ block: 'nearest' });
+
+    // Select the selectable item closest to the new scroll position.
+    const sel = this.findSelectable(end, start);
+    if (sel < 0) return;
+    this.selectItem(sel, false);
   }
 
   selectNext() {
@@ -310,7 +401,7 @@ class FileList {
 
   selectPrev() {
     const start = this.#startIdx(true);
-    const next = this.findSelectable(start - 1, 0);
+    const next = this.findLastSelectable(start - 1, 0);
     if (next < 0) return;
     this.selectItem(next, true);
   }
@@ -343,7 +434,7 @@ class FileList {
       case ' ':
       case 'ArrowRight':
       case 'Enter':      e.preventDefault();
-        if (this.#selIdx >= 0 && this.#selIdx != this.#activeIdx) {
+        if (this.#selIdx >= 0 && this.#selIdx !== this.#activeIdx) {
           this.openItem(this.#selIdx);
         } else {
           setFocusMode('viewer');
