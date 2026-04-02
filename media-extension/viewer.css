@@ -302,7 +302,7 @@ html, body {
   contain-intrinsic-block-size: calc(var(--chunk-size, 100) * 22px);
 }
 
-#viewer-screen.thumbnails .list-list .item-chunk {
+#viewer-screen.thumbnails .item-chunk {
   height: calc(var(--chunk-size, 100) * 52px);
   contain-intrinsic-block-size: calc(var(--chunk-size, 100) * 52px);
 }
@@ -502,7 +502,7 @@ html, body {
 /* ── THUMBNAIL MODE ─────────────────────────────────────────────────────── */
 
 /* Keep thumb images out of list-mode layout and unfetched (lazy + display:none) */
-#viewer-screen:not(.thumbnails) .list-list .thumb-img { display: none; }
+#viewer-screen:not(.thumbnails) .thumb-img { display: none; }
 
 #viewer-screen.thumbnails .list-list {
   padding: 2px;
@@ -536,7 +536,7 @@ html, body {
   justify-content: center;
 }
 
-#viewer-screen.thumbnails .list-list .file-item .thumb-img {
+#viewer-screen.thumbnails .file-item .thumb-img {
   grid-column: 1;
   grid-row: 1 / span 2;
   align-self: center;
@@ -579,16 +579,16 @@ html, body {
 
 /* In thumbnail mode, hide the file-icon for items that carry a thumb-img
    (img is visible in its place).  Restored when the thumbnail fails. */
-#viewer-screen.thumbnails .list-list .file-item.has-thumb:not(.thumb-error) .file-icon {
+#viewer-screen.thumbnails .file-item.has-thumb:not(.thumb-error) .file-icon {
   display: none;
 }
 
 /* On thumbnail load failure: hide the broken img and reveal the file-icon
    (already 48×48 from above); just bump the glyph to a readable size. */
-#viewer-screen.thumbnails .list-list .file-item.thumb-error .thumb-img { display: none; }
-#viewer-screen.thumbnails .list-list .file-item.thumb-error .file-icon { font-size: 20px; }
+#viewer-screen.thumbnails .file-item.thumb-error .thumb-img { display: none; }
+#viewer-screen.thumbnails .file-item.thumb-error .file-icon { font-size: 20px; }
 
-#viewer-screen.thumbnails .list-list .file-item.is-dir .file-icon {
+#viewer-screen.thumbnails .file-item.is-dir .file-icon {
   font-size: 16px;
   color: var(--dir-color);
 }
