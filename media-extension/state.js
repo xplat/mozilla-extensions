@@ -101,9 +101,6 @@ export const Hidden   = 'Hidden';
 
 const NAMESPACES = new Set([Query, Fragment, Hidden]);
 
-// Key under which Hidden values are stored in the history.state object.
-const HIDDEN_STATE_KEY = '__state__';
-
 // ---------------------------------------------------------------------------
 // Internal mutable state
 // ---------------------------------------------------------------------------
@@ -156,9 +153,7 @@ function serializeParams(map) {
 
 function readHiddenState() {
   const s = history.state;
-  if (s && typeof s === 'object' && _String(HIDDEN_STATE_KEY) in s)
-    return s[HIDDEN_STATE_KEY];
-  return {};
+  return (s && typeof s === 'object') ? s : {};
 }
 
 /**
@@ -235,7 +230,7 @@ function buildFlushArgs() {
   const search   = querySerial.size    ? '?' + serializeParams(querySerial)    : '';
   const hash     = fragmentSerial.size ? '#' + serializeParams(fragmentSerial) : '';
   const url      = location.pathname + search + hash;
-  const stateObj = { [HIDDEN_STATE_KEY]: hiddenSerial };
+  const stateObj = { ...hiddenSerial };
 
   return [stateObj, url];
 }
