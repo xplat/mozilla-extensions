@@ -14,10 +14,19 @@
 //   ImageContent.
 //
 // Calls into globals defined in earlier / later modules:
-//   ui, imagePaneEl, persistState,                        (viewer-ui.js)
+//   imagePaneEl,                                          (viewer-ui.js)
 //   toProxyFile,                                          (media-shared.js)
 //   infoOverlayEl, updateInfoOverlay,                     (viewer.js)
 //   ImagelikeContent.                                     (viewer-media-imagelike.js)
+
+import { reserve, save, Hidden, Boolean, Float, Enum } from './state.js';
+
+const _zoomFit        = reserve(Hidden, 'zoomFit', Boolean, true);
+const _zoomReduceOnly = reserve(Hidden, 'zoomReduceOnly', Boolean, true);
+const _rotation       = reserve(Hidden, 'rotation', Enum('0', '90', '180', '270'), '0');
+const _scale          = reserve(Hidden, 'scale', Float, 1.0);
+const _mirror         = reserve(Hidden, 'mirror', Boolean, false);
+const _flip           = reserve(Hidden, 'flip', Boolean, false);
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 
@@ -96,7 +105,7 @@ function applyImageTransform() {
   // Capture the exact image pixel at the viewport centre before any changes.
   // Defaults to (0, 0) = image centre for new images (_prevDisplayW == 0).
   var _snapIPX = 0, _snapIPY = 0;
-  if (!ui.zoomFit && _prevDisplayW > 0) {
+  if (!_zoomFit.get() && _prevDisplayW > 0) {
     var _snapPW = pane.clientWidth;
     var _snapPH = pane.clientHeight;
     var _snapOX = Math.max(0, (_snapPW - _prevDisplayW) / 2);
@@ -110,7 +119,7 @@ function applyImageTransform() {
     _snapIPY = _snap.y;
   }
 
-  var rot = ui.rotation;
+  var rot = parseInt(_rotation.get());
 
   // Visual dimensions at scale=1 (W/H swap for 90°/270° rotation)
   var visW = (rot === 90 || rot === 270) ? nh : nw;
@@ -118,14 +127,14 @@ function applyImageTransform() {
 
   // Compute display scale
   var scale;
-  if (ui.zoomFit) {
+  if (_zoomFit.get()) {
     var pW = pane.clientWidth;
     var pH = pane.clientHeight;
     if (!pW || !pH) return;
     scale = Math.min(pW / visW, pH / visH);
-    if (ui.zoomReduceOnly) scale = Math.min(scale, 1.0);
+    if (_zoomReduceOnly.get()) scale = Math.min(scale, 1.0);
   } else {
-    scale = ui.scale;
+    scale = _scale.get();
   }
 
   var displayW = visW * scale;
@@ -147,13 +156,13 @@ function applyImageTransform() {
 
   var parts = [];
   if (rot)       parts.push('rotate(' + rot + 'deg)');
-  if (ui.mirror) parts.push('scaleX(-1)');  // horizontal mirror (M)
-  if (ui.flip)   parts.push('scaleY(-1)');  // vertical flip    (F)
+  if (_mirror.get()) parts.push('scaleX(-1)');  // horizontal mirror (M)
+  if (_flip.get())   parts.push('scaleY(-1)');  // vertical flip    (F)
   if (scale !== 1) parts.push('scale(' + scale + ')');
   img.style.transform = parts.length ? parts.join(' ') : 'none';
 
   // Set pane display mode
-  if (ui.zoomFit) {
+  if (_zoomFit.get()) {
     pane.style.overflow        = 'hidden';
     pane.style.display         = 'flex';
     pane.style.alignItems      = 'center';
@@ -175,13 +184,13 @@ function applyImageTransform() {
   // the new forward transform to find where it lands.  Exact for all cases.
   // When _prevDisplayW == 0 (new image) _snapIPX/Y default to (0,0) = image
   // centre, which centres the image in the viewport.
-  if (!ui.zoomFit) {
+  if (!_zoomFit.get()) {
     var pW = pane.clientWidth;
     var pH = pane.clientHeight;
     var newOffX = Math.max(0, (pW - displayW) / 2);
     var newOffY = Math.max(0, (pH - displayH) / 2);
     var newVis  = _imageOffsetToVisual(_snapIPX, _snapIPY,
-                                       rot, ui.mirror, ui.flip, scale);
+                                       rot, _mirror.get(), _flip.get(), scale);
     pane.scrollLeft = Math.max(0, displayW / 2 + newVis.x + newOffX - pW / 2);
     pane.scrollTop  = Math.max(0, displayH / 2 + newVis.y + newOffY - pH / 2);
   }
@@ -190,8 +199,8 @@ function applyImageTransform() {
   _prevDisplayH = displayH;
   _prevRot    = rot;
   _prevScale  = scale;
-  _prevMirror = ui.mirror;
-  _prevFlip   = ui.flip;
+  _prevMirror = _mirror.get();
+  _prevFlip   = _flip.get();
 }
 
 // Reapply transform on window resize (fit mode depends on pane size)
@@ -202,109 +211,110 @@ window.addEventListener('resize', function() {
 // ── Zoom ──────────────────────────────────────────────────────────────────────
 
 function toggleZoom() {
-  ui.zoomFit = !ui.zoomFit;
-  if (!ui.zoomFit && ui.scale <= 0) ui.scale = 1.0;
+  _zoomFit.set(!_zoomFit.get());
+  if (!_zoomFit.get() && _scale.get() <= 0) _scale.set(1.0);
   applyImageTransform();
-  persistState(false);
+  save();
 }
 
 // ── Rotation ─────────────────────────────────────────────────────────────────
 
 function rotateBy(deg) {
-  ui.rotation = (ui.rotation + deg + 360) % 360;
+  const newRotation = (parseInt(_rotation.get()) + deg + 360) % 360;
+  _rotation.set(String(newRotation));
   applyImageTransform();
-  persistState(false);
+  save();
 }
 
 // ── Mirror / Flip ─────────────────────────────────────────────────────────────
 
 // M — horizontal mirror (xzgv 'm')
 function toggleMirror() {
-  ui.mirror = !ui.mirror;
+  _mirror.set(!_mirror.get());
   applyImageTransform();
-  persistState(false);
+  save();
 }
 
 // F — vertical flip (xzgv 'f', uppercased to avoid conflict with fullscreen)
 function toggleFlip() {
-  ui.flip = !ui.flip;
+  _flip.set(!_flip.get());
   applyImageTransform();
-  persistState(false);
+  save();
 }
 
 // ── Orientation reset ─────────────────────────────────────────────────────────
 
 function resetOrientation() {
-  ui.rotation = 0;
-  ui.mirror   = false;
-  ui.flip     = false;
+  _rotation.set('0');
+  _mirror.set(false);
+  _flip.set(false);
   applyImageTransform();
-  persistState(false);
+  save();
 }
 
 // ── Scale ─────────────────────────────────────────────────────────────────────
 
 function enterScaleMode() {
   // Switch from fit mode to explicit scale mode
-  if (ui.zoomFit) {
-    ui.zoomFit = false;
+  if (_zoomFit.get()) {
+    _zoomFit.set(false);
     // Compute the current effective fit scale and use it as starting point
     if (mainImageEl.naturalWidth) {
       var nw  = mainImageEl.naturalWidth;
       var nh  = mainImageEl.naturalHeight;
-      var rot = ui.rotation;
+      var rot = _rotation.get();
       var vw  = (rot === 90 || rot === 270) ? nh : nw;
       var vh  = (rot === 90 || rot === 270) ? nw : nh;
       var pW  = imagePaneEl.clientWidth;
       var pH  = imagePaneEl.clientHeight;
       var s   = Math.min(pW / vw, pH / vh);
-      if (ui.zoomReduceOnly) s = Math.min(s, 1.0);
-      ui.scale = s;
+      if (_zoomReduceOnly.get()) s = Math.min(s, 1.0);
+      _scale.set(s);
     } else {
-      ui.scale = 1.0;
+      _scale.set(1.0);
     }
   }
 }
 
 function scaleDouble() {
   enterScaleMode();
-  ui.scale = Math.min(32, ui.scale * 2);
+  _scale.set(Math.min(32, _scale.get() * 2));
   applyImageTransform();
-  persistState(false);
+  save();
 }
 
 function scaleHalve() {
   enterScaleMode();
-  ui.scale = Math.max(0.05, ui.scale / 2);
+  _scale.set(Math.max(0.05, _scale.get() / 2));
   applyImageTransform();
-  persistState(false);
+  save();
 }
 
 function scaleStep(dir) {
   enterScaleMode();
-  var cur = ui.scale;
+  var cur = _scale.get();
   if (dir > 0) {
     var next = null;
     for (var i = 0; i < SCALE_STEPS.length; i++) {
       if (SCALE_STEPS[i] > cur + 0.001) { next = SCALE_STEPS[i]; break; }
     }
-    ui.scale = (next !== null) ? next : Math.min(32, cur * 1.5);
+    _scale.set((next !== null) ? next : Math.min(32, cur * 1.5));
   } else {
     var prev = null;
     for (var i = 0; i < SCALE_STEPS.length; i++) {
       if (SCALE_STEPS[i] < cur - 0.001) prev = SCALE_STEPS[i];
     }
-    ui.scale = (prev !== null) ? prev : Math.max(0.05, cur / 1.5);
+    _scale.set((prev !== null) ? prev : Math.max(0.05, cur / 1.5));
   }
   applyImageTransform();
-  persistState(false);
+  save();
 }
 
 function scaleTo1() {
-  ui.zoomFit = false;
-  ui.scale   = 1.0;
+  _zoomFit.set(false);
+  _scale.set(1.0);
   applyImageTransform();
-  persistState(false);
+  save();
 }
 
 // ── Image scrolling ───────────────────────────────────────────────────────────
@@ -394,14 +404,14 @@ class ImageContent extends ImagelikeContent {
         case 'S': scaleStep(-1); return;
         // Quick zoom levels (1 is also the scaleTo1 alias)
         case '1': scaleTo1();                                                              return;
-        case '2': ui.zoomFit=false; ui.scale=2; applyImageTransform(); persistState(false); return;
-        case '3': ui.zoomFit=false; ui.scale=3; applyImageTransform(); persistState(false); return;
-        case '4': ui.zoomFit=false; ui.scale=4; applyImageTransform(); persistState(false); return;
+        case '2': _zoomFit.set(false); _scale.set(2); applyImageTransform(); save(); return;
+        case '3': _zoomFit.set(false); _scale.set(3); applyImageTransform(); save(); return;
+        case '4': _zoomFit.set(false); _scale.set(4); applyImageTransform(); save(); return;
         // Reduce-only toggle (` — replaces xzgv Alt-r)
         case '`':
-          ui.zoomReduceOnly = !ui.zoomReduceOnly;
-          if (ui.zoomFit) applyImageTransform();
-          persistState(false);
+          _zoomReduceOnly.set(!_zoomReduceOnly.get());
+          if (_zoomFit.get()) applyImageTransform();
+          save();
           return;
       }
     }
