@@ -283,7 +283,7 @@ class FileList {
 
   // ── Item selection ──────────────────────────────────────────────────────────
 
-  static needsScroll(item) {
+  needsScroll(item) {
     const containerRect = this.#container.getBoundingClientRect();
     const itemRect = item.getBoundingClientRect();
 
@@ -298,7 +298,7 @@ class FileList {
     const el = this.#items[idx];
     if (!el) return;
     el.classList.add('selected');
-    if (!scroll || !FileList.needsScroll(el)) return;
+    if (!scroll || !this.needsScroll(el)) return;
     el.scrollIntoView({ block: 'center' });
     this.#scrollIdx = -1;
   }
@@ -310,8 +310,8 @@ class FileList {
     const el = this.#items[idx];
     if (!el) return;
     el.classList.add('active');
-    if (!scroll || !FileList.needsScroll(el)) return;
-    el.scrollIntoView({ block: "center });
+    if (!scroll || !this.needsScroll(el)) return;
+    el.scrollIntoView({ block: 'center' });
   }
 
   // ── Item opening / file navigation ─────────────────────────────────────────

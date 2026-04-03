@@ -19,18 +19,21 @@
 //   infoOverlayEl, updateInfoOverlay,                     (viewer.js)
 //   ImagelikeContent.                                     (viewer-media-imagelike.js)
 
-import { reserve, save, onLoad, Hidden, Boolean, Float, Enum } from './state.js';
+let _zoomFit, _zoomReduceOnly, _rotation, _scale, _mirror, _flip, save;
 
-const _zoomFit        = reserve(Hidden, 'zoomFit', Boolean, true);
-const _zoomReduceOnly = reserve(Hidden, 'zoomReduceOnly', Boolean, true);
-const _rotation       = reserve(Hidden, 'rotation', Enum('0', '90', '180', '270'), '0');
-const _scale          = reserve(Hidden, 'scale', Float, 1.0);
-const _mirror         = reserve(Hidden, 'mirror', Boolean, false);
-const _flip           = reserve(Hidden, 'flip', Boolean, false);
+import('./state.js').then(({ reserve, save: _save, onLoad, Hidden, Boolean, Float, Enum }) => {
+  save = _save;
+  _zoomFit        = reserve(Hidden, 'zoomFit', Boolean, true);
+  _zoomReduceOnly = reserve(Hidden, 'zoomReduceOnly', Boolean, true);
+  _rotation       = reserve(Hidden, 'rotation', Enum('0', '90', '180', '270'), '0');
+  _scale          = reserve(Hidden, 'scale', Float, 1.0);
+  _mirror         = reserve(Hidden, 'mirror', Boolean, false);
+  _flip           = reserve(Hidden, 'flip', Boolean, false);
 
-// When state is restored from history (popstate), reapply the image transform
-onLoad(() => {
-  if (mainImageEl.naturalWidth) applyImageTransform();
+  // When state is restored from history (popstate), reapply the image transform
+  onLoad(() => {
+    if (mainImageEl.naturalWidth) applyImageTransform();
+  });
 });
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────

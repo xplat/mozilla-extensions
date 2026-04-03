@@ -17,12 +17,22 @@ YOU DO:
    be run regularly and added to the main test suite.
 
 YOU DO NOT:
+- override the user's specific task-setup instructions (use a single shared file, pipe output
+  from a shell command, keep per-file context minimal, etc.) in favour of a "richer" setup,
+  even if the richer setup seems more informative. Those instructions encode cost and context
+  reasoning that is not always stated explicitly.
 - use polling loops when a non-polling alternative is available;
 - use in-band sentinel values;
 - use super-new python APIs or packaging methodology;
+- clear a URL-valued attribute like `src` by setting it to an empty string; always remove the attribute itself.
 - commit a bash script for something that would be expressed perfectly adequately in sh;
 - override specs, or design decisions made in consultation, without further consultation to see if it's really
    appropriate.
+
+Never, ever start reading whole files or large swathes of code without explicit permission from your human collaborator.
+Don't use the read tool on code files to get a "background" or "general understanding" or filter-feed your way to
+specific answers.  Always make use of skills and agents at your disposal to make sure every byte you read has
+predictable and long-term value.
 
 This project contains multiple firefox extensions.  At least some of them are specifically meant to replace native apps
 with easier-to-manage, more resource-efficient browser tabs.  (Even if the browser tabs are sometimes less efficient
