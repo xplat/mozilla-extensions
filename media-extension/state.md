@@ -15,10 +15,11 @@ and the History API's accompanying JSON object.
 
 | Export        | JS type   | Notes                              |
 |---------------|-----------|------------------------------------|
-| `Integer`     | `number`  | Must be a safe integer             |
-| `String`      | `string`  |                                    |
-| `Boolean`     | `boolean` | Serialized as `"true"` / `"false"` |
-| `Enum(…vals)` | `string`  | One of the supplied string literals|
+| `Integer`     | `number`  | Must be a safe integer              |
+| `Float`       | `number`  | Any finite IEEE 754 double          |
+| `String`      | `string`  |                                     |
+| `Boolean`     | `boolean` | Serialized as `"true"` / `"false"`  |
+| `Enum(…vals)` | `string`  | One of the supplied string literals |
 
 ## API
 

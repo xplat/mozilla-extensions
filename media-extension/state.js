@@ -40,6 +40,21 @@ export const Integer = Object.freeze({
   },
 });
 
+export const Float = Object.freeze({
+  tag: 'Float',
+  validate(v) {
+    if (typeof v !== 'number' || !_Number.isFinite(v))
+      throw new TypeError(`Finite float expected, got ${typeof v}: ${v}`);
+  },
+  serialize: v => _String(v),
+  deserialize(s) {
+    const n = _Number(s);
+    if (!_Number.isFinite(n) || s.trim() === '')
+      throw new TypeError(`Cannot deserialize as Float: "${s}"`);
+    return n;
+  },
+});
+
 // Exported as "String" to match the spec, shadowing the global inside the
 // module only.  Callers import by name so there is no ambiguity for them.
 export const String = Object.freeze({
