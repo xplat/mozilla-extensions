@@ -321,6 +321,8 @@ class PlayableContent extends ContentOccupant {
     // surrender() shows the cover and stops the old media before returning.
     await pane.request(this, ctx);
 
+    imagePaneEl.addEventListener('click', togglePlayPause);
+
     if (!infoOverlayEl.classList.contains('hidden')) updateInfoOverlay(this.filename);
 
     // Wire src, activeMediaEl, loop — subclass overrides add filter reset etc.
@@ -360,11 +362,15 @@ class PlayableContent extends ContentOccupant {
   }
 
   async surrender(element) {
+    imagePaneEl.removeEventListener('click', togglePlayPause);
     _startTransitionCover();
     _stopActiveMedia(this.mediaEl);
   }
 
-  cleanup() { _stopActiveMedia(this.mediaEl); }
+  cleanup() {
+    imagePaneEl.removeEventListener('click', togglePlayPause);
+    _stopActiveMedia(this.mediaEl);
+  }
 
   handleKey(e, key, ctrl, plain) {
     if (!plain) return;

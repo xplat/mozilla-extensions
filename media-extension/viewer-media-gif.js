@@ -29,6 +29,8 @@ class GifContent extends ImagelikeContent {
     videoEl.loop  = true;
     videoEl.muted = true;
     await pane.request(this, ctx);
+    // Attach drag-to-scroll pointer listeners (base class).
+    await super.load(pane, ctx);
     _pendingAutoFS    = false;
     _pendingQueuePlay = false;
     videoEl.play().catch(function() {});
@@ -38,9 +40,10 @@ class GifContent extends ImagelikeContent {
   async surrender(element) {
     _startTransitionCover();
     _stopActiveMedia(videoEl);
+    await super.surrender(element);
   }
 
-  cleanup() { _stopActiveMedia(videoEl); }
+  cleanup() { _stopActiveMedia(videoEl); super.cleanup(); }
 
   clone() { return new GifContent(this.fullPath); }
 }

@@ -363,6 +363,9 @@ class ImageContent extends ImagelikeContent {
     // surrender() hides it with visibility:hidden, preserving the layout area.
     await pane.request(this, ctx);
 
+    // Attach drag-to-scroll pointer listeners (base class).
+    await super.load(pane, ctx);
+
     // Phase 3: feed URL into mainImageEl and wait for decode+paint.
     mainImageEl.style.visibility = 'hidden';
     mainImageEl.src = proxyUrl;
@@ -386,11 +389,13 @@ class ImageContent extends ImagelikeContent {
     // Use visibility:hidden rather than the cover: preserves the layout area so
     // the incoming ImageContent can overwrite mainImageEl.src without a size flash.
     mainImageEl.style.visibility = 'hidden';
+    await super.surrender(element);
   }
 
   cleanup() {
     // Still showing — clear it so the incoming occupant starts from a clean slate.
     mainImageEl.removeAttribute('src');
+    super.cleanup();
   }
 
   clone() { return new ImageContent(this.fullPath); }

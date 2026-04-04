@@ -28,8 +28,8 @@ var _hasAnnounced = false;
 // _updateChannelWiring(); a tab that has nothing to receive keeps no channel
 // open and causes zero wakeups.
 //
-// _queueListenCh ('media-queue') is owned by viewer-queue-mgt.js and managed
-// via updateQueueChannelWiring(), called from _updateChannelWiring() here.
+// _queueListenCh ('media-queue') is owned by viewer-queue-mgt.js; its wiring is
+// refreshed via updateQueueChannelWiring(), called from _updateChannelWiring().
 
 function _bcPost(name, msg) {
   var ch = new BroadcastChannel(name);

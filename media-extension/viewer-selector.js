@@ -113,6 +113,7 @@ class Selector extends FileList {
     }
 
     this.#dir   = dirUrl;
+    // Uses FileList.listing setter (inherited) to replace listing contents, triggering re-render.
     this.listing = this.#sortItems(this.#filterItems(data.files || []));
 
     if (this.#file && !this.listing.some(i => i.u === this.#file)) {
@@ -191,8 +192,9 @@ class Selector extends FileList {
     super.handleKey(e, key, ctrl, plain);
     if (!plain) return;
     switch (key) {
+      case '.': this.toggleHidden();   break;
       case 'q': this.handleQueueKey(); break;
-      case 's': this.cycleSortBy();   break;
+      case 's': this.cycleSortBy();    break;
     }
   }
 

@@ -51,7 +51,7 @@ function _onQueueMsg(e) {
 }
 
 // Open or close the queue listener channel based on visibility and queueMode.
-// Called from _updateChannelWiring() in viewer.js whenever relevant state changes.
+// Called whenever visibility or queueMode changes; manages _queueListenCh only.
 function updateQueueChannelWiring(visible) {
   var needQueue = visible && ui.queueMode !== null;
   if (needQueue && !_queueListenCh) {
@@ -102,7 +102,7 @@ function setQueueMode(mode) {
                         //     a full cycle without a manual switch, probably.
 
   applySelector();
-  _updateChannelWiring();
+  updateQueueChannelWiring(document.visibilityState === 'visible');
 
   // Populate the newly-visible queue pane.  block:'start' so the active item
   // and the next few items after it are visible, giving context for what plays.

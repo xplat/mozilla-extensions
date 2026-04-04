@@ -59,6 +59,11 @@ class LoadContext {
     });
   }
 
+  // Returns true if this context has been cancelled.
+  isCancelled() {
+    return this._cancelled;
+  }
+
   // Cancel all pending waitFor() calls, rejecting them with CancelledError.
   cancel() {
     if (this._cancelled) return;

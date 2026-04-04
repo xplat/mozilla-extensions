@@ -91,7 +91,7 @@ class ContentPane {
       this._surrendered = true;
       await this.current.surrender(occupant.element);
     }
-    if (ctx._cancelled) throw new CancelledError();
+    if (ctx.isCancelled()) throw new CancelledError();
   }
 
   // ── Commit ──────────────────────────────────────────────────────────────────

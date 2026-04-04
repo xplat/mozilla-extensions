@@ -98,6 +98,12 @@ class VideoContent extends PlayableContent {
   handleKey(e, key, ctrl, plain) {
     if (plain) {
       switch (key) {
+        // Frame-step forward (Firefox-only mozSeekToNextFrame advances exactly one frame)
+        case '.':
+          e.preventDefault();
+          this.mediaEl.mozSeekToNextFrame();
+          _updateVideoControls();
+          return;
         // Video track cycling
         case '_':
           e.preventDefault();

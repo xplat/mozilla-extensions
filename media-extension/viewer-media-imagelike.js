@@ -14,7 +14,54 @@
 //   imagePaneEl.                                            (viewer-ui.js)
 //   scrollImage, scaleTo1, toggleZoom.                      (viewer-media-image.js)
 
+const [_onImgPointerDown, _onImgPointerMove, _onImgPointerUp] = (() => {
+  let startX, startY, startScrollX, startScrollY;
+
+  function onDown(e) {
+    if (e.button !== 0) return;
+    imagePaneEl.setPointerCapture(e.pointerId);
+    startX       = e.clientX;
+    startY       = e.clientY;
+    startScrollX = imagePaneEl.scrollLeft;
+    startScrollY = imagePaneEl.scrollTop;
+    imagePaneEl.addEventListener('pointermove', onMove);
+    e.preventDefault();
+  }
+
+  function onMove(e) {
+    var dx = e.clientX - startX;
+    var dy = e.clientY - startY;
+    imagePaneEl.scrollLeft = startScrollX - dx;
+    imagePaneEl.scrollTop  = startScrollY - dy;
+  }
+
+  function onUp() {
+    imagePaneEl.removeEventListener('pointermove', onMove);
+  }
+
+  return [onDown, onMove, onUp];
+})();
+
 class ImagelikeContent extends ContentOccupant {
+  async load(pane, ctx) {
+    imagePaneEl.addEventListener('pointerdown', _onImgPointerDown);
+    imagePaneEl.addEventListener('pointerup',   _onImgPointerUp);
+  }
+
+  async surrender(element) {
+    this._detachDragListeners();
+  }
+
+  cleanup() {
+    this._detachDragListeners();
+  }
+
+  _detachDragListeners() {
+    imagePaneEl.removeEventListener('pointerdown', _onImgPointerDown);
+    imagePaneEl.removeEventListener('pointermove', _onImgPointerMove);
+    imagePaneEl.removeEventListener('pointerup',   _onImgPointerUp);
+  }
+
   handleKey(e, key, ctrl, plain) {
     if (plain) {
       switch (key) {
@@ -58,6 +105,7 @@ class ImagelikeContent extends ContentOccupant {
           this.nextItem();
           return;
         case 'b':
+          e.preventDefault();
           this.prevItem();
           return;
         // Scale to 1:1 (shared with ImageContent's quick-zoom '1' alias)

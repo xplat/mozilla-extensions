@@ -2,7 +2,7 @@
 // ── viewer-ui.js ──────────────────────────────────────────────────────────────
 //
 // Persistent UI state, screen management, URL/history helpers, pane geometry,
-// focus mode, fullscreen, drag handling, and the global key dispatcher.
+// focus mode, fullscreen, divider drag, and the global key dispatcher.
 //
 // Declares these globals used by other modules:
 //   ui, focusMode, selectorWidthPx, SELECTOR_W_DEFAULT,
@@ -15,13 +15,13 @@
 //     audioQueuePaneEl, audioQueueClearBtn,
 //     videoQueuePaneEl, videoQueueClearBtn.
 //
-// Calls into globals defined in later modules (viewer-selector.js, viewer.js):
-//   selector, toggleInfoOverlay, cycleQueueMode,
-//   audioQueueList, videoQueueList,
-//   toggleMute, togglePlayPause, adjustVolume, adjustBalance, toggleAutoplay,
-//   _bcPost, _qState, activeMediaEl, _updateVideoControls,
-//   handleViewerKey, applyImageTransform,
-//   mainImageEl, videoProgressEl.
+// Calls into globals defined in later modules:
+//   selector, toggleInfoOverlay, cycleQueueMode (viewer-selector.js, viewer.js)
+//   audioQueueList, videoQueueList (viewer-queue-mgt.js)
+//   toggleMute, togglePlayPause, adjustVolume, adjustBalance, toggleAutoplay (viewer-media.js)
+//   _bcPost, _qState, activeMediaEl (viewer.js)
+//   handleViewerKey, applyImageTransform (viewer.js)
+//   mainImageEl (viewer-media-image.js)
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 
@@ -210,67 +210,33 @@ function toggleFullscreen() {
   }
 }
 
-// ── Drag: image pan and divider resize ───────────────────────────────────────
+// ── Drag: divider resize and image-pane focus ─────────────────────────────────
 
-var dragMode  = null;  // null | 'image' | 'divider'
-var dragState = {};
-
-imagePaneEl.addEventListener('mousedown', function(e) {
-  if (e.button !== 0) return;
-  // Don't treat clicks inside the video-controls overlay as image-pane drags.
-  if (videoProgressEl && videoProgressEl.contains(e.target)) return;
-  dragMode = 'image';
-  dragState.wasDrag = false;
-  dragState.startX  = e.clientX;
-  dragState.startY  = e.clientY;
-  dragState.scrollX = imagePaneEl.scrollLeft;
-  dragState.scrollY = imagePaneEl.scrollTop;
-  e.preventDefault();
+// Clicking anywhere in the image pane takes viewer focus.
+imagePaneEl.addEventListener('pointerdown', function() {
+  setFocusMode('viewer');
 });
 
 if (paneDividerEl) {
-  paneDividerEl.addEventListener('mousedown', function(e) {
+  paneDividerEl.addEventListener('pointerdown', function(e) {
     if (e.button !== 0) return;
-    dragMode = 'divider';
-    dragState.startX = e.clientX;
-    dragState.startW = selectorWidthPx;
+    paneDividerEl.setPointerCapture(e.pointerId);
+    var startX = e.clientX;
+    var startW = selectorWidthPx;
     paneDividerEl.classList.add('dragging');
     e.preventDefault();
+
+    paneDividerEl.addEventListener('pointermove', function onMove(ev) {
+      setSelectorWidth(startW + (ev.clientX - startX));
+    });
+
+    paneDividerEl.addEventListener('pointerup', function onUp() {
+      paneDividerEl.classList.remove('dragging');
+      paneDividerEl.removeEventListener('pointermove', onMove);
+      paneDividerEl.removeEventListener('pointerup',   onUp);
+    });
   });
 }
-
-document.addEventListener('mousemove', function(e) {
-  if (dragMode === 'image') {
-    var dx = e.clientX - dragState.startX;
-    var dy = e.clientY - dragState.startY;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragState.wasDrag = true;
-    imagePaneEl.scrollLeft = dragState.scrollX - dx;
-    imagePaneEl.scrollTop  = dragState.scrollY - dy;
-  } else if (dragMode === 'divider') {
-    setSelectorWidth(dragState.startW + (e.clientX - dragState.startX));
-  }
-});
-
-document.addEventListener('mouseup', function() {
-  if (dragMode === 'image' && !dragState.wasDrag) {
-    setFocusMode('viewer');
-    if (activeMediaEl) {
-      if (activeMediaEl.ended) {
-        activeMediaEl.currentTime = 0;
-        playAndAnnounce(activeMediaEl);
-      } else if (activeMediaEl.paused) {
-        playAndAnnounce(activeMediaEl);
-      } else {
-        activeMediaEl.pause();
-      }
-      _updateVideoControls();
-    }
-  }
-  if (dragMode === 'divider' && paneDividerEl) {
-    paneDividerEl.classList.remove('dragging');
-  }
-  dragMode = null;
-});
 
 // Clicking the selector pane body refocuses it.
 selectorPaneEl.addEventListener('mousedown', function() {
@@ -299,17 +265,6 @@ document.addEventListener('keydown', function(e) {
       case ':':
       case ';':
         e.preventDefault(); toggleInfoOverlay(); return;
-      case '.':
-        e.preventDefault();
-        // In video/audio viewer focus: step forward one frame.
-        if (focusMode === 'viewer' && activeMediaEl) {
-          activeMediaEl.currentTime =
-            Math.min(activeMediaEl.duration, activeMediaEl.currentTime + 1 / 30);
-          _updateVideoControls();
-        } else {
-          selector.toggleHidden();
-        }
-        return;
       case 'v':
         e.preventDefault(); toggleThumbnails(); return;
       case 'Tab': {
