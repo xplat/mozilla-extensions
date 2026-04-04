@@ -1,0 +1,1 @@
+Verify `prev` is truly unused. If confirmed dead, remove it from the function signature and update any call sites if needed. If it turns out to be needed for a future use case, add a comment explaining the intent instead.

@@ -1,0 +1,3 @@
+- Move `toggleZoom()` up into viewer-media-imagelike.js (it operates on imagelike-level state).
+- Make `scrollImage` and `scaleTo1` instance methods on `ImageContent`, callable via `super` dispatch or by overriding `handleKey` in `ImageContent` to intercept those keys before calling `super`.
+- Also reconsider the mechanism by which zoom is exited when a scale is applied to the image — imagelike should own the function that gets called, but the question of who calls it remains open.

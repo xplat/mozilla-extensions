@@ -1,0 +1,1 @@
+Reserve a Boolean slot in state.js for `queueMode`, owned by the appropriate file (viewer-queue-mgt.js or viewer-ui.js). Replace `ui.queueMode` reads and writes with the state.js interface. Remove the property from the `ui` object. This is related to selector-state-to-statejs — both clean up the `ui` object.

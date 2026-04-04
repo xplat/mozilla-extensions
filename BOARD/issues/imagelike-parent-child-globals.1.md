@@ -1,0 +1,1 @@
+ImagelikeContent.handleKey calls scrollImage(), scaleTo1(), and toggleZoom() which are defined in viewer-media-image.js (the child file), inverting the normal dependency direction and blocking module conversion.

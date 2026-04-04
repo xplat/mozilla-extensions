@@ -1,0 +1,1 @@
+Verify that `this` refers to the correct object at the call site (i.e. the error handler is not an arrow function that has lost its binding). If so, replace `content.load(…)` with `this.load(…)`. If `this` is not reliably the right object, add a comment documenting why the singleton reference is intentional.
