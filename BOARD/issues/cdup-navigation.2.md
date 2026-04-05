@@ -1,0 +1,1 @@
+Once the globals `_dir` and `_file` are properly moved to the state.js interface, this should be doable purely with local changes to `viewer-selector.js`.  The former change should probably be within the scope of `selector-state-to-statejs`, but it hasn't been noted there.

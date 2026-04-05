@@ -1,15 +1,20 @@
-P1	scoped	gif-encapsulation	GifContent reaches into playable internals; full autoplay/autofs refactor needed
+P1	scoped	videocontent-hierarchy	VideoContentBase + Video/QueuedVideo split; gif globals resolved via VideoContent pre-handoff
 P1	scoped	loaddir-race	loadDir() not awaited; sort state must resolve before dir load
 P1	scoped	selector-state-to-statejs	ui.recursive/showHidden/sortBy + buttons/handlers move to state.js/selector
+P2	new	hud-and-audio	viewer-audio.js/viewer-media-playable.js entanglement; separate HUD, split visible/audible
 P2	scoped	audio-el-ownership	audioEl/audioPlaceholderEl declared in wrong file
 P2	scoped	gif-silent-catch	.catch({}) swallows autoplay errors; needs ErrorContent + GifContent.clone()
 P2	scoped	imagelike-parent-child-globals	parent handleKey calls child-file globals; blocks module conversion
 P2	scoped	popstate-encapsulation	viewer.js popstate else-branch directly manipulates selector internals
+P3	scoped	cdup-navigation	cd-up lands cursor on dir just left; blocked on selector-state-to-statejs
 P3	new	content-error-handler	load() error handler uses module global instead of this
+P3	new	extended-open	tab-group/background/delayed-open options for media-open and cbz-open
 P3	scoped	imagepane-migration	imagePaneEl + friends to viewer-content.js; requires load order changes
 P3	new	list-globals-ownership	mediaType/toProxyThumb/fmtSize/setFocusMode should live in viewer-list.js
 P3	new	list-ui-di	dead #ui field; add uses once ui persistent-state object retired
 P3	scoped	load-context-constructor-check	fragile ErrClass.prototype duck-type in waitFor
 P3	new	openitem-focus-selection	openItem interleaves focus and selection without hooks
 P3	new	queue-prev-param	dead prev parameter in _onQueueStateUpdate
+P3	scoped	queue-refresh	CSN-based change detection; separate queue content key in localStorage
 P3	new	queuemode-persistence	ui.queueMode should be persisted state
+P3	scoped	self-cleaning-event-handlers	load-context tracks handlers; auto-remove on surrender/cleanup
