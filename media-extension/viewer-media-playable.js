@@ -1,112 +1,95 @@
-'use strict';
 // ── viewer-media-playable.js ──────────────────────────────────────────────────
 //
 // Common audio+video playback infrastructure: media element refs, lifecycle
 // flags, event handlers, autoplay, seek, saved-position persistence, controls
 // HUD, transition cover, stop/tear-down, and the PlayableContent base class.
 //
-// Declares these globals used by other modules:
-//   transitionCoverEl,
-//   videoEl, audioEl, audioPlaceholderEl, activeMediaEl,
-//   _pendingAutoFS, _pendingQueuePlay,
-//   _autoplay, _posCheckpointTimer,
-//   _clearPosCheckpoint,
-//   _posKey, _savePosition, _getSavedPosition, _clearSavedPosition,
-//   fmtTime, _updateVideoControls,
-//   _startTransitionCover, _endTransitionCover,
-//   _stopActiveMedia, _mediaErrorMessage,
-//   toggleAutoplay, seekRelative, cycleAudioTrack, toggleHudPin,
-//   videoControlsEl, videoProgressEl, videoSeekFillEl, videoTimeEl, videoVolEl,
-//   PlayableContent.
-//
 // Calls into globals defined in earlier / later modules:
-//   imagePaneEl, ui, applySelector, (viewer-ui.js)
-//   _hasAnnounced, _bcPost, _updateChannelWiring,
-//   loadAvSettings, playAndAnnounce, togglePlayPause,      (viewer-audio.js)
-//   _qState, _vqLoad,                                      (viewer-queue-mgt.js)
-//   toProxyFile, _panValue,                                (media-shared.js)
-//   CancelledError,                                        (viewer-load-context.js)
-//   ErrorContent,                                          (viewer-media.js)
-//   content,                                               (viewer-content.js)
-//   infoOverlayEl, updateInfoOverlay, toggleInfoOverlay.   (viewer.js)
+//   toProxyFile, _panValue                                 (media-shared.js)
+
+import { requireElement } from './viewer-util.js'
+import { LoadContext, CancelledError } from './viewer-load-context.js';
+import { ContentOccupant, FileContent, ErrorContent } from './viewer-media.js'
+import { imagePaneEl, infoOverlayEl, updateInfoOverlay, content, _startTransitionCover } from './viewer-content.js'
+import { loadAvSettings, playAndAnnounce, togglePlayPause, dropAudioBaton, isAudioMuted, getAudioVolume, getAudioBalance, avSettingsWatcher, _updateChannelWiring } from './viewer-audio.js'
+/** @typedef {import('./viewer-content.js').ContentPane} ContentPane */
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 
-var transitionCoverEl   = document.getElementById('transition-cover');
-var videoControlsEl     = document.getElementById('video-controls');
-var videoProgressEl     = document.getElementById('video-progress');
-var videoSeekFillEl     = document.getElementById('video-seek-fill');
-var videoTimeEl         = document.getElementById('video-time');
-var videoVolEl          = document.getElementById('video-vol');
-var audioPlaceholderEl  = document.getElementById('audio-placeholder');
+var videoControlsEl     = requireElement('video-controls');
+var videoProgressEl     = requireElement('video-progress');
+var videoSeekFillEl     = requireElement('video-seek-fill');
+var videoTimeEl         = requireElement('video-time');
+var videoVolEl          = requireElement('video-vol');
 
 // ── Autoplay flag and position-checkpoint timer ───────────────────────────────
 
 var _autoplay           = true;  // if false, media loads but does not start playing
-var _posCheckpointTimer = null;  // setTimeout handle for position-save throttle
-
-function _clearPosCheckpoint() {
-  if (_posCheckpointTimer !== null) {
-    clearTimeout(_posCheckpointTimer);
-    _posCheckpointTimer = null;
-  }
-}
 
 // ── Position persistence ──────────────────────────────────────────────────────
 
+/**
+ * @param {string} fileUrl
+ * @returns {string}
+ */
 function _posKey(fileUrl) {
   return 'media-pos:' + fileUrl.replace(/^file:\/\//, '');
 }
 
-function _savePosition(mediaEl) {
-  if (!content.current.fullPath || mediaEl.paused || mediaEl.ended) return;
-  if (imagePaneEl.classList.contains('media-gif')) return;
-  localStorage.setItem(_posKey(content.current.fullPath), String(mediaEl.currentTime));
-}
-
-function _getSavedPosition(fileUrl) {
-  var raw = localStorage.getItem(_posKey(fileUrl));
-  return raw ? parseFloat(raw) : 0;
-}
-
-function _clearSavedPosition(fileUrl) {
-  localStorage.removeItem(_posKey(fileUrl));
-}
-
 // ── Controls HUD ──────────────────────────────────────────────────────────────
 
+/**
+ * @param {number} secs
+ * @returns {string}
+ */
 function fmtTime(secs) {
   var s = Math.floor(secs);
   var m = Math.floor(s / 60);
   var h = Math.floor(m / 60);
   m = m % 60;
   s = s % 60;
-  var pad = function(n) { return n < 10 ? '0' + n : String(n); };
+  var pad = function(/** @type {number} */ n) { return n < 10 ? '0' + n : String(n); };
   return h > 0 ? h + ':' + pad(m) + ':' + pad(s) : m + ':' + pad(s);
 }
 
-function _updateVideoControls() {
-  if (!activeMediaEl) return;
-  var cur = activeMediaEl.currentTime || 0;
-  var dur = activeMediaEl.duration;
-  if (videoTimeEl) {
-    videoTimeEl.textContent = fmtTime(cur) + ' / ' + (isFinite(dur) ? fmtTime(dur) : '?');
-  }
-  if (videoSeekFillEl && isFinite(dur) && dur > 0) {
-    videoSeekFillEl.style.width = (cur / dur * 100).toFixed(2) + '%';
-  }
-  if (videoVolEl) {
-    var rawVol = activeMediaEl.volume;
-    var volStr = (rawVol <= 0)
-      ? '-\u221edB'
-      : (Math.round(20 * Math.log10(rawVol)) + 'dB');
-    var text = activeMediaEl.muted ? 'MUTED' : ('VOL\u00a0' + volStr);
-    if (_panValue !== 0) {
-      var side = _panValue > 0 ? 'R' : 'L';
-      text += '\u2002' + side + Math.abs(_panValue).toFixed(1);
+/**
+ * @param {HTMLMediaElement} [element]
+ * @returns {void}
+ */
+export function _updateVideoControls(element) {
+  // If element === activeMediaEl, update all info (time, progress, volume).
+  // If element is null/undefined, update only audio and autoplay info (volume).
+  // Otherwise, do nothing.
+  const updateAll = (element === activeMediaEl);
+  const updateVol = (updateAll || element === undefined);
+
+  if (updateAll && activeMediaEl) {
+    var cur = activeMediaEl.currentTime || 0;
+    var dur = activeMediaEl.duration;
+    if (videoTimeEl) {
+      videoTimeEl.textContent = fmtTime(cur) + ' / ' + (isFinite(dur) ? fmtTime(dur) : '?');
     }
-    if (!_autoplay) text += '\u2002MANUAL';
-    videoVolEl.textContent = text;
+    if (videoSeekFillEl && isFinite(dur) && dur > 0) {
+      videoSeekFillEl.style.width = (cur / dur * 100).toFixed(2) + '%';
+    }
+  }
+
+  if (updateVol) {
+    if (videoVolEl) {
+      var muted = isAudioMuted();
+      var rawVol = muted ? 0 : getAudioVolume();
+      var volStr = (rawVol <= 0)
+        ? '-\u221edB'
+        : (Math.round(20 * Math.log10(rawVol)) + 'dB');
+      var text = muted ? 'MUTED' : ('VOL\u00a0' + volStr);
+      var balance = getAudioBalance();
+      if (balance !== 0) {
+        var side = balance > 0 ? 'R' : 'L';
+        text += '\u2002' + side + Math.abs(balance).toFixed(1);
+      }
+      if (!_autoplay) text += '\u2002MANUAL';
+      videoVolEl.textContent = text;
+    }
   }
 }
 
@@ -117,66 +100,52 @@ if (videoProgressEl) {
     var rect = videoProgressEl.getBoundingClientRect();
     var frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     activeMediaEl.currentTime = frac * activeMediaEl.duration;
-    _updateVideoControls();
+    _updateVideoControls(activeMediaEl);
   });
 }
 
-// ── Transition cover ──────────────────────────────────────────────────────────
-//
-// Used for content transitions.  Snaps opaque (transition:none) to hide any
-// intermediate layout state, then fades out (0.15s) when new content is ready.
-// Callers may write DOM into transitionCoverEl before calling _startTransitionCover()
-// (e.g. a screenshot of the outgoing content); innerHTML is cleared automatically
-// when the fade ends so covers remain composable.
-// Calling _endTransitionCover() when no cover was started is harmless.
+// ── A/V settings change subscription ──────────────────────────────────────────
+// Subscribe to settings changes only when video/audio controls are visible,
+// not when displaying images or other non-playable content.
 
-function _startTransitionCover() {
-  transitionCoverEl.classList.add('covering');
+function _onAvSettingsChange() {
+  _updateVideoControls(undefined);
 }
 
-function _endTransitionCover() {
-  // One rAF defers the fade until after the browser has painted the newly
-  // ready content at least once, so the fade reveals a stable frame.
-  requestAnimationFrame(function() {
-    transitionCoverEl.classList.remove('covering');
-  });
-}
+var _avSettingsListenerAttached = false;
 
-// Clear any content written into the cover (e.g. screenshot overlays) once the
-// fade has completed so it doesn't linger invisibly and affect layout.
-transitionCoverEl.addEventListener('transitionend', function() {
-  if (!transitionCoverEl.classList.contains('covering')) {
-    transitionCoverEl.innerHTML = '';
+// Watch imagePaneEl data-mode attribute to manage subscription lifecycle
+var modeObserver = new MutationObserver(function() {
+  var mode = imagePaneEl.dataset.mode;
+  var needsListener = (mode === 'audio' || mode === 'video');
+
+  if (needsListener && !_avSettingsListenerAttached) {
+    avSettingsWatcher.addEventListener('avSettingsChange', _onAvSettingsChange);
+    _avSettingsListenerAttached = true;
+  } else if (!needsListener && _avSettingsListenerAttached) {
+    avSettingsWatcher.removeEventListener('avSettingsChange', _onAvSettingsChange);
+    _avSettingsListenerAttached = false;
   }
 });
 
-// ── Stop / tear-down ──────────────────────────────────────────────────────────
-
-function _stopActiveMedia(mediaEl) {
-  _clearPosCheckpoint();
-  _pendingAutoFS    = false;
-  _pendingQueuePlay = false;
-  if (_hasAnnounced) {
-    _hasAnnounced = false;
-    _bcPost('media-viewer', { cmd: 'media-stopped' });
-  }
-  if (!mediaEl) return;
-  mediaEl.pause();
-  mediaEl.removeAttribute('src');
-}
+modeObserver.observe(imagePaneEl, { attributes: true, attributeFilter: ['data-mode'] });
 
 // ── Autoplay toggle and relative seek ────────────────────────────────────────
 
-function toggleAutoplay() {
+export function toggleAutoplay() {
   _autoplay = !_autoplay;
-  _updateVideoControls();
+  _updateVideoControls(undefined);
 }
 
 // secs may be negative (seek back) or positive (seek forward)
+/**
+ * @param {HTMLMediaElement} el
+ * @param {number} secs
+ */
 function seekRelative(el, secs) {
   if (!el || !isFinite(el.duration)) return;
   el.currentTime = Math.max(0, Math.min(el.duration, el.currentTime + secs));
-  _updateVideoControls();
+  _updateVideoControls(el);
 }
 
 // ── HUD pin/unpin ─────────────────────────────────────────────────────────────
@@ -184,15 +153,18 @@ function seekRelative(el, secs) {
 // Toggles the .visible class on #video-controls, which the CSS uses to keep
 // the controls overlay shown regardless of hover state.
 
-function toggleHudPin() {
+export function toggleHudPin() {
   if (videoControlsEl) videoControlsEl.classList.toggle('visible');
 }
 
 // ── Audio / video track cycling ───────────────────────────────────────────────
 
+/**
+ * @param {HTMLMediaElement} el
+ */
 function cycleAudioTrack(el) {
   if (!el) return;
-  var tracks = el.audioTracks;
+  var tracks = /** @type {any} */ (el).audioTracks;
   if (!tracks || tracks.length <= 1) return;
   var cur = 0;
   for (var i = 0; i < tracks.length; i++) { if (tracks[i].enabled) { cur = i; break; } }
@@ -202,62 +174,40 @@ function cycleAudioTrack(el) {
 
 // ── Media element refs and playback lifecycle flags ───────────────────────────
 
-var videoEl   = document.getElementById('main-video');
-var audioEl   = document.getElementById('main-audio');
+/** @type {HTMLMediaElement | null} */
+var activeMediaEl      = null;   // currently active <video> or <audio>, or null
+/** @type {any} */
+var _controlsClaimedBy = null;   // the key (typically a PlayableContent instance) holding the claim
 
-var activeMediaEl     = null;   // currently active <video> or <audio>, or null
-var _pendingAutoFS    = false;  // true when auto-fullscreen should fire on the next 'playing' event
-var _pendingQueuePlay = false;  // true when a video-queue advance should autoplay regardless of _autoplay
-
-// ── Media element event handlers ─────────────────────────────────────────────
-//
-// loadedmetadata is handled by _loadPlayable() in viewer-media.js, which
-// awaits it via LoadContext.waitFor().  The handlers below manage ongoing
-// playback state after a load has committed.
-
-function _onTimeUpdate() {
-  _updateVideoControls();
-  if (_posCheckpointTimer !== null) return;
-  var el = this;
-  _posCheckpointTimer = setTimeout(function() {
-    _posCheckpointTimer = null;
-    if (content.isQueueContent && el === videoEl && !el.paused && !el.ended) {
-      // In video queue mode, track position in background's queue state rather
-      // than the file's own saved position so queue watching doesn't affect normal
-      // resume behaviour when the file is opened outside the queue.
-      _bcPost('media-queue', { cmd: 'q-vtime', time: el.currentTime });
-    } else {
-      _savePosition(el);
-    }
-  }, 5000);
+/**
+ * @param {HTMLMediaElement} el
+ * @param {any} key
+ * @returns {void}
+ */
+function claimVideoControls(el, key) {
+  activeMediaEl = el;
+  _controlsClaimedBy = key;
 }
 
-function _onMediaEnded() {
-  if (_hasAnnounced) {
-    _hasAnnounced = false;
-    _bcPost('media-viewer', { cmd: 'media-stopped' });
+/**
+ * @param {HTMLMediaElement} el
+ * @param {any} key
+ * @returns {void}
+ */
+function releaseVideoControls(el, key) {
+  // Only clear if the same element and key that claimed it are releasing it
+  if (activeMediaEl === el && _controlsClaimedBy === key) {
+    activeMediaEl = null;
+    _controlsClaimedBy = null;
   }
-  // In video queue mode, auto-advance to the next queue item.
-  if (content.isQueueContent) {
-    var next = _qState.video.index + 1;
-    _vqLoad(next);  // no-op if past end; sets _pendingQueuePlay for autoplay
-    _updateChannelWiring();  // no longer playing
-    return;
-  }
-  if (content.current.fullPath) _clearSavedPosition(content.current.fullPath);
-  _updateVideoControls();
-  _updateChannelWiring();  // no longer playing
-}
-
-function _onMediaPlaying() {
-  if (_pendingAutoFS && this === videoEl && !document.fullscreenElement) {
-    _pendingAutoFS = false;
-    document.documentElement.requestFullscreen().catch(function() {});
-  }
-  _updateChannelWiring();  // now playing
 }
 
 // Build a human-readable message from a media element's error information.
+/**
+ * @param {HTMLMediaElement} el
+ * @param {string} [path]
+ * @returns {string}
+ */
 function _mediaErrorMessage(el, path) {
   var ext  = path ? path.slice(path.lastIndexOf('.') + 1).toLowerCase() : "unknown";
   var code = el.error ? el.error.code : 0;
@@ -269,53 +219,151 @@ function _mediaErrorMessage(el, path) {
       code === MediaError.MEDIA_ERR_DECODE) {
     return 'This file format is not supported by your browser (' + ext.toUpperCase() + ').';
   }
-  return el.error.message || 'Error loading media.';
+  return el.error?.message || 'Error loading media.';
 }
-
-function _onMediaError(e) {
-  // Guard: if src was cleared during navigation, an error is expected.
-  console.log("_onMediaError", e.currentTarget.src, e);
-  if (!e.currentTarget.src) return;
-  // Guard: error during an active load — the load's own catch will redirect to
-  // ErrorContent with the same message; nothing to do here.
-  if (content.future) return;
-  var msg = _mediaErrorMessage(e.currentTarget, content.current.fullPath);
-  // Error during committed playback (e.g. stream interrupted): load ErrorContent.
-  content.load(new ErrorContent(content.current, msg));
-}
-
-videoEl.addEventListener('playing',        _onMediaPlaying);
-audioEl.addEventListener('playing',        _onMediaPlaying);
-videoEl.addEventListener('timeupdate',     _onTimeUpdate);
-audioEl.addEventListener('timeupdate',     _onTimeUpdate);
-videoEl.addEventListener('ended',          _onMediaEnded);
-audioEl.addEventListener('ended',          _onMediaEnded);
-videoEl.addEventListener('error',          _onMediaError);
-audioEl.addEventListener('error',          _onMediaError);
 
 // ── PlayableContent ───────────────────────────────────────────────────────────
 
-class PlayableContent extends ContentOccupant {
-  get mediaEl() { return this.element; }
+/**
+ * @abstract
+ */
+export class PlayableContent extends FileContent {
+  /**
+   * @type {HTMLMediaElement}
+   */
+  get mediaEl() { throw new Error('Abstract property'); }
 
+  /**
+   * @type {HTMLElement}
+   */
+  get element() { return this.mediaEl; }
+
+  // ── Media element event handlers ─────────────────────────────────────────────
+
+  /** @type {number | null} */
+  _posCheckpointTimer = null;
+
+  /**
+   * @returns {void}
+   */
+  _clearPosCheckpoint() {
+    if (this._posCheckpointTimer !== null) {
+      clearTimeout(this._posCheckpointTimer);
+      this._posCheckpointTimer = null;
+    }
+  }
+
+  /**
+   * @returns {void}
+   */
+  _makeEventListeners() {
+    const self = this;
+
+    function _onTimeUpdate() {
+      _updateVideoControls(self.mediaEl);
+      if (self._posCheckpointTimer !== null) return;
+      self._posCheckpointTimer = setTimeout(function() {
+        self._posCheckpointTimer = null;
+        self.savedPosition = self.mediaEl.currentTime;
+      }, 5000);
+    }
+    self._onTimeUpdate = _onTimeUpdate;
+
+    function _onMediaEnded() {
+      self.savedPosition = null;
+      _updateVideoControls(self.mediaEl);
+    }
+    self._onMediaEnded = _onMediaEnded;
+
+    function _onMediaPlaying() {
+      _updateChannelWiring();  // now playing
+    }
+    self._onMediaPlaying = _onMediaPlaying;
+
+    /**
+     * @param {Event} e
+     * @returns {void}
+     */
+    function _onMediaError(e) {
+      // Guard: if src was cleared during navigation, an error is expected.
+      if (!/** @type {HTMLMediaElement} */ (e.currentTarget).src) return;
+      // Guard: error during an active load — the load's own catch will redirect to
+      // ErrorContent with the same message; nothing to do here.
+      if (content.future) return;
+      var msg = _mediaErrorMessage(/** @type {HTMLMediaElement} */ (e.currentTarget), self.fullPath);
+      // Error during committed playback (e.g. stream interrupted): load ErrorContent.
+      content.load(new ErrorContent(self, msg));
+    }
+    self._onMediaError = _onMediaError;
+  }
+
+  /** @type {() => void} */
+  _onTimeUpdate = () => { throw new Error('_makeEventListeners() not called'); };
+
+  /** @type {() => void} */
+  _onMediaEnded = () => { throw new Error('_makeEventListeners() not called'); };
+
+  /** @type {() => void} */
+  _onMediaPlaying = () => { throw new Error('_makeEventListeners() not called'); };
+
+  /** @type {(e: Event) => void} */
+  _onMediaError = () => { throw new Error('_makeEventListeners() not called'); };
+
+  /**
+   * @returns {void}
+   */
   prepMediaEl() {
     const el = this.mediaEl;
 
+    // Claim video controls for this content
+    claimVideoControls(el, this);
+
     // Wire the element.
-    activeMediaEl      = el;
     el.src             = toProxyFile(this.fullPath);
     el.loop            = false;
   }
 
-  // now that our content has loaded, should we turn into something else?
+  /**
+   * Now that our content has loaded, should we turn into something else?
+   * @returns {ContentOccupant | null}
+   */
   mutate() {
     return null;
   }
 
+  /**
+   * @returns {number}
+   */
   get savedPosition() {
-    return _getSavedPosition(this.fullPath);
+    var raw = localStorage.getItem(_posKey(this.fullPath));
+    return raw ? parseFloat(raw) : 0;
   }
 
+  /**
+   * @param {number | null} time
+   * @returns {void}
+   */
+  set savedPosition(time) {
+    if (time === null) {
+      localStorage.removeItem(_posKey(this.fullPath));
+    } else {
+      localStorage.setItem(_posKey(this.fullPath), String(time));
+    }
+  }
+
+  /**
+   * Overridable -- should we autoplay this media?
+   * @returns {boolean}
+   */
+  _autoplay() {
+    return _autoplay;
+  }
+
+  /**
+   * @param {ContentPane} pane
+   * @param {LoadContext} ctx
+   * @returns {Promise<void>}
+   */
   async load(pane, ctx) {
     // Request the display element.  For same-element (media→media) transitions,
     // surrender() shows the cover and stops the old media before returning.
@@ -323,12 +371,19 @@ class PlayableContent extends ContentOccupant {
 
     imagePaneEl.addEventListener('click', togglePlayPause);
 
-    if (!infoOverlayEl.classList.contains('hidden')) updateInfoOverlay(this.filename);
+    if (!infoOverlayEl.classList.contains('hidden')) updateInfoOverlay(this);
 
     // Wire src, activeMediaEl, loop — subclass overrides add filter reset etc.
     this.prepMediaEl();
 
     const el = this.mediaEl;
+
+    // Create and attach instance-specific event listeners
+    this._makeEventListeners();
+    el.addEventListener('timeupdate', this._onTimeUpdate);
+    el.addEventListener('ended', this._onMediaEnded);
+    el.addEventListener('playing', this._onMediaPlaying);
+    el.addEventListener('error', this._onMediaError);
 
     // Wait for the browser to have duration/dimensions — or error out.
     try {
@@ -338,8 +393,9 @@ class PlayableContent extends ContentOccupant {
       // Media error during load: redirect to ErrorContent so the user sees the
       // message and can retry.  _onMediaError() skips its own display while
       // content.future is set (i.e. now, before commitFuture clears it).
-      pane.redirect(new ErrorContent(this, _mediaErrorMessage(el, this.fullPath)), ctx);
-      return await pane.future.load(pane, ctx);
+      const errorContent = new ErrorContent(this, _mediaErrorMessage(el, this.fullPath));
+      pane.redirect(errorContent, ctx);
+      return await errorContent.load(pane, ctx);
     }
 
     const mutated = this.mutate();
@@ -353,26 +409,55 @@ class PlayableContent extends ContentOccupant {
       el.currentTime = saved;
     }
 
-    loadAvSettings();
+    loadAvSettings(el);
 
-    if (_autoplay || _pendingQueuePlay) {
-      _pendingQueuePlay = false;
+    if (this._autoplay()) {
       playAndAnnounce(el);
     }
   }
 
-  async surrender(element) {
+  /**
+   * @param {HTMLMediaElement} _element - not used in this implementation
+   * @returns {Promise<void>}
+   */
+  async surrender(_element) {
     imagePaneEl.removeEventListener('click', togglePlayPause);
     _startTransitionCover();
-    _stopActiveMedia(this.mediaEl);
+    this._stopActiveMedia();
   }
 
+  /**
+   * @returns {void}
+   */
   cleanup() {
     imagePaneEl.removeEventListener('click', togglePlayPause);
-    _stopActiveMedia(this.mediaEl);
+    this._stopActiveMedia();
   }
 
-  handleKey(e, key, ctrl, plain) {
+  /**
+   * @returns {void}
+   */
+  _stopActiveMedia() {
+    const el = this.mediaEl;
+    el.removeEventListener('timeupdate', this._onTimeUpdate);
+    el.removeEventListener('ended', this._onMediaEnded);
+    el.removeEventListener('playing', this._onMediaPlaying);
+    el.removeEventListener('error', this._onMediaError);
+    this._clearPosCheckpoint();
+    el.pause();
+    el.removeAttribute('src');
+    dropAudioBaton(el);
+    releaseVideoControls(el, this);
+  }
+
+  /**
+   * @param {KeyboardEvent} e
+   * @param {string} key
+   * @param {boolean} _ctrl - not used in this implementation
+   * @param {boolean} plain
+   * @returns {void}
+   */
+  handleKey(e, key, _ctrl, plain) {
     if (!plain) return;
     const el = this.mediaEl;
     switch (key) {
@@ -386,7 +471,7 @@ class PlayableContent extends ContentOccupant {
       case 'Home':
         e.preventDefault();
         el.currentTime = 0;
-        _updateVideoControls();
+        _updateVideoControls(el);
         return;
       case 'Backspace':
         e.preventDefault();

@@ -8,7 +8,7 @@
 //   CancelledError, LoadContext.
 
 // Thrown (and caught silently) when a load is cancelled by a later navigation.
-class CancelledError extends Error {
+export class CancelledError extends Error {
   constructor() {
     super('load cancelled');
     this.name = 'CancelledError';
@@ -21,20 +21,27 @@ class CancelledError extends Error {
 //   - rejects when any error event fires on an error element;
 //   - rejects with CancelledError (and cleans up all listeners) when
 //     ctx.cancel() is called — e.g. because a new navigation superseded it.
-class LoadContext {
+export class LoadContext {
+  /** @type {(() => void)[]} */
+  _cancellers;
+
   constructor() {
     this._cancellers = [];
     this._cancelled  = false;
   }
 
-  // Wait for `element` to emit `event`.
-  // errorTriples: zero or more [element, eventName, ErrorConstructor] tuples.
-  //   When any named error event fires, the promise rejects with a new instance
-  //   of the given ErrorConstructor (or plain Error if omitted).
+  /**
+   * Wait for `element` to emit `event`.
+   * @param {EventTarget} element - the target element to wait on
+   * @param {string} event - the event name to listen for
+   * @param {...[EventTarget, string, ((e: Event) => Error) | undefined]} errorTriples - zero or more [element, eventName, ErrorConstructor] tuples. When any named error event fires, the promise rejects with a new instance of the given ErrorConstructor (or plain Error if omitted).
+   * @returns {Promise<Event>}
+   */
   waitFor(element, event, ...errorTriples) {
     if (this._cancelled) return Promise.reject(new CancelledError());
 
     return new Promise((resolve, reject) => {
+      /** @type {[EventTarget, string, EventListener][]} */
       const bound = [];
 
       const cleanup = () => {
@@ -45,12 +52,14 @@ class LoadContext {
 
       const cancel = () => { cleanup(); reject(new CancelledError()); };
 
+      /** @type {EventListener} */
       const onSuccess = (e) => { cleanup(); resolve(e); };
       bound.push([element, event, onSuccess]);
       element.addEventListener(event, onSuccess);
 
       for (const [errEl, errEvt, ErrClass] of errorTriples) {
-        const onError = ErrClass.prototype ? (e) => { cleanup(); reject(new ErrClass(e)); } : (e) => { cleanup(); reject(ErrClass(e)); };
+        /** @type {EventListener} */
+        const onError = (e) => { cleanup(); reject((ErrClass ?? (() => { return new Error(`caught ${errEvt}`); }))(e)); };
         bound.push([errEl, errEvt, onError]);
         errEl.addEventListener(errEvt, onError);
       }

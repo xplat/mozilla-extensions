@@ -6,7 +6,8 @@ Serves local media files and directory listings to the viewer over a loopback
 HTTP socket, generates thumbnails, and watches a platform queue directory for
 open requests from media-open.
 
-HTTP server binds to 127.7.203.98:0 (OS-assigned random port).
+HTTP server binds to 127.7.203.98:0 (or 127.0.0.1:0 on macOS due to loopback
+restrictions; OS-assigned random port).
 
 URL format:
   GET /<token>/media-file/<url-encoded-absolute-path>

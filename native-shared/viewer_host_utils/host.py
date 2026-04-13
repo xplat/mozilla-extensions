@@ -21,7 +21,7 @@ Usage::
     run_host('my-app', '127.7.203.x', MyHandler, _handle_req)
 """
 
-import logging, secrets, threading
+import logging, secrets, threading, sys
 import queue as _q
 from .platform      import cache_dir
 from .wire          import read_message, send_message
@@ -41,6 +41,11 @@ def run_host(app_name, bind_host, handler_class, handle_req_fn,
       - Starts a ThreadedHTTPServer on (bind_host, 0)
       - Sends {"event":"server","port":N,"token":"T"} to the extension
       - Handles ping → pong internally
+
+    Platform-specific behavior:
+      - On macOS: restricted loopback configuration forces binding to 127.0.0.1
+        regardless of the requested bind_host. The actual bound address is
+        available via server.server_address[0] after this function starts the server.
 
     Parameters
     ----------
@@ -67,12 +72,22 @@ def run_host(app_name, bind_host, handler_class, handle_req_fn,
     token               = secrets.token_hex(64)   # 512 bits of entropy
     handler_class.token = token
 
+    # Create an event that waits for the extension to register its origin for CORS
+    origin_ready = threading.Event()
+    handler_class.extension_origin = None
+    handler_class.origin_ready     = origin_ready
+
+    # macOS has restricted loopback configuration; always bind to 127.0.0.1 there
+    if sys.platform == 'darwin':
+        bind_host = '127.0.0.1'
+
     server = ThreadedHTTPServer((bind_host, 0), handler_class)
     threading.Thread(target=server.serve_forever, daemon=True,
                      name='http-server').start()
+    host = server.server_address[0]
     port = server.server_address[1]
 
-    send_message({'event': 'server', 'port': port, 'token': token})
+    send_message({'event': 'server', 'host': host, 'port': port, 'token': token})
 
     work_q = _q.Queue()
 
@@ -102,7 +117,10 @@ def run_host(app_name, bind_host, handler_class, handle_req_fn,
         if kind == 'open':
             handle_req_fn(item)
         elif kind == 'msg':
-            if item is not None and item.get('cmd') == 'ping':
+            if item is not None and item.get('cmd') == 'register-origin':
+                handler_class.extension_origin = item.get('origin')
+                handler_class.origin_ready.set()
+            elif item is not None and item.get('cmd') == 'ping':
                 send_message({'status': 'pong'})
             elif handle_msg_fn is not None:
                 handle_msg_fn(item)

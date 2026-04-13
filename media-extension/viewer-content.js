@@ -9,15 +9,106 @@
 //
 // Calls into globals defined in earlier / later modules:
 //   CancelledError, LoadContext,                         (viewer-load-context.js)
+
+import { LoadContext, CancelledError } from './viewer-load-context.js';
 //   ImageContent, GifContent, PlayableContent,
 //   VideoContent, QueuedVideoContent,
 //   EmptyContent, EMPTY_CONTENT, ErrorContent,           (viewer-media.js)
 //   imagePaneEl,                                         (viewer-ui.js)
-//   imgSpinnerEl,                                        (viewer-media-image.js)
+//   transitionCoverEl,                                   (viewer-media-playable.js)
 //   selector,                                            (viewer-selector.js)
-//   _endTransitionCover.                                 (viewer-media-playable.js)
 
-class ContentPane {
+import { ContentOccupant, ErrorContent, EMPTY_CONTENT } from './viewer-media.js';
+import { requireElement } from './viewer-util.js';
+
+/** @type {HTMLElement} */
+export const imagePaneEl    = requireElement('image-pane');
+/** @type {HTMLElement} */
+const imgSpinnerEl        = requireElement('img-spinner');
+
+// ── Info overlay ───────────────────────────────────────────────────────────────
+
+/** @type {HTMLElement} */
+export const infoOverlayEl       = requireElement('info-overlay');
+/** @type {HTMLElement} */
+const infoContentEl       = requireElement('info-content');
+
+/**
+ * Toggle the visibility of the info overlay.
+ */
+export function toggleInfoOverlay() {
+  var hidden = infoOverlayEl.classList.contains('hidden');
+  if (hidden) {
+    updateInfoOverlay(content.current);
+    infoOverlayEl.classList.remove('hidden');
+  } else {
+    infoOverlayEl.classList.add('hidden');
+  }
+}
+
+/**
+ * Update the info overlay content for the given occupant.
+ * @param {ContentOccupant | null} occupant
+ */
+export function updateInfoOverlay(occupant) {
+  if (!occupant) {
+    infoContentEl.textContent = '';
+    return;
+  }
+  var lines = occupant.getInfoLines();
+  infoContentEl.textContent = lines.join('\n');
+}
+
+// ── Transition cover ──────────────────────────────────────────────────────────
+//
+// Used for content transitions.  Snaps opaque (transition:none) to hide any
+// intermediate layout state, then fades out (0.15s) when new content is ready.
+// Callers may write DOM into transitionCoverEl before calling _startTransitionCover()
+// (e.g. a screenshot of the outgoing content); innerHTML is cleared automatically
+// when the fade ends so covers remain composable.
+// Calling _endTransitionCover() when no cover was started is harmless.
+
+/** @type {HTMLElement} */
+const transitionCoverEl = requireElement('transition-cover');
+
+/**
+ * Start the transition cover by adding the 'covering' class.
+ */
+export function _startTransitionCover() {
+  transitionCoverEl.classList.add('covering');
+}
+
+/**
+ * End the transition cover by removing the 'covering' class after animation.
+ */
+function _endTransitionCover() {
+  // One rAF defers the fade until after the browser has painted the newly
+  // ready content at least once, so the fade reveals a stable frame.
+  requestAnimationFrame(function() {
+    transitionCoverEl.classList.remove('covering');
+  });
+}
+
+// Clear any content written into the cover (e.g. screenshot overlays) once the
+// fade has completed so it doesn't linger invisibly and affect layout.
+transitionCoverEl.addEventListener('transitionend', function() {
+  if (!transitionCoverEl.classList.contains('covering')) {
+    transitionCoverEl.innerHTML = '';
+  }
+});
+
+// ── Content pane ──────────────────────────────────────────────────────────────
+
+export class ContentPane {
+  /** @type {ContentOccupant} */
+  current;
+  /** @type {ContentOccupant | null} */
+  future;
+  /** @type {LoadContext | null} */
+  _futureCtx;
+  /** @type {boolean} */
+  _surrendered;
+
   constructor() {
     this.current      = EMPTY_CONTENT;  // committed occupant (currently displayed)
     this.future       = null;           // occupant being loaded, or null
@@ -27,13 +118,13 @@ class ContentPane {
 
   // ── State queries ───────────────────────────────────────────────────────────
 
+  /**
+   * Get the full path of the active occupant, or null if empty.
+   * @returns {string | null}
+   */
   get fullPath() {
     var active = this.future || this.current;
     return (active && active.name !== 'empty') ? active.fullPath : null;
-  }
-
-  get isQueueContent() {
-    return (this.future || this.current) instanceof QueuedVideoContent;
   }
 
   // ── Load ────────────────────────────────────────────────────────────────────
@@ -41,6 +132,10 @@ class ContentPane {
   // Kick off an async content load.  Returns false if already loaded (no-op).
   // The actual loading runs asynchronously; this method returns immediately
   // after starting it so the caller can proceed (e.g. set focus).
+  /**
+   * @param {ContentOccupant} occupant
+   * @returns {boolean}
+   */
   load(occupant) {
     if (this.current.name === occupant.name && !this.future) {
       return false;  // already loaded, nothing to do
@@ -62,12 +157,6 @@ class ContentPane {
     // Spinner on: stopped by commitFuture() on success.
     imgSpinnerEl.classList.remove('hidden');
 
-    if (occupant.filename) {
-      document.title = occupant.filename + ' — Media Viewer';
-    } else {
-      selector.updateDirPath();
-    }
-
     const self = this;
     occupant.load(this, ctx)
       .then(function() { self.commitFuture(ctx); })
@@ -86,6 +175,10 @@ class ContentPane {
   // If the current occupant uses the same element, ask it to surrender first.
   // After this resolves, the element is unused.
   // Double-surrender is guarded by the central _surrendered flag.
+  /**
+   * @param {ContentOccupant} occupant
+   * @param {LoadContext} ctx
+   */
   async request(occupant, ctx) {
     if (!this._surrendered && this.current.element === occupant.element) {
       this._surrendered = true;
@@ -96,12 +189,17 @@ class ContentPane {
 
   // ── Commit ──────────────────────────────────────────────────────────────────
 
-  // Called by the .then() chain in load() after occupant.load() resolves.
-  // Stops the spinner, cleans up the old occupant, switches the content-active
-  // class, applies the imagePaneEl mode class, and ends any transition cover.
+  /**
+   * Commit the future occupant as the current occupant after loading completes.
+   * Called by the .then() chain in load() after occupant.load() resolves.
+   * Stops the spinner, cleans up the old occupant, switches the content-active
+   * class, applies the imagePaneEl mode class, and ends any transition cover.
+   * @param {LoadContext} ctx
+   */
   commitFuture(ctx) {
     if (ctx !== this._futureCtx) return;
     const occupant = this.future;
+    if (!occupant) return;
     const prev     = this.current;
 
     imgSpinnerEl.classList.add('hidden');
@@ -118,12 +216,20 @@ class ContentPane {
     this._surrendered = false;
 
     _endTransitionCover();
+
+    dispatchEvent(new CustomEvent('contentReady', { detail: { occupant } }));
   }
 
   // ── Key dispatch ────────────────────────────────────────────────────────────
 
   // Route a keydown event to the current occupant, but swallow it silently
   // while a new occupant is loading (future !== null).
+  /**
+   * @param {KeyboardEvent} e
+   * @param {string} key
+   * @param {boolean} ctrl
+   * @param {boolean} plain
+   */
   handleKey(e, key, ctrl, plain) {
     if (this.future) return;
     this.current.handleKey(e, key, ctrl, plain);
@@ -134,10 +240,14 @@ class ContentPane {
   // Swap the future occupant mid-load without cancelling the load.  The context
   // is checked for staleness; a mismatched ctx is silently ignored.  By
   // convention the caller should immediately hand off via pane.future.load().
+  /**
+   * @param {ContentOccupant} newOccupant
+   * @param {LoadContext} ctx
+   */
   redirect(newOccupant, ctx) {
     if (ctx !== this._futureCtx) return;
     this.future = newOccupant;
   }
 }
 
-var content = new ContentPane();
+export const content = new ContentPane();

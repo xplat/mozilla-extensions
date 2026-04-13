@@ -268,6 +268,25 @@ html, body {
   background: var(--surface-2);
 }
 
+/* No-dir hint — shown when no directory is loaded */
+#selector-pane { position: relative; }
+#selector-no-dir {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  padding: 0 16px;
+}
+#selector-pane.no-dir #selector-no-dir { display: flex; }
+#selector-no-dir span {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
 .mode-btn {
   height: 18px;
   padding: 0 5px;
@@ -385,6 +404,7 @@ html, body {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  contain: strict;
 }
 
 #image-pane.mode-scroll {
@@ -401,22 +421,68 @@ html, body {
   cursor: grabbing;
 }
 
-#transform-host {
+.transform-host {
   position: relative;
   flex-shrink: 0;
-  display: none;  /* shown by rule below */
+  display: contents;
+  &.transforming {
+    display: block;
+    width: var(--display-width);
+    height: var(--display-height);
+    & > .transform-guest {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      min-width: 0;
+      min-height: 0;
+      object-fit: none;
+      margin-left: calc(var(--natural-width) / -2);
+      margin-top: calc(var(--natural-height) / -2);
+      transform-origin: center center;
+      transform: var(--forward-transform, none);
+    }
+    & > .transform-reverser {
+      transform: var(--backward-transform, none) var(--forward-transform, none);
+    }
+  }
+  & > .transform-guest {
+    display: block;
+    width: auto;
+    height: auto;
+    object-fit: var(--transform-object-fit, contain);
+  }
+  & > .transform-reverser {
+    position: absolute;
+    inset: 0;
+    visibility: hidden;
+    transform-origin: center center;
+    & > .transform-cursor {
+      position: sticky;
+      left: 50%;
+      top: 50%;
+      width: 0;
+      height: 0;
+    }
+  }
 }
-#image-pane[data-show="transform-host"] #transform-host { display: block; }
+#image-pane:not([data-show="main-image"]) #main-image { display: none; }
+#image-pane:not([data-show="main-video"]) #main-video { display: none; }
 
 /* In scroll mode, margin:auto centers transform-host when smaller than the
    viewport, and collapses to 0 when larger (so scroll starts at the edge). */
-#image-pane.mode-scroll #transform-host {
+#image-pane.mode-scroll .transform-host {
   margin: auto;
 }
 
-#main-image {
-  display: block;
-  /* Position set by JS for transform mode */
+/* Trivial (non-transforming) guest sizing by mode:
+   - fit mode: fill pane so object-fit can letterbox correctly
+   - scroll mode: natural size, margin:auto centers when smaller than viewport */
+#image-pane:not(.mode-scroll) .transform-host:not(.transforming) > .transform-guest {
+  width: 100%;
+  height: 100%;
+}
+#image-pane.mode-scroll .transform-host:not(.transforming) > .transform-guest {
+  margin: auto;
 }
 
 /* Spinner — shown during image load */
@@ -602,16 +668,15 @@ html, body {
 /* ── VIDEO / AUDIO ELEMENTS ─────────────────────────────────────────────── */
 
 /* Video element: fills image pane, hidden until video/gif mode is active */
-#main-video {
+#main-video:not(.imagelike) {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
   background: #111;
-  display: none;
+  display: block;
 }
-#image-pane[data-show="main-video"] #main-video { display: block; }
 
 /* Audio element is invisible; only its playback matters */
 #main-audio {

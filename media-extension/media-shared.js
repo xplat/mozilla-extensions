@@ -26,8 +26,12 @@ const LS_BALANCE = 'media-balance';
 const LS_AQ      = 'media-audio-queue';
 const LS_VQ      = 'media-video-queue';
 
-// Convert a file:// URL to a proxy URL that the background's webRequest
-// listener will rewrite to the real server endpoint.
+/**
+ * Convert a file:// URL to a proxy URL that the background's webRequest
+ * listener will rewrite to the real server endpoint.
+ * @param {string} fileUrl
+ * @returns {string}
+ */
 function toProxyFile(fileUrl) {
   var path    = fileUrl.replace(/^file:\/\//, '');
   var encoded = path.split('/').map(encodeURIComponent).join('/');
@@ -43,13 +47,18 @@ function toProxyFile(fileUrl) {
 // is one-shot per element and the set of elements differs between contexts.
 
 var _panValue = parseFloat(localStorage.getItem(LS_BALANCE) || '0');
+/** @type {AudioContext | null} */
 var _audioCtx = null;
+/** @type {StereoPannerNode | null} */
 var _panNode  = null;
 
-// Ensure the AudioContext + StereoPannerNode chain exists.  No-op if already
-// created; resumes a suspended context (browser autoplay policy on web pages).
-// Callers should invoke this before any createMediaElementSource() call and
-// before playing audio that needs to be routed through the panner.
+/**
+ * Ensure the AudioContext + StereoPannerNode chain exists.  No-op if already
+ * created; resumes a suspended context (browser autoplay policy on web pages).
+ * Callers should invoke this before any createMediaElementSource() call and
+ * before playing audio that needs to be routed through the panner.
+ * @returns {asserts _panNode is StereoPannerNode}
+ */
 function _ensureAudioContext() {
   if (_audioCtx) {
     if (_audioCtx.state === 'suspended') _audioCtx.resume().catch(function() {});
@@ -61,8 +70,13 @@ function _ensureAudioContext() {
   _panNode.connect(_audioCtx.destination);
 }
 
-// Apply an av-settings broadcast payload to an HTMLMediaElement and the
-// shared panner.  All three properties are optional; absent ones are skipped.
+/**
+ * Apply an av-settings broadcast payload to an HTMLMediaElement and the
+ * shared panner.  All three properties are optional; absent ones are skipped.
+ * @param {HTMLMediaElement} mediaEl
+ * @param {{volume?: number, muted?: boolean, balance?: number}} d
+ * @returns {void}
+ */
 function applyAvSettings(mediaEl, d) {
   if (d.volume  !== undefined) mediaEl.volume = d.volume;
   if (d.muted   !== undefined) mediaEl.muted  = d.muted;
@@ -72,8 +86,12 @@ function applyAvSettings(mediaEl, d) {
   }
 }
 
-// Initialise an HTMLMediaElement's volume and mute state from localStorage,
-// falling back to full volume / unmuted if no values have been saved yet.
+/**
+ * Initialise an HTMLMediaElement's volume and mute state from localStorage,
+ * falling back to full volume / unmuted if no values have been saved yet.
+ * @param {HTMLMediaElement} mediaEl
+ * @returns {void}
+ */
 function initMediaElVolume(mediaEl) {
   mediaEl.volume = parseFloat(localStorage.getItem(LS_VOLUME) || '1');
   mediaEl.muted  = localStorage.getItem(LS_MUTED) === 'true';

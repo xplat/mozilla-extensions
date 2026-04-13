@@ -3,20 +3,73 @@
 //
 // Common class for file lists--selector and the audio and video queue panes.
 
-class FileList {
+import { fmtSize } from './viewer-util.js';
+/** @typedef {import('./viewer-util.js').FileListItem} FileListItem */
+/** @typedef {import('./viewer-ui.js').UIState} UIState */
+
+// ── Constants ──────────────────────────────────────────────────────────────────
+// LOOPBACK, FILE_PROXY_PREFIX, DIR_PROXY_PREFIX, THUMB_PROXY_PREFIX,
+// QUEUE_DIR_PROXY_PREFIX, LS_*, toProxyFile(), applyAvSettings(),
+// initMediaElVolume() — all defined in media-shared.js (loaded first).
+
+/**
+ * Maps file extension (lowercase, no dot) → media category.
+ * Only extensions that should be selectable/viewable belong here;
+ * anything absent returns 'unknown'.
+ * @type {Record<string, 'image' | 'video' | 'audio'>}
+ */
+const MEDIA_TYPES = {
+  // images (rendered natively by the browser)
+  jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image',
+  avif: 'image', bmp: 'image', tiff: 'image', tif: 'image', svg: 'image', ico: 'image',
+  // video
+  mp4: 'video', m4v: 'video', webm: 'video', ogv: 'video',
+  mov: 'video', avi: 'video', mkv: 'video', flv: 'video', wmv: 'video', '3gp': 'video',
+  // audio
+  mp3: 'audio', flac: 'audio', ogg: 'audio', oga: 'audio',
+  m4a: 'audio', aac: 'audio', opus: 'audio', wav: 'audio',
+};
+
+/**
+ * @param {string} filename
+ * @returns {'image' | 'video' | 'audio' | 'unknown'}
+ */
+export function mediaType(filename) {
+  var dot = filename.lastIndexOf('.');
+  if (dot < 0) return 'unknown';
+  return MEDIA_TYPES[filename.slice(dot + 1).toLowerCase()] || 'unknown';
+}
+
+// ── Proxy URL helpers ──────────────────────────────────────────────────────
+// toProxyFile() is defined in media-shared.js.
+
+/**
+ * @param {string} fileUrl
+ */
+function toProxyThumb(fileUrl) {
+  var path    = fileUrl.replace(/^file:\/\//, '');
+  var encoded = path.split('/').map(encodeURIComponent).join('/');
+  return THUMB_PROXY_PREFIX + encoded;
+}
+
+export class ItemList {
 
   // ── Private fields ──────────────────────────────────────────────────────────
 
-  #pane    = null;   // pane this file list lives in
-  #container = null; // the .list-list scrollable container in the pane
+  /** @type {HTMLElement} */
+  #container; // the .list-list scrollable container in the pane (set in constructor)
+  /** @type {FileListItem[]} */
   #listing = [];     // sorted/filtered entry objects from latest fetch
   #selIdx  = -1;     // index of selected item (-1 = none)
   #activeIdx  = -1;  // index of active item (-1 = none)
   #scrollIdx  = -1;  // index of item scrolled to (-1 = none)
+  /** @type {HTMLElement[]} */
   #items   = [];     // flat array of .file-item elements, parallel to #listing
   #listenersWired = false;
+  /** @type {ResizeObserver | null} */
   #resizeObserver = null;
-  #ui      = null;   // ui object, use it to persist and query state and such
+  /** @type {UIState} */
+  #ui;               // ui object, use it to persist and query state and such
 
   // Heights tracked for ResizeObserver scroll-position preservation.
   #itemH   = 0;
@@ -28,28 +81,48 @@ class FileList {
   // for the ~900 off-screen chunks in a large directory.
   static #CHUNK_SIZE = 100;
 
+  /**
+   * @param {UIState} ui
+   * @param {HTMLElement} pane
+   */
   constructor(ui, pane) {
     this.#ui = ui;
-    this.#pane = pane;
-    this.#container = pane.querySelector(".list-list");
+    const container = pane.querySelector(".list-list");
+    if (!container) throw new Error('Required element .list-list not found');
+    if (!(container instanceof HTMLElement)) throw new Error("ItemList container element is non-HTML");
+    this.#container = container;
+    // Clicking anywhere in the pane body refocuses the list.
+    pane.addEventListener('mousedown', () => this.ui.setFocusMode('list'));
     return;
   }
 
   // ── Listing utilities ───────────────────────────────────────────────────────
 
   // Override to make non-selectable items.
+  /**
+   * @param {FileListItem} item
+   * @returns {boolean}
+   */
   _isSelectable(item) {
     return true;
   }
 
   // Override to make items that aren't part of the next/prev sequence.
   // A viewable file must be selectable.
+  /**
+   * @param {FileListItem} item
+   * @returns {boolean}
+   */
   _isViewable(item) {
     return true;
   }
 
   // Override to return the full file:// path for a listing item (used for
   // thumbnail src URLs).  Returns null if the subclass doesn't supply paths.
+  /**
+   * @param {FileListItem} item
+   * @returns {string|null}
+   */
   fullPathOf(item) {
     return null;
   }
@@ -57,6 +130,12 @@ class FileList {
   // Override to kick off any background thumbnail pre-fetch after entering
   // thumbnail mode or loading a new directory while in thumbnail mode.
   prefetchThumbnails() {}
+
+  // Override to handle list visibility show/hide lifecycle.
+  show() {}
+
+  // Override to handle list visibility show/hide lifecycle.
+  hide() {}
 
   set listing(l) {
     this.#listing = l;
@@ -71,28 +150,35 @@ class FileList {
     if (this.#listenersWired) return;
     this.#listenersWired = true;
 
-    this.#container.addEventListener('click', (e) => {
-      const el = e.target.closest('.file-item');
-      if (!el || el.classList.contains('dimmed')) return;
-      setFocusMode('list');
+    this.#container.addEventListener('click', /** @type {EventListener} */ (e) => {
+      const el = e.target instanceof Element ? e.target.closest('.file-item') : null;
+      if (!el) return;
+      if (el.classList.contains('dimmed')) return;
+      if (!(el instanceof HTMLElement)) return;
+      if (!el.dataset.idx) return;
+      this.ui.setFocusMode('list');
       this.selectItem(parseInt(el.dataset.idx, 10), false);
       this.#scrollIdx = -1;
     });
 
-    this.#container.addEventListener('dblclick', (e) => {
-      const el = e.target.closest('.file-item');
-      if (!el || el.classList.contains('dimmed')) return;
+    this.#container.addEventListener('dblclick', /** @type {EventListener} */ (e) => {
+      const el = e.target instanceof Element ? e.target.closest('.file-item') : null;
+      if (!el) return;
+      if (!(el instanceof HTMLElement)) return;
+      if (!el.dataset.idx) return;
       this.openItem(parseInt(el.dataset.idx, 10));
     });
 
-    this.#container.addEventListener('load', (e) => {
+    this.#container.addEventListener('load', /** @type {EventListener} */ (e) => {
       const t = e.target;
+      if (!(t instanceof Element)) return;
       if (t.tagName !== 'IMG' || !t.classList.contains('thumb-img')) return;
       t.classList.remove('thumb-loading');
     }, true);
 
-    this.#container.addEventListener('error', (e) => {
+    this.#container.addEventListener('error', /** @type {EventListener} */ (e) => {
       const t = e.target;
+      if (!(t instanceof Element)) return;
       if (t.tagName !== 'IMG' || !t.classList.contains('thumb-img')) return;
       t.classList.remove('thumb-loading');
       const item = t.closest('.file-item');
@@ -198,7 +284,7 @@ class FileList {
 
   renderList() {
     this.#wireListeners();
-    this.#resizeObserver.disconnect();
+    this.#resizeObserver?.disconnect();
 
     this.#container.innerHTML = '';
     this.#items  = [];
@@ -206,32 +292,24 @@ class FileList {
     this.#activeIdx = -1;
     this.#scrollIdx = -1;
 
-    let chunk = null;
+    // chunk will never be used if list length is 0, and it won't stay null otherwise.
+    let chunk = /** @type {HTMLElement} */ (/** @type {unknown}*/ (null));
     this.#listing.forEach((item, idx) => {
-      if (idx % FileList.#CHUNK_SIZE === 0) {
+      if (idx % ItemList.#CHUNK_SIZE === 0) {
         chunk = document.createElement('div');
         chunk.className = 'item-chunk';
         this.#container.appendChild(chunk);
       }
 
-      const el = document.createElement('div');
-      el.className = 'file-item';
+      let el = this.#renderItem(item);
       el.dataset.idx = String(idx);
-
-      const mtype = mediaType(item.u);
-      if (!this._isSelectable(item)) el.classList.add('dimmed');
-      if (item.t === 'd')            el.classList.add('is-dir');
-      if (mtype === 'video')         el.classList.add('is-video');
-      if (mtype === 'audio')         el.classList.add('is-audio');
-
-      this.#renderItem(el, item);
       this.#items.push(el);
       chunk.appendChild(el);
     });
 
     // Last chunk may be smaller than CHUNK_SIZE; tell CSS so its height is exact.
-    const tail = this.#listing.length % FileList.#CHUNK_SIZE;
-    if (tail !== 0 && chunk) chunk.style.setProperty('--chunk-size', tail);
+    const tail = this.#listing.length % ItemList.#CHUNK_SIZE;
+    if (tail !== 0) chunk.style.setProperty('--chunk-size', String(tail));
 
     // Reconnect observer only when there is content to observe.  The first
     // callback establishes the baseline heights; no scroll adjustment is made.
@@ -239,16 +317,27 @@ class FileList {
       this.#itemH   = 0;  // reset so first callback skips scroll adjustment
       this.#clientH = 0;
       this.#scrollH = 0;
-      this.#resizeObserver.observe(this.#container);
+      this.#resizeObserver?.observe(this.#container);
     }
   }
 
-  // Renders all child elements for a file-item in a single pass.  The same DOM
-  // serves both list and thumbnail modes; viewer.css toggles visibility via the
-  // .thumbnails class on the parent list.  load/error events are handled by
-  // delegated capture listeners on this.#container rather than per-element.
-  #renderItem(el, item) {
+  /**
+   * Renders all child elements for a file-item in a single pass. The same DOM
+   * serves both list and thumbnail modes; viewer.css toggles visibility via the
+   * .thumbnails class on the parent list. load/error events are handled by
+   * delegated capture listeners on this.#container rather than per-element.
+   * @param {FileListItem} item
+   */
+  #renderItem(item) {
     const type = mediaType(item.u);
+
+    const el = document.createElement('div');
+    el.className = 'file-item';
+
+    if (!this._isSelectable(item)) el.classList.add('dimmed');
+    if (item.t === 'd')            el.classList.add('is-dir');
+    if (type === 'video')          el.classList.add('is-video');
+    if (type === 'audio')          el.classList.add('is-audio');
 
     const iconEl = document.createElement('span');
     iconEl.className = 'file-icon';
@@ -263,7 +352,9 @@ class FileList {
       el.classList.add('has-thumb');
       const imgEl = document.createElement('img');
       imgEl.className = 'thumb-img thumb-loading';
-      imgEl.src       = toProxyThumb(this.fullPathOf(item));
+      const fp        = this.fullPathOf(item)
+      if (fp)
+	imgEl.src     = toProxyThumb(fp);
       imgEl.alt       = '';
       imgEl.draggable = false;
       imgEl.loading   = 'lazy';
@@ -279,10 +370,14 @@ class FileList {
     metaEl.className = 'file-meta';
     if (item.s !== undefined) metaEl.textContent = fmtSize(item.s);
     el.appendChild(metaEl);
+    return el;
   }
 
   // ── Item selection ──────────────────────────────────────────────────────────
 
+  /**
+   * @param {HTMLElement} item
+   */
   needsScroll(item) {
     const containerRect = this.#container.getBoundingClientRect();
     const itemRect = item.getBoundingClientRect();
@@ -290,6 +385,10 @@ class FileList {
     return itemRect.top < containerRect.top || itemRect.bottom > containerRect.bottom;
   }
 
+  /**
+   * @param {number} idx
+   * @param {boolean} [scroll]
+   */
   selectItem(idx, scroll) {
     if (idx >= this.#listing.length) return;
     if (this.#selIdx >= 0) this.#items[this.#selIdx].classList.remove('selected');
@@ -303,6 +402,10 @@ class FileList {
     this.#scrollIdx = -1;
   }
 
+  /**
+   * @param {number} idx
+   * @param {boolean} scroll
+   */
   markActive(idx, scroll) {
     if (idx < 0 || idx >= this.#listing.length) return;
     if (this.#activeIdx >= 0) this.#items[this.#activeIdx].classList.remove('active');
@@ -319,12 +422,16 @@ class FileList {
 
   // passive means be unobtrusive to the UI because this was triggered by some
   // background process like autoplay.
+  /**
+   * @param {number} idx
+   * @param {boolean} [passive]
+   */
   openItem(idx, passive = false) {
     if (idx < 0 || idx >= this.#listing.length) return;
     const item = this.#listing[idx];
     if (!this._isSelectable(item)) return;
     this.markActive(idx, true);
-    return item;
+    return;
   }
 
   receiveFocus() {
@@ -361,6 +468,10 @@ class FileList {
 
   // ── Keyboard navigation helpers ─────────────────────────────────────────────
 
+  /**
+   * @param {boolean} goingUp
+   * @returns {number}
+   */
   #startIdx(goingUp) {
     if (this.#selIdx >= 0) {
       return this.#selIdx;
@@ -373,6 +484,11 @@ class FileList {
     }
   }
 
+  /**
+   * @param {number} start
+   * @param {number} limit
+   * @returns {number}
+   */
   findSelectable(start, limit) {
     for (let cur = start; cur <= limit; cur++) {
       if (this._isSelectable(this.#listing[cur])) {
@@ -382,6 +498,11 @@ class FileList {
     return -1;
   }
 
+  /**
+   * @param {number} start
+   * @param {number} limit
+   * @returns {number}
+   */
   findLastSelectable(start, limit) {
     for (let cur = start; cur >= limit; cur--) {
       if (this._isSelectable(this.#listing[cur])) {
@@ -450,6 +571,9 @@ class FileList {
     this.selectItem(next, true);
   }
 
+  /**
+   * @param {number} dir
+   */
   jumpToEdge(dir) {
     if (dir > 0) {
       for (let i = 0; i < this.#listing.length; i++) {
@@ -464,6 +588,12 @@ class FileList {
 
   // ── Key handler ─────────────────────────────────────────────────────────────
 
+  /**
+   * @param {KeyboardEvent} e
+   * @param {string} key
+   * @param {boolean} ctrl
+   * @param {boolean} plain
+   */
   handleKey(e, key, ctrl, plain) {
     if (!plain) return;
     switch (key) {
@@ -481,7 +611,7 @@ class FileList {
         if (this.#selIdx >= 0 && this.#selIdx !== this.#activeIdx) {
           this.openItem(this.#selIdx);
         } else {
-          setFocusMode('viewer');
+          this.ui.setFocusMode('viewer');
         }
         break;
       case 'ArrowLeft':
@@ -492,8 +622,24 @@ class FileList {
 
   // ── Public getters ──────────────────────────────────────────────────────────
 
+  /**
+   * @returns {FileListItem[]}
+   */
   get listing()     { return this.#listing;   }
+  /**
+   * @returns {number}
+   */
   get activeIdx()   { return this.#activeIdx; }
+  /**
+   * @returns {number}
+   */
   get selectedIdx() { return this.#selIdx;    }
+  /**
+   * @returns {HTMLElement[]}
+   */
   get _items()      { return this.#items;     }
+  /**
+   * @returns {UIState}
+   */
+  get ui()          { return this.#ui;        }
 }

@@ -7,65 +7,6 @@
 const VIEWER_HTML = chrome.runtime.getURL('viewer.html');
 const HOST_NAME   = 'media_viewer_host';
 
-// ── Per-request proxy redirect ────────────────────────────────────────────
-
-chrome.webRequest.onBeforeRequest.addListener(
-  function(details) {
-    // Only allow requests originating from our own extension pages.
-    var origin = details.originUrl || details.documentUrl || '';
-    if (!origin.startsWith(chrome.runtime.getURL(''))) {
-      return { cancel: true };
-    }
-
-    if (!serverPort || !serverToken) {
-      return { cancel: true };
-    }
-
-    var url = details.url;
-    var encodedPath;
-
-    if (url.startsWith(FILE_PROXY_PREFIX)) {
-      encodedPath = url.slice(FILE_PROXY_PREFIX.length);
-      return {
-        redirectUrl: 'http://' + LOOPBACK + ':' + serverPort +
-                     '/' + serverToken + '/media-file/' + encodedPath
-      };
-    }
-
-    if (url.startsWith(DIR_PROXY_PREFIX)) {
-      encodedPath = url.slice(DIR_PROXY_PREFIX.length);
-      return {
-        redirectUrl: 'http://' + LOOPBACK + ':' + serverPort +
-                     '/' + serverToken + '/media-dir/' + encodedPath
-      };
-    }
-
-    if (url.startsWith(THUMB_PROXY_PREFIX)) {
-      encodedPath = url.slice(THUMB_PROXY_PREFIX.length);
-      return {
-        redirectUrl: 'http://' + LOOPBACK + ':' + serverPort +
-                     '/' + serverToken + '/media-thumb/' + encodedPath
-      };
-    }
-
-    if (url.startsWith(QUEUE_DIR_PROXY_PREFIX)) {
-      encodedPath = url.slice(QUEUE_DIR_PROXY_PREFIX.length);
-      return {
-        redirectUrl: 'http://' + LOOPBACK + ':' + serverPort +
-                     '/' + serverToken + '/media-queue-dir/' + encodedPath
-      };
-    }
-
-    return { cancel: true };
-  },
-  {
-    urls: [FILE_PROXY_PREFIX + '*', DIR_PROXY_PREFIX + '*',
-           THUMB_PROXY_PREFIX + '*', QUEUE_DIR_PROXY_PREFIX + '*'],
-    types: ['xmlhttprequest', 'image', 'media', 'other']
-  },
-  ['blocking']
-);
-
 // ── Native messaging ──────────────────────────────────────────────────────
 
 function handleNativeOpen(msg) {
@@ -83,8 +24,8 @@ function handleNativeOpen(msg) {
   chrome.tabs.create({ url: viewerUrl });
 }
 
-// Called once the native host's 'server' event arrives and serverPort is valid.
-// We defer audio loading to here because _bgAudioUrl() needs serverPort.
+// Called once the native host's 'server' event arrives and serverHost/serverPort/serverToken are valid.
+// We defer audio loading to here because _bgAudioUrl() needs these values.
 // Also resumes playback if _aqPlaying was true before a reconnect.
 function handleNativeServer() {
   if (_aq.items.length > 0) {
@@ -215,7 +156,7 @@ function _broadcastState() {
 function _bgAudioUrl(fileOrUrl) {
   var path    = fileOrUrl.replace(/^file:\/\//, '');
   var encoded = path.split('/').map(encodeURIComponent).join('/');
-  return 'http://' + LOOPBACK + ':' + serverPort + '/' + serverToken + '/media-file/' + encoded;
+  return 'http://' + serverHost + ':' + serverPort + '/' + serverToken + '/media-file/' + encoded;
 }
 
 function _loadAudioItem(index, timeOffset, autoPlay) {
@@ -469,6 +410,7 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 
 // ── Initialise ────────────────────────────────────────────────────────────
 
+setupProxyRedirect();
 _loadQueueState();
 // Audio preload is deferred to handleNativeServer(), which fires once the
 // proxy server port is known and the webRequest redirect will work.

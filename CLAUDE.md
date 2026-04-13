@@ -32,7 +32,27 @@ YOU DO NOT:
 Never, ever start reading whole files or large swathes of code without explicit permission from your human collaborator.
 Don't use the read tool on code files to get a "background" or "general understanding" or filter-feed your way to
 specific answers.  Always make use of skills and agents at your disposal to make sure every byte you read has
-predictable and long-term value.
+predictable and long-term value.  Use
+`./list-sections [-m <rg regexp>] [<file> ...]` to find marked file sections and their starting lines by matching partial titles and
+`./dump-sections <perl regexp> [<file> ...]` or read tool with line ranges to read them (by matching full titles).  But you don't get any extra
+credit for dumping *all* sections of a file over just reading it, only use it when it helps you get away with actualy reading less stuff.  Also make good use of the typescript LSP to find
+definitions or callers.
+
+Good:
+- You need to read a single function that you already know is relevant to your task.  You use lsp to find it and the read tool to read it.
+- You need to see how a particular file handles a task.  You use list-sections to get an outline and read one or two relevant-looking sections with dump-sections.
+- You need to know what a file does in a broad sense.  You look at the first 5 lines for relevant comments, and if that doesn't help enough, you fire off an inquisitor agent with a couple of brief, focused questions.
+- You don't feel like you have enough context to know where to look for information you need for your task.  You pause and ask a human collaborator.
+- You have a broad outline of some changes that need to be made to a file.  Without worrying about figuring out every detail first, you hand the outline off to a file-surgeon.
+
+Bad:
+- You need to read a single function that you already know is relevant to your task.  You read the whole file it is in in case there's any helpful context.
+- You use list-sections to get an outline of a file, then read the sections 4 at a time until you've read them all.
+- You feel pressured to justify what you would read next, so you use "knowing what will be relevant to read" as a reason to justify reading everything that could possibly be relevant.
+
+I know you feel more comfortable when you have a broad, detailed knowledge of the codebase, but it's a bad investment for you as an LLM--you can't retain the knowledge long-term and it makes thinking and acting more expensive.
+
+---
 
 This project contains multiple firefox extensions.  At least some of them are specifically meant to replace native apps
 with easier-to-manage, more resource-efficient browser tabs.  (Even if the browser tabs are sometimes less efficient

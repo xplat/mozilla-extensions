@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "noUnusedLocals": true
+  },
+  "files": [
+    "state.js",
+    "viewer-transform.js",
+    "viewer-media.js",
+    "media-shared.js",
+    "viewer-util.js",
+    "viewer-ui.js",
+    "viewer-list.js",
+    "viewer-audio.js",
+    "viewer-queue-mgt.js",
+    "viewer-load-context.js",
+    "viewer-content.js",
+    "viewer-media-audio.js",
+    "viewer-media-playable.js",
+    "viewer-selector.js",
+    "viewer-media-imagelike.js",
+    "viewer-media-image.js",
+    "viewer-media-gif.js",
+    "viewer-media-video.js",
+    "viewer-media-queued-video.js"
+  ]
+}

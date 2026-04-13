@@ -12,12 +12,26 @@
 
 // Capture built-ins before we shadow them with our exports.
 const _String  = globalThis.String;
-const _Boolean = globalThis.Boolean;
-const _Number  = globalThis.Number;
 
 // ---------------------------------------------------------------------------
 // Content models
 // ---------------------------------------------------------------------------
+
+/**
+ * @template T
+ * @callback Validate
+ * @param {any} x
+ * @returns {x is T}
+ */
+
+/**
+ * @template T
+ * @typedef {Object} ContentModel
+ * @property {string} tag
+ * @property {Validate<T>} validate
+ * @property {function(T): string} serialize
+ * @property {function(string): T} deserialize
+ */
 
 /**
  * A content model describes how to validate, serialize, and deserialize a
@@ -25,31 +39,41 @@ const _Number  = globalThis.Number;
  * Hidden values are stored as-is in the JSON state object.
  */
 
+/**
+ * @type ContentModel<number>
+ */
 export const Integer = Object.freeze({
   tag: 'Integer',
+  /** @type Validate<number> */
   validate(v) {
-    if (!_Number.isInteger(v))
+    if (!Number.isInteger(v))
       throw new TypeError(`Integer expected, got ${typeof v}: ${v}`);
+    return true;
   },
   serialize: v => _String(v),
   deserialize(s) {
-    const n = _Number(s);
-    if (!_Number.isInteger(n) || s.trim() === '')
+    const n = Number(s);
+    if (!Number.isInteger(n) || s.trim() === '')
       throw new TypeError(`Cannot deserialize as Integer: "${s}"`);
     return n;
   },
 });
 
+/**
+ * @type ContentModel<number>
+ */
 export const Float = Object.freeze({
   tag: 'Float',
+  /** @type Validate<number> */
   validate(v) {
-    if (typeof v !== 'number' || !_Number.isFinite(v))
+    if (typeof v !== 'number' || !Number.isFinite(v))
       throw new TypeError(`Finite float expected, got ${typeof v}: ${v}`);
+    return true;
   },
   serialize: v => _String(v),
   deserialize(s) {
-    const n = _Number(s);
-    if (!_Number.isFinite(n) || s.trim() === '')
+    const n = Number(s);
+    if (!Number.isFinite(n) || s.trim() === '')
       throw new TypeError(`Cannot deserialize as Float: "${s}"`);
     return n;
   },
@@ -57,21 +81,31 @@ export const Float = Object.freeze({
 
 // Exported as "String" to match the spec, shadowing the global inside the
 // module only.  Callers import by name so there is no ambiguity for them.
+/**
+ * @type ContentModel<string>
+ */
 export const String = Object.freeze({
   tag: 'String',
+  /** @type Validate<string> */
   validate(v) {
     if (typeof v !== 'string')
       throw new TypeError(`String expected, got ${typeof v}: ${v}`);
+    return true;
   },
   serialize:   v => v,
   deserialize: s => s,
 });
 
+/**
+ * @type ContentModel<boolean>
+ */
 export const Boolean = Object.freeze({
   tag: 'Boolean',
+  /** @type Validate<boolean> */
   validate(v) {
     if (typeof v !== 'boolean')
       throw new TypeError(`Boolean expected, got ${typeof v}: ${v}`);
+    return true;
   },
   serialize:   v => v ? 'true' : 'false',
   deserialize(s) {
@@ -81,11 +115,11 @@ export const Boolean = Object.freeze({
   },
 });
 
+// Go full TS syntax to capture the variadic parameters correctly.
 /**
  * Enum(...values) — one of a fixed set of string literals.
  *
- * @param {...string} values  The allowed values.
- * @returns {ContentModel}
+ * @type <const T extends Array<string>>(...values: T) => ContentModel<T[number]>
  */
 export function Enum(...values) {
   if (values.length === 0) throw new TypeError('Enum requires at least one value');
@@ -93,9 +127,11 @@ export function Enum(...values) {
   return Object.freeze({
     tag: 'Enum',
     allowed,
+    /** @type Validate<(typeof values)[number]> */
     validate(v) {
       if (!allowed.has(v))
         throw new TypeError(`Enum value must be one of [${[...allowed].join(', ')}], got: ${v}`);
+      return true;
     },
     serialize:   v => v,
     deserialize(s) {
@@ -110,28 +146,49 @@ export function Enum(...values) {
 // Namespace constants (strings used as keys in the registry)
 // ---------------------------------------------------------------------------
 
+/**
+ * @type {'Query'}
+ */
 export const Query    = 'Query';
+/**
+ * @type {'Fragment'}
+ */
 export const Fragment = 'Fragment';
+/**
+ * @type {'Hidden'}
+ */
 export const Hidden   = 'Hidden';
 
-const NAMESPACES = new Set([Query, Fragment, Hidden]);
+const NAMESPACES = new Set(/** @type {const} */([Query, Fragment, Hidden]));
 
 // ---------------------------------------------------------------------------
 // Internal mutable state
 // ---------------------------------------------------------------------------
 
-/** registry: `"Namespace:name"` → registration metadata */
-const registry = new Map();
+/**
+ * @template T
+ * @typedef {T extends 'Hidden' ? any : string} Stored
+ */
 
 /**
- * In-memory current values, keyed by namespace then by name.
- * These are always deserialized (live) values.
+ * @template T
+ * @typedef Registration
+ * @property {T} namespace
+ * @property {string} name
+ * @property {(data: Stored<T> | null) => void} load
+ * @property {() => Stored<T> | null} save
  */
-const current = {
-  [Query]:    new Map(),
-  [Fragment]: new Map(),
-  [Hidden]:   new Map(),
-};
+
+/**
+ * @template T
+ * @typedef {T extends any ? Registration<T> : never} DRegistration
+ */
+
+/**
+ * registry: `"Namespace:name"` → registration metadata
+ * @type {Map<string, DRegistration<'Query' | 'Fragment' | 'Hidden'>>}
+ */
+const registry = new Map();
 
 /** Listeners to call after state is re-read on a popstate event. */
 const loadListeners = new Set();
@@ -143,6 +200,8 @@ const loadListeners = new Set();
 /**
  * Parse a URLSearchParams-style string (without a leading ? or #) into a Map
  * of raw string values.
+ * @param {string} str
+ * @returns {Map<string, string>}
  */
 function parseParams(str) {
   const out = new Map();
@@ -154,6 +213,8 @@ function parseParams(str) {
 /**
  * Serialize a Map of {name → rawString} to a URLSearchParams string, sorted
  * for determinism.
+ * @param {Map<string, string>} map
+ * @returns {string}
  */
 function serializeParams(map) {
   const p = new URLSearchParams();
@@ -166,6 +227,9 @@ function serializeParams(map) {
 // State initialization and re-initialization (on navigation)
 // ---------------------------------------------------------------------------
 
+/**
+ * @returns {Record<string, any>}
+ */
 function readHiddenState() {
   const s = history.state;
   return (s && typeof s === 'object') ? s : {};
@@ -181,26 +245,15 @@ function reinitialize() {
   const hiddenRaw   = readHiddenState();
 
   for (const reg of registry.values()) {
-    const { namespace, name, contentModel } = reg;
-    let deserialized = null;
+    const { namespace, name, load } = reg;
 
-    try {
-      if (namespace === Query && queryRaw.has(name)) {
-        deserialized = contentModel.deserialize(queryRaw.get(name));
-      } else if (namespace === Fragment && fragmentRaw.has(name)) {
-        deserialized = contentModel.deserialize(fragmentRaw.get(name));
-      } else if (namespace === Hidden && Object.hasOwn(hiddenRaw, name)) {
-        // Hidden values survive as their native JSON types; validate only.
-        const raw = hiddenRaw[name];
-        contentModel.validate(raw);
-        deserialized = raw;
-      }
-    } catch {
-      // Malformed URL / stale state — treat as absent.
-      deserialized = null;
+    if (namespace === Query) {
+      load(queryRaw.get(name) ?? null);
+    } else if (namespace === Fragment) {
+      load(fragmentRaw.get(name) ?? null);
+    } else if (namespace === Hidden) {
+      load(hiddenRaw[name]);
     }
-
-    current[namespace].set(name, deserialized);
   }
 }
 
@@ -229,14 +282,14 @@ function buildFlushArgs() {
   const hiddenSerial   = Object.create(null);
 
   for (const reg of registry.values()) {
-    const { namespace, name, contentModel } = reg;
-    const value = current[namespace].get(name);
+    const { namespace, name, save } = reg;
+    const value = save();
     if (value === null) continue;  // absent — omit from URL / state
 
     if (namespace === Query) {
-      querySerial.set(name, contentModel.serialize(value));
+      querySerial.set(name, value);
     } else if (namespace === Fragment) {
-      fragmentSerial.set(name, contentModel.serialize(value));
+      fragmentSerial.set(name, value);
     } else {
       hiddenSerial[name] = value;  // stored as native JSON type
     }
@@ -263,11 +316,13 @@ function buildFlushArgs() {
  *
  * Throws if the same namespace + name pair is reserved more than once.
  *
- * @param {'Query'|'Fragment'|'Hidden'} namespace
+ * @template T
+ * @template const U extends (T | null)
+ * @param {'Query' | 'Fragment' | 'Hidden'} namespace
  * @param {string}                      name
- * @param {ContentModel}                contentModel  Integer | String | Boolean | Enum(…)
- * @param {*}                          [defaultValue] Must satisfy contentModel
- * @returns {{ get(): *, set(value: *): void }}
+ * @param {ContentModel<T>}             contentModel  Integer | String | Boolean | Enum(…)
+ * @param {U}                           defaultValue  Must satisfy contentModel or be null
+ * @returns {{ get(): T | U, set(value: T | null): void }}
  */
 export function reserve(namespace, name, contentModel, defaultValue) {
   if (!NAMESPACES.has(namespace))
@@ -281,20 +336,60 @@ export function reserve(namespace, name, contentModel, defaultValue) {
   if (registry.has(key))
     throw new Error(`State slot already reserved: ${namespace}/${name}`);
 
-  const hasDefault = arguments.length >= 4;
-  if (hasDefault) contentModel.validate(defaultValue);
+  if (defaultValue !== null && !contentModel.validate(defaultValue))
+    throw new Error(`default value for ${namespace} parameter ${name} failed validation`);
 
-  const reg = { namespace, name, contentModel, defaultValue, hasDefault };
+  /** @type {T | null} */
+  let deserialized = null;
+
+  // Dispatch on namespace once so each branch constructs a monomorphic
+  // Registration<T>.  Doing this inside a single polymorphic load/save would
+  // leave Stored<namespace> un-narrowable, since TS can't narrow a type
+  // parameter from a runtime check on a value.
+  /** @type {DRegistration<'Query' | 'Fragment' | 'Hidden'>} */
+  let reg;
+
+  if (namespace === Hidden) {
+    // Hidden values survive as their native JSON types; validate only.
+    reg = {
+      namespace, name,
+      load(data) {
+        try {
+          if (data === null) {
+            deserialized = null;
+          } else if (contentModel.validate(data)) {
+            deserialized = data;
+          } else {
+            throw new Error("validate returned false");
+          }
+        } catch {
+          deserialized = null;
+        }
+      },
+      save() { return deserialized; },
+    };
+  } else {
+    // Query and Fragment both round-trip through the content model as strings.
+    reg = {
+      namespace, name,
+      load(data) {
+        try {
+          deserialized = data === null ? null : contentModel.deserialize(data);
+        } catch {
+          // Malformed URL / stale state — treat as absent.
+          deserialized = null;
+        }
+      },
+      save() {
+        return deserialized === null ? null : contentModel.serialize(deserialized);
+      },
+    };
+  }
+
   registry.set(key, reg);
 
-  // Initialize this slot from the URL (it may have been parsed already if
-  // reinitialize() ran before reserve() was called, but new reservations
-  // after module load need their slot populated).
-  if (!current[namespace].has(name)) {
-    current[namespace].set(name, null);
-    // Re-run a targeted parse for just this new slot.
-    reinitialize();
-  }
+  // Re-run a targeted parse for just this new slot.
+  reinitialize();
 
   return {
     /**
@@ -302,9 +397,7 @@ export function reserve(namespace, name, contentModel, defaultValue) {
      * default was provided.
      */
     get() {
-      const v = current[namespace].get(name) ?? null;
-      if (v === null && hasDefault) return defaultValue;
-      return v;
+      return deserialized ?? defaultValue;
     },
 
     /**
@@ -313,11 +406,11 @@ export function reserve(namespace, name, contentModel, defaultValue) {
      */
     set(value) {
       if (value === null) {
-        current[namespace].set(name, null);
+        deserialized = null;
         return;
       }
       contentModel.validate(value);
-      current[namespace].set(name, value);
+      deserialized = value;
     },
   };
 }

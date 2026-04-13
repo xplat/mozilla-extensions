@@ -1,0 +1,25 @@
+#!/usr/bin/env perl
+
+use strict;
+use utf8;
+use open ':std', IO => ':locale';
+
+my $pat = shift @ARGV;
+
+if (!@ARGV) {
+	my $chonk = `rg --sort=path -l ''`;
+	@ARGV = split /\n/, $chonk;
+	pop @ARGV;
+}
+
+my $inside = 0;
+
+while (<>) {
+	if ($inside) {
+		$inside = !/─{2,} (.*) ─{3,}/;
+	}
+	if (!$inside) {
+		$inside = /─{2,} ($pat) ─{3,}/o;
+	}
+	print if $inside;
+}

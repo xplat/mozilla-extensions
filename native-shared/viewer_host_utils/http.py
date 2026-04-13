@@ -6,7 +6,7 @@ validates the token on every request and strips the /TOKEN/ prefix before
 calling _dispatch, so subclasses never need to touch the token themselves.
 """
 
-import os
+import os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 
@@ -19,23 +19,31 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 class BaseViewerHandler(BaseHTTPRequestHandler):
     """Base handler: CORS, token validation, range-file serving, error responses.
 
-    Class attribute `token` is set by run_host() before the server starts.
+    Class attributes set by run_host() before the server starts:
+      token              — security token for validating requests
+      extension_origin   — moz-extension://... origin (set by extension via register-origin)
+      origin_ready       — threading.Event signaled when extension_origin is set
 
     Subclasses implement _dispatch(path_tail, head_only) where path_tail is
     self.path with the leading /TOKEN/ prefix already stripped and validated.
     """
 
     token = None   # set by run_host() before the server is created
+    extension_origin = None   # set by extension via 'register-origin' message
+    origin_ready = None   # threading.Event, signaled when extension_origin is set
 
     def log_message(self, fmt, *args):
         pass  # silence per-request stderr log
 
     def send_cors(self):
-        origin = self.headers.get('Origin', '')
-        if origin.startswith('moz-extension://') or origin.startswith('chrome-extension://'):
-            self.send_header('Access-Control-Allow-Origin', origin)
-        else:
-            self.send_header('Access-Control-Allow-Origin', 'null')
+        if sys.platform == 'darwin':
+            # macOS loopback restrictions cause cross-site redirects that reset Origin to null,
+            # so registered origins won't be seen anyway. The token provides sufficient security.
+            self.send_header('Access-Control-Allow-Origin', '*')
+        elif self.extension_origin:
+            # Use the origin that the extension registered via 'register-origin' message.
+            self.send_header('Access-Control-Allow-Origin', self.extension_origin)
+        # If not macOS and origin not registered, don't send CORS headers — let browser block.
         self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Range')
         self.send_header('Access-Control-Expose-Headers',
@@ -58,6 +66,11 @@ class BaseViewerHandler(BaseHTTPRequestHandler):
         if len(parts) < 2 or parts[1] != self.token:
             self._error(403, 'Forbidden')
             return
+
+        # Wait for extension to register its origin for CORS before responding.
+        if self.origin_ready:
+            self.origin_ready.wait()
+
         path_tail = parts[2] if len(parts) > 2 else ''
         self._dispatch(path_tail, head_only)
 

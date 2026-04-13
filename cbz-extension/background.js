@@ -49,40 +49,6 @@ function isAlreadyViewer(url) {
   return url.startsWith(VIEWER_HTML) || url.startsWith(chrome.runtime.getURL(''));
 }
 
-// ── Per-request proxy redirect ────────────────────────────────────────────────
-// The viewer fetches http://127.7.203.66/cbz-file/<encoded-path> for every
-// read (Range or full). We intercept and rewrite to the real server URL using
-// the current port and token. This is fully synchronous — no async work needed
-// since port/token are already in memory. This means:
-//   - No chrome.* calls in the viewer (no ExtensionPageContextChild)
-//   - Post-update navigation works immediately (new port/token used at once)
-//   - No separate config-fetch roundtrip on load
-
-chrome.webRequest.onBeforeRequest.addListener(
-  function(details) {
-    // Only redirect requests originating from our own extension pages.
-    // This prevents other local web pages from using the proxy to read
-    // arbitrary files via the native host's HTTP server.
-    var origin = details.originUrl || details.documentUrl || '';
-    if (!origin.startsWith(chrome.runtime.getURL(''))) {
-      return { cancel: true };
-    }
-
-    if (!serverPort || !serverToken) {
-      // Native host not connected yet — cancel so the error is immediate
-      return { cancel: true };
-    }
-
-    // Rewrite: strip PROXY_PREFIX, prepend real server base
-    var encodedPath = details.url.slice(PROXY_PREFIX.length);
-    var realUrl = 'http://' + LOOPBACK + ':' + serverPort +
-                  '/' + serverToken + '/' + encodedPath;
-    return { redirectUrl: realUrl };
-  },
-  { urls: [PROXY_PREFIX + '*'], types: ['xmlhttprequest', 'other'] },
-  ['blocking']
-);
-
 // ── HTTP/HTTPS CBZ interception ───────────────────────────────────────────────
 
 chrome.webRequest.onHeadersReceived.addListener(
@@ -116,12 +82,10 @@ chrome.webRequest.onHeadersReceived.addListener(
 // ── Native messaging ──────────────────────────────────────────────────────────
 
 function handleNativeOpen(msg) {
-  // src= is the proxy URL — stable, no port/token, works across restarts.
   // Encode each path segment so spaces/brackets etc. are valid in the URL.
-  var encodedPath = msg.path.split('/').map(encodeURIComponent).join('/');
-  var proxyUrl = PROXY_PREFIX + encodedPath;
   // Store file:// URL as src so the tab URL is familiar and session-restore
   // friendly. The viewer maps it to a proxy URL for fetching.
+  var encodedPath = msg.path.split('/').map(encodeURIComponent).join('/');
   var fileUrl = 'file://' + encodedPath;
   chrome.tabs.create({ url: buildViewerUrl(fileUrl, msg.name, msg.page || 1) });
 }
@@ -131,4 +95,5 @@ function handleNativeOpen(msg) {
 // in Firefox MV3 event-page contexts it is undefined, and native-messaging.js
 // is instead listed first in the manifest's background.scripts array.
 if (typeof importScripts !== 'undefined') importScripts('native-messaging.js');
+setupProxyRedirect();
 connectNative();

@@ -1,156 +1,180 @@
-'use strict';
 // ── viewer-ui.js ──────────────────────────────────────────────────────────────
 //
-// Persistent UI state, screen management, URL/history helpers, pane geometry,
-// focus mode, fullscreen, divider drag, and the global key dispatcher.
+// Screen management, focus mode, pane geometry, selector/queue pane visibility,
+// thumbnail mode, fullscreen, divider drag, and the global key dispatcher.
+//
+// NOTE: This is a leaf module — it imports every other viewer module and
+// therefore cannot itself be imported.  Do not add exports that other modules
+// need; expose shared state as page-scope globals instead.
 //
 // Declares these globals used by other modules:
-//   ui, focusMode, selectorWidthPx, SELECTOR_W_DEFAULT,
-//   setFocusMode, showScreen, persistState, applyHistoryState, getUrlParams,
-//   applySelector, applyUiState, toggleSelector, toggleFullscreen,
-//   setSelectorWidth, adjustSelectorWidth,
-//   (DOM refs) pickScreenEl, loadingScreenEl, errorScreenEl, viewerScreenEl,
-//     dirPathEl, fileListEl, selectorPaneEl, imagePaneEl, paneDividerEl,
-//     btnRecursive, btnHidden, btnSort,
-//     audioQueuePaneEl, audioQueueClearBtn,
-//     videoQueuePaneEl, videoQueueClearBtn.
+//   ui (selectorVisible, thumbnails, queueMode, focusMode,
+//       setQueueMode, setFocusMode),
+//   selectorWidthPx, SELECTOR_W_DEFAULT,
+//   showScreen, applySelector, applyUiState,
+//   toggleSelector, toggleFullscreen, setSelectorWidth, adjustSelectorWidth,
+//   (DOM refs) loadingScreenEl, errorScreenEl, viewerScreenEl,
+//     paneDividerEl.
 //
 // Calls into globals defined in later modules:
-//   selector, toggleInfoOverlay, cycleQueueMode (viewer-selector.js, viewer.js)
-//   audioQueueList, videoQueueList (viewer-queue-mgt.js)
-//   toggleMute, togglePlayPause, adjustVolume, adjustBalance, toggleAutoplay (viewer-media.js)
-//   _bcPost, _qState, activeMediaEl (viewer.js)
-//   handleViewerKey, applyImageTransform (viewer.js)
-//   mainImageEl (viewer-media-image.js)
+//   selector (viewer-selector.js)
+//   toggleInfoOverlay (viewer-content.js)
+//   content (viewer-content.js)
+//   audioQueueList, videoQueueList                     (viewer-queue-mgt.js)
+//   toggleMute, handlePlayPauseKey, adjustVolume, adjustBalance (viewer-audio.js)
+//   toggleAutoplay (viewer-media-playable.js)
+//   cycleQueueMode (viewer.js)
+
+import * as State from './state.js';
+import { toggleInfoOverlay, content, imagePaneEl } from './viewer-content.js';
+import { initSelector, selector } from './viewer-selector.js';
+import { toggleQueueMode, updateQueueChannelWiring } from './viewer-queue-mgt.js';
+import { init as initQueueLists, audioQueueList, videoQueueList } from './viewer-queue-lists.js';
+import { toggleAutoplay } from './viewer-media-playable.js';
+import { toggleMute, handlePlayPauseKey, adjustVolume, adjustBalance } from './viewer-audio.js';
+import { requireElement } from './viewer-util.js';
+
+/** @typedef {import('./viewer-list.js').ItemList} ItemList */
+
+// ── Persistent-state handles ──────────────────────────────────────────────────
+
+const hSelectorVisible = State.reserve(State.Hidden, 'selectorVisible', State.Boolean,              true);
+const hThumbnails      = State.reserve(State.Hidden, 'thumbnails',      State.Boolean,              false);
+const hQueueMode       = State.reserve(State.Hidden, 'queueMode',       State.Enum('audio', 'video'), null);
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 
-var pickScreenEl    = document.getElementById('pick-screen');
-var loadingScreenEl = document.getElementById('loading-screen');
-var errorScreenEl   = document.getElementById('error-screen');
-var viewerScreenEl  = document.getElementById('viewer-screen');
-
-var dirPathEl      = document.getElementById('dir-path');
-var fileListEl     = document.getElementById('file-list');
-var selectorPaneEl = document.getElementById('selector-pane');
-var imagePaneEl    = document.getElementById('image-pane');
-var paneDividerEl  = document.getElementById('pane-divider');
-
-var btnRecursive = document.getElementById('btn-recursive');
-var btnHidden    = document.getElementById('btn-hidden');
-var btnSort      = document.getElementById('btn-sort');
-
-var audioQueuePaneEl   = document.getElementById('audio-queue-pane');
-var audioQueueClearBtn = document.getElementById('audio-queue-clear-btn');
-var videoQueuePaneEl   = document.getElementById('video-queue-pane');
-var videoQueueClearBtn = document.getElementById('video-queue-clear-btn');
+const loadingScreenEl = requireElement('loading-screen');
+const errorScreenEl   = requireElement('error-screen');
+const viewerScreenEl  = requireElement('viewer-screen');
+const paneDividerEl   = requireElement('pane-divider');
 
 // ── Persistent UI state ───────────────────────────────────────────────────────
+
+export class UIState {
+  constructor() {
+    this._focusMode = 'list'; // 'list' | 'viewer'
+  }
+
+  get selectorVisible()  { return hSelectorVisible.get(); }
+  set selectorVisible(v) { hSelectorVisible.set(v); }
+  get thumbnails()       { return hThumbnails.get(); }
+  set thumbnails(v)      { hThumbnails.set(v); }
+  get queueMode()        { return hQueueMode.get(); }
+  set queueMode(v)       { hQueueMode.set(v); }
+  get focusMode()        { return this._focusMode; }
+  set focusMode(v)       { this._focusMode = v; viewerScreenEl.dataset.focus = v; }
+
+  /**
+   * Set queue mode and apply all pane lifecycle hooks.
+   * @param {'audio' | 'video' | null} mode
+   */
+  setQueueMode(mode) {
+    this.queueMode = mode;
+    applyModes();
+  }
+
+  /**
+   * Set focus mode and apply all pane lifecycle hooks.
+   * @param {'list' | 'viewer'} mode
+   */
+  setFocusMode(mode) {
+    this.focusMode = mode;
+    applyModes();
+  }
+
+  /**
+   * Show a named screen by hiding others and revealing the target.
+   * @param {'loading' | 'error' | 'viewer'} name - Screen name
+   */
+  showScreen(name) {
+    loadingScreenEl.classList.add('hidden');
+    errorScreenEl.classList.add('hidden');
+    viewerScreenEl.classList.add('hidden');
+    const screenEl = document.getElementById(name + '-screen');
+    if (screenEl) screenEl.classList.remove('hidden');
+  }
+}
+
+const ui = new UIState();
+
+// Initialize selector and queue lists with the ui instance
+initSelector(ui);
+initQueueLists(ui);
+
+// ── Applied UI state ──────────────────────────────────────────────────────────
 //
-// Most fields are persisted in history.state; queueMode is NOT (resets on load).
+// Tracks the pane and focus state that have actually been reflected to the DOM
+// via lifecycle hooks (show/hide/receiveFocus/yieldFocus).  applyModes() diffs
+// this against current persisted state and fires hooks for any transition.
+//
+// _appliedPane is null before the first call; thereafter it is the pane object
+// (selector / audioQueueList / videoQueueList) that was last shown.
 
-var ui = {
-  zoomFit:         true,
-  zoomReduceOnly:  true,   // in fit mode: shrink large images but don't enlarge small ones
-  recursive:       false,
-  selectorVisible: true,
-  showHidden:      false,
-  sortBy:          'name', // 'name' | 'mtime' | 'size'
-  thumbnails:      false,  // v — thumbnail grid vs filename list
-  // Image transform
-  rotation:        0,      // 0 | 90 | 180 | 270 (degrees)
-  mirror:          false,  // horizontal mirror (m key)
-  flip:            false,  // vertical flip   (F key)
-  scale:           1.0,    // scale factor when zoomFit=false
-  // Queue mode — NOT persisted (resets on page load)
-  queueMode:       null,   // null | 'audio' | 'video'
-};
+/** @type {ItemList | null} */
+var _appliedPane    = null;
+var _appliedFocused = false;
 
-// ── Focus mode ────────────────────────────────────────────────────────────────
+// Map queueMode string to the corresponding pane object.
+/**
+ * @param {'audio' | 'video' | null} mode
+ * @returns {ItemList | null}
+ */
+function _paneForMode(mode) {
+  if (mode === 'audio') return audioQueueList;
+  if (mode === 'video') return videoQueueList;
+  return selector ?? null;
+}
 
-var focusMode = 'list'; // 'list' | 'viewer'
+// Apply persisted ui state to the pane objects, firing lifecycle hooks for
+// any transition since the last call.  Hook order per pane: blur → hide → show → focus.
+function applyModes() {
+  var targetPane    = _paneForMode(ui.queueMode);
+  var targetFocused = ui.focusMode === 'list';
 
-function setFocusMode(mode) {
-  focusMode = mode;
-  viewerScreenEl.dataset.focus = mode;
+  // blur: leaving focus (pane changed or focus mode leaving 'list')
+  if (_appliedFocused && (_appliedPane !== targetPane || !targetFocused))
+    _appliedPane?.yieldFocus();
+
+  if (_appliedPane !== targetPane) {
+    _appliedPane?.hide?.();   // hide: old pane
+    targetPane?.show?.();     // show: new pane
+  }
+
+  // focus: entering focus (pane changed while focused, or focus mode entering 'list')
+  if (targetFocused && (_appliedPane !== targetPane || !_appliedFocused))
+    targetPane?.receiveFocus();
+
+  _appliedPane    = targetPane;
+  _appliedFocused = targetFocused;
+
+  viewerScreenEl.classList.toggle('queue-mode', !!ui.queueMode);
+  viewerScreenEl.dataset.queueMode = ui.queueMode || '';
+  updateQueueChannelWiring(document.visibilityState === 'visible');
 }
 
 // ── Screen visibility ─────────────────────────────────────────────────────────
 
-function showScreen(name) {
-  pickScreenEl.classList.add('hidden');
-  loadingScreenEl.classList.add('hidden');
-  errorScreenEl.classList.add('hidden');
-  viewerScreenEl.classList.add('hidden');
-  document.getElementById(name + '-screen').classList.remove('hidden');
-}
-
-// ── URL & history state ───────────────────────────────────────────────────────
-
-function getUrlParams() {
-  var p = new URLSearchParams(window.location.search);
-  return { dir: p.get('dir'), file: p.get('file') };
-}
-
-function buildPageUrl(dir, file) {
-  var url = '?dir=' + encodeURIComponent(dir);
-  if (file) url += '&file=' + encodeURIComponent(file);
-  return url;
-}
-
-function persistState(push, newDir, newFile) {
-  var dir  = (newDir  !== undefined) ? newDir  : selector.currentDir;
-  var file = (newFile !== undefined) ? newFile : selector.currentFile;
-  var state = {
-    zoomFit:         ui.zoomFit,
-    zoomReduceOnly:  ui.zoomReduceOnly,
-    recursive:       ui.recursive,
-    selectorVisible: ui.selectorVisible,
-    showHidden:      ui.showHidden,
-    sortBy:          ui.sortBy,
-    thumbnails:      ui.thumbnails,
-    rotation:        ui.rotation,
-    mirror:          ui.mirror,
-    flip:            ui.flip,
-    scale:           ui.scale,
-  };
-  var url = buildPageUrl(dir, file);
-  if (push) {
-    history.pushState(state, '', url);
-  } else {
-    history.replaceState(state, '', url);
-  }
-}
-
-function applyHistoryState(state) {
-  if (!state || typeof state !== 'object') return;
-  if (typeof state.zoomFit         === 'boolean') ui.zoomFit         = state.zoomFit;
-  if (typeof state.zoomReduceOnly  === 'boolean') ui.zoomReduceOnly  = state.zoomReduceOnly;
-  if (typeof state.recursive       === 'boolean') ui.recursive       = state.recursive;
-  if (typeof state.selectorVisible === 'boolean') ui.selectorVisible = state.selectorVisible;
-  if (typeof state.showHidden      === 'boolean') ui.showHidden      = state.showHidden;
-  if (typeof state.thumbnails      === 'boolean') ui.thumbnails      = state.thumbnails;
-  if (typeof state.mirror          === 'boolean') ui.mirror          = state.mirror;
-  if (typeof state.flip            === 'boolean') ui.flip            = state.flip;
-  if (['name','mtime','size'].indexOf(state.sortBy) !== -1) ui.sortBy = state.sortBy;
-  if (state.rotation === 0 || state.rotation === 90 ||
-      state.rotation === 180 || state.rotation === 270) ui.rotation = state.rotation;
-  if (typeof state.scale === 'number' && state.scale > 0) ui.scale  = state.scale;
-}
 
 // ── Pane width ────────────────────────────────────────────────────────────────
 // Keyboard: [ narrows, ] widens, ~ resets.  Also set by divider drag.
 
-var selectorWidthPx    = 260;
-var SELECTOR_W_DEFAULT = 260;
-var SELECTOR_W_MIN     = 80;
-var SELECTOR_W_MAX     = 600;
+let selectorWidthPx    = 260;
+const SELECTOR_W_DEFAULT = 260;
+const SELECTOR_W_MIN     = 80;
+const SELECTOR_W_MAX     = 600;
 
+/**
+ * @param {number} w
+ */
 function setSelectorWidth(w) {
   selectorWidthPx = Math.max(SELECTOR_W_MIN, Math.min(SELECTOR_W_MAX, Math.round(w)));
   document.documentElement.style.setProperty('--selector-w', selectorWidthPx + 'px');
 }
 
+/**
+ * @param {number} delta
+ */
 function adjustSelectorWidth(delta) {
   setSelectorWidth(selectorWidthPx + delta);
 }
@@ -159,52 +183,36 @@ function adjustSelectorWidth(delta) {
 
 function applySelector() {
   viewerScreenEl.classList.toggle('no-selector', !ui.selectorVisible);
-  viewerScreenEl.classList.toggle('queue-mode',  !!ui.queueMode);
-  viewerScreenEl.dataset.queueMode = ui.queueMode || '';
-  if (btnRecursive) btnRecursive.classList.toggle('active', ui.recursive);
-}
-
-// Returns the FileList instance for the currently active queue pane, or null.
-// Forward references audioQueueList / videoQueueList — defined in viewer-queue-mgt.js
-// which loads after this file, but this function is only called at runtime.
-function _activeQueueList() {
-  if (ui.queueMode === 'audio') return audioQueueList;
-  if (ui.queueMode === 'video') return videoQueueList;
-  return null;
 }
 
 function toggleSelector() {
   ui.selectorVisible = !ui.selectorVisible;
   applySelector();
-  persistState(false);
+  State.save();
 }
 
 // ── Thumbnail mode ────────────────────────────────────────────────────────────
 
 function toggleThumbnails() {
   ui.thumbnails = !ui.thumbnails;
-  persistState(false);
+  State.save();
   viewerScreenEl.classList.toggle('thumbnails', ui.thumbnails);
-  if (ui.thumbnails) selector.prefetchThumbnails();
+  if (ui.thumbnails) selector?.prefetchThumbnails();
 }
 
 // ── Apply full UI state ───────────────────────────────────────────────────────
 
 function applyUiState() {
+  applyModes();
   applySelector();
   viewerScreenEl.classList.toggle('thumbnails', ui.thumbnails);
-  if (mainImageEl.naturalWidth) applyImageTransform();
-  if (btnRecursive) btnRecursive.classList.toggle('active', ui.recursive);
-  if (btnHidden)    btnHidden.classList.toggle('active', ui.showHidden);
-  var labels = { name: 'NAME', mtime: 'DATE', size: 'SIZE' };
-  if (btnSort) btnSort.textContent = labels[ui.sortBy] || 'NAME';
 }
 
 // ── Fullscreen ────────────────────────────────────────────────────────────────
 
 function toggleFullscreen() {
   if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen().catch(function() {});
+    document.documentElement.requestFullscreen().catch(() => {});
   } else {
     document.exitFullscreen();
   }
@@ -213,47 +221,58 @@ function toggleFullscreen() {
 // ── Drag: divider resize and image-pane focus ─────────────────────────────────
 
 // Clicking anywhere in the image pane takes viewer focus.
-imagePaneEl.addEventListener('pointerdown', function() {
-  setFocusMode('viewer');
+imagePaneEl.addEventListener('pointerdown', () => {
+  ui.setFocusMode('viewer');
 });
 
-if (paneDividerEl) {
-  paneDividerEl.addEventListener('pointerdown', function(e) {
-    if (e.button !== 0) return;
-    paneDividerEl.setPointerCapture(e.pointerId);
-    var startX = e.clientX;
-    var startW = selectorWidthPx;
-    paneDividerEl.classList.add('dragging');
-    e.preventDefault();
+paneDividerEl.addEventListener('pointerdown', (/** @type {PointerEvent} */ e) => {
+  if (e.button !== 0) return;
+  paneDividerEl.setPointerCapture(e.pointerId);
+  const startX = e.clientX;
+  const startW = selectorWidthPx;
+  paneDividerEl.classList.add('dragging');
+  e.preventDefault();
 
-    paneDividerEl.addEventListener('pointermove', function onMove(ev) {
-      setSelectorWidth(startW + (ev.clientX - startX));
-    });
+  /**
+   * @param {PointerEvent} ev
+   */
+  function onMove(ev) {
+    setSelectorWidth(startW + (ev.clientX - startX));
+  }
 
-    paneDividerEl.addEventListener('pointerup', function onUp() {
-      paneDividerEl.classList.remove('dragging');
-      paneDividerEl.removeEventListener('pointermove', onMove);
-      paneDividerEl.removeEventListener('pointerup',   onUp);
-    });
-  });
+  function onUp() {
+    paneDividerEl.classList.remove('dragging');
+    paneDividerEl.removeEventListener('pointermove', onMove);
+    paneDividerEl.removeEventListener('pointerup',   onUp);
+  }
+
+  paneDividerEl.addEventListener('pointermove', onMove);
+  paneDividerEl.addEventListener('pointerup', onUp);
+});
+
+// ── Queue mode cycling ────────────────────────────────────────────────────────
+
+function cycleQueueMode() {
+  var modes = /** @type {const} */ ([null, 'audio', 'video']);
+  ui.setQueueMode(modes[(modes.indexOf(ui.queueMode) + 1) % modes.length]);
 }
-
-// Clicking the selector pane body refocuses it.
-selectorPaneEl.addEventListener('mousedown', function() {
-  setFocusMode('list');
-});
 
 // ── Global keyboard dispatcher ────────────────────────────────────────────────
 //
 // Handles keys that are truly global (work regardless of focused pane), then
 // dispatches to the focused pane's handler for everything else.
 
-document.addEventListener('keydown', function(e) {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+/**
+ * @param {KeyboardEvent} e
+ */
+function handleGlobalKeydown(e) {
+  const target = e.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 
-  var key   = e.key;
-  var ctrl  = e.ctrlKey && !e.altKey && !e.metaKey;
-  var plain = !e.ctrlKey && !e.altKey && !e.metaKey;
+  const key   = e.key;
+  const ctrl  = e.ctrlKey && !e.altKey && !e.metaKey;
+  const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
 
   if (plain) {
     switch (key) {
@@ -269,15 +288,11 @@ document.addEventListener('keydown', function(e) {
         e.preventDefault(); toggleThumbnails(); return;
       case 'Tab': {
         e.preventDefault();
-        setFocusMode(focusMode === 'list' ? 'viewer' : 'list');
-        // When returning to list focus in queue mode, sync cursor to active item.
-        if (ui.queueMode && focusMode === 'list') {
-          _activeQueueList()?.receiveFocus();
-        }
+        ui.setFocusMode(ui.focusMode === 'list' ? 'viewer' : 'list');
         return;
       }
       case 'Escape':
-        if (focusMode === 'viewer') { e.preventDefault(); setFocusMode('list'); }
+        if (ui.focusMode === 'viewer') { e.preventDefault(); ui.setFocusMode('list'); }
         return;
       // Pane-width adjustment (xzgv [ ] ~)
       case '[': e.preventDefault(); adjustSelectorWidth(-16); return;
@@ -285,15 +300,7 @@ document.addEventListener('keydown', function(e) {
       case '~': e.preventDefault(); setSelectorWidth(SELECTOR_W_DEFAULT); return;
       // Global A/V keys — always active regardless of focused pane.
       case 'm': e.preventDefault(); toggleMute();        return;
-      case 'p':
-        e.preventDefault();
-        if (activeMediaEl) {
-          togglePlayPause();
-        } else {
-          // No local media — forward to whichever other tab holds the baton.
-          _bcPost('media-viewer', { cmd: 'pause-toggle' });
-        }
-        return;
+      case 'p': e.preventDefault(); handlePlayPauseKey(); return;
       case '9': e.preventDefault(); adjustVolume(-1.5);  return;
       case '0': e.preventDefault(); adjustVolume(+1.5);  return;
       case '(': e.preventDefault(); adjustBalance(-0.1); return;
@@ -303,18 +310,74 @@ document.addEventListener('keydown', function(e) {
       case 'Q': e.preventDefault(); cycleQueueMode();     return;
       case '\\':
         e.preventDefault();
-        _bcPost('media-queue', { cmd: 'q-toggle' });
+        toggleQueueMode();
         return;
     }
   }
 
-  if (focusMode === 'list') {
-    if (ui.queueMode) {
-      _activeQueueList()?.handleKey(e, key, ctrl, plain);
-    } else {
-      selector.handleKey(e, key, ctrl, plain);
-    }
+  if (ui.focusMode === 'list') {
+    _paneForMode(ui.queueMode)?.handleKey(e, key, ctrl, plain);
   } else {
-    handleViewerKey(e, key, ctrl, plain);
+    content.handleKey(e, key, ctrl, plain);
   }
-});
+}
+
+document.addEventListener('keydown', handleGlobalKeydown);
+
+// ── History (back/forward) ────────────────────────────────────────────────────
+
+State.onLoad(() => { applyUiState(); });
+
+// ── Page title management ────────────────────────────────────────────────────
+
+/** @type {string | null} */
+let contentTitle = null;
+/** @type {string | null} */
+let selectorTitle = null;
+
+function updatePageTitle() {
+  let titleFragment = contentTitle
+    ?? getQueueTitle()
+    ?? selectorTitle
+    ?? 'Media Viewer';
+  if (titleFragment !== 'Media Viewer') {
+    document.title = titleFragment + ' — Media Viewer';
+  } else {
+    document.title = titleFragment;
+  }
+}
+
+function getQueueTitle() {
+  if (!ui.queueMode) return null;
+  if (ui.queueMode === 'audio') return audioQueueList.titleFragment();
+  if (ui.queueMode === 'video') return videoQueueList.titleFragment();
+  return null;
+}
+
+/**
+ * @param {CustomEvent<{occupant: import('./viewer-media.js').ContentOccupant}>} e
+ */
+function handleContentReady(e) {
+  contentTitle = e.detail.occupant.titleFragment?.() ?? null;
+  updatePageTitle();
+}
+addEventListener('contentReady', /** @type {EventListener} */ (handleContentReady));
+
+/**
+ * @param {CustomEvent<{selector: import('./viewer-selector.js').Selector}>} e
+ */
+function handleSelectorChanged(e) {
+  selectorTitle = e.detail.selector.titleFragment();
+  contentTitle = null;  // clear stale content title when dir changes
+  updatePageTitle();
+}
+addEventListener('selectorChanged', /** @type {EventListener} */ (handleSelectorChanged));
+
+// ── Initialisation ────────────────────────────────────────────────────────────
+
+function init() {
+  ui.showScreen('viewer');
+  applyUiState();
+}
+
+init();

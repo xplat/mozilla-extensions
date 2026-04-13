@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+if [[ "$1" == "-m" ]]; then
+	shift
+	RE=".*$1.*"
+	shift
+else
+	RE='.*'
+fi
+
+rg -n --heading -o -r '$1' "─{2,} ($RE) ─{3,}" "$@"
